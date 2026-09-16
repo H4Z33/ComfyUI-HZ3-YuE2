@@ -188,7 +188,7 @@ def _transcribe(backend, mono, language, task, device):
         gen_kwargs = {"task": task}
         if lang:
             gen_kwargs["language"] = lang
-        result = pipe(mono, generate_kwargs=gen_kwargs, return_timestamps=True)
+        result = pipe(mono, generate_kwargs=gen_kwargs, return_timestamps="word")
         chunks = []
         for chunk in result.get("chunks") or []:
             start, end = _seg_times(chunk)
@@ -211,22 +211,79 @@ def _transcribe(backend, mono, language, task, device):
 
 
 def _build_lines(chunks, fallback_text):
+    """Split atomic transcript units into (start, end, text) lines, breaking on
+    sentence punctuation and on pauses (works for sung audio)."""
+    _SENT = tuple("!.?…;:")
     lines = []
     current = []
-    prev_end = None
+    cstart = None
+    cend = None
     for start, end, text in chunks:
+        text = (text or "").strip()
         if not text:
             continue
-        if start is not None and prev_end is not None and start - prev_end > 0.35 and current:
-            lines.append(" ".join(current))
+        if current and start is not None and cend is not None and (start - cend) > 0.5:
+            lines.append((cstart, cend, " ".join(current)))
             current = []
+            cstart = cend = None
+        if not current:
+            cstart = start
         current.append(text)
-        prev_end = end
+        cend = end
+        if text.rstrip().endswith(_SENT):
+            lines.append((cstart, cend, " ".join(current)))
+            current = []
+            cstart = cend = None
     if current:
-        lines.append(" ".join(current))
+        lines.append((cstart, cend, " ".join(current)))
     if not lines and fallback_text:
-        lines.append(fallback_text)
+        lines.append((None, None, fallback_text))
     return lines
+
+
+_FILLER_RE = re.compile(
+    r"^(?:\s*(?:m[úu]sic\w*|music\w*|[♪♫]|la+|\b(?:la|ah|uh|ooh|oh|yeah|mm|um|na)\b)\s*)*$",
+    re.IGNORECASE,
+)
+
+
+def _vocal_onsets(abc):
+    """Sorted vocal-note onset times (seconds) mapped from a SheetSage ABC."""
+    try:
+        from .score_analysis import inspect_score
+        info = inspect_score(abc)
+        spt = 60.0 / (info["bpm"] * 256.0)
+    except Exception:
+        return []
+    return sorted(note["start"] * spt for note in info["roll"]["tracks"].get("Vocal", []))
+
+
+def _snap_to_onset(value, onsets, window=2.0):
+    if value is None:
+        return value
+    best = None
+    for o in onsets:
+        if o < value - window:
+            continue
+        if o > value + window:
+            break
+        if best is None or abs(o - value) < abs(best - value):
+            best = o
+    return best
+
+
+def _align_with_abc(lines, onsets):
+    """Snap each line start to the nearest ABC vocal onset; drop instrumental
+    filler hallucinations that have no vocal onset nearby."""
+    if not onsets:
+        return lines
+    aligned = []
+    for start, end, text in lines:
+        snapped = _snap_to_onset(start, onsets)
+        if snapped is None and _FILLER_RE.fullmatch(text or ""):
+            continue
+        aligned.append((snapped if snapped is not None else start, end, text))
+    return aligned
 
 
 class HZ3_YuE2_Transcribe:
@@ -246,17 +303,23 @@ class HZ3_YuE2_Transcribe:
                 "language": ("STRING", {"default": "auto", "tooltip": "auto detects the spoken language. Or force an ISO-639-1 code (es, en, ...)."}),
                 "task": (["transcribe", "translate"], {"default": "transcribe"}),
                 "device": (["cpu", "cuda"], {"default": "cpu"}),
-            }
+            },
+            "optional": {
+                "abc": ("STRING", {"forceInput": True, "multiline": True,
+                                   "tooltip": "Connect the SheetSage ABC to align line starts to real vocal onsets and drop instrumental filler."}),
+            },
         }
 
-    def transcribe(self, audio, backend, language, task, device):
+    def transcribe(self, audio, backend, language, task, device, abc=""):
         mono = _to_mono_16k(audio)
         text, chunks = _transcribe(backend, mono, language, task, device)
         lines = _build_lines(chunks, text)
-        lyrics = "\n".join(lines)
-        segments = [{"start": _rounded(s), "end": _rounded(e), "text": t} for s, e, t in chunks]
+        onsets = _vocal_onsets(abc) if (abc or "").strip() else []
+        lines = _align_with_abc(lines, onsets)
+        lyrics = "\n".join(t for _, _, t in lines)
+        segments = [{"start": _rounded(s), "end": _rounded(e), "text": t} for s, e, t in lines]
         report = (f"Transcribe · {backend} · {task} · {language or 'auto'} · "
-                  f"{len(chunks)} segments · {len(lines)} lines")
+                  f"{len(lines)} lines · abc_aligned: {bool(onsets)}")
         visible = "LYRICS (RAW)\n" + lyrics
         return {"ui": {"text": [visible]},
                 "result": (lyrics, json.dumps(segments, ensure_ascii=False), report)}

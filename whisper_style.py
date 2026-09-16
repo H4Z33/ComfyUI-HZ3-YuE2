@@ -675,10 +675,14 @@ class HZ3_YuE2_MixMashGenius:
                 "temperature": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 1.5, "step": 0.05}),
                 "timeout": ("INT", {"default": 180, "min": 10, "max": 900}),
             },
+            "optional": {
+                "segments": ("STRING", {"multiline": True, "forceInput": True,
+                                        "tooltip": "Whisper segments JSON (list of {start,end,text}). When provided, each lyric line is placed into its section by TIME (like the Split), so lyrics align correctly. Without it, the LLM guesses."}),
+            },
         }
 
     def compose(self, abc, overlap, structure, instructions, lyrics, model, endpoint,
-                temperature, timeout):
+                temperature, timeout, segments=""):
         from .overlap_sections import apply_abc_overlap
         from .sheetsage2_sections import split_abc_by_sections
 
@@ -704,6 +708,7 @@ class HZ3_YuE2_MixMashGenius:
             timeout = int(first(timeout, 180))
         except (TypeError, ValueError):
             timeout = 180
+        whisper_segments = first(segments, "")
 
         evidence = _score_evidence(abc)
         sections = _parse_structure(structure)
@@ -744,6 +749,41 @@ class HZ3_YuE2_MixMashGenius:
             round(orig_durations[i] + (added[i] if i < len(added) else 0.0), 3)
             for i in range(len(orig_durations))
         ]
+
+        # Place each lyric line into its section by TIME when whisper segments are given
+        # (mirrors Split); otherwise fall back to the LLM's per-section lyrics.
+        if (whisper_segments or "").strip():
+            try:
+                seg_payload = json.loads(whisper_segments)
+                if isinstance(seg_payload, dict):
+                    seg_payload = seg_payload.get("segments") or seg_payload.get("results") or []
+                if isinstance(seg_payload, list):
+                    items = []
+                    for seg in seg_payload:
+                        if isinstance(seg, dict) and seg.get("start") is not None and seg.get("end") is not None:
+                            try:
+                                items.append({"start": float(seg["start"]), "end": float(seg["end"]),
+                                              "text": str(seg.get("text", "") or "").strip()})
+                            except (TypeError, ValueError):
+                                continue
+                    if items:
+                        runs = [[] for _ in sections]
+                        for seg in items:
+                            if not seg["text"]:
+                                continue
+                            mid = (seg["start"] + seg["end"]) / 2.0
+                            idx = next((i for i, sec in enumerate(sections)
+                                        if sec["start"] - 1e-6 <= mid < sec["end"] + 1e-6), None)
+                            if idx is None:
+                                idx = min(range(len(sections)),
+                                          key=lambda i: abs(seg["start"] - sections[i]["start"]))
+                            runs[idx].append(seg["text"])
+                        lyric_blocks = [
+                            f"[{sections[i]['name']}]" + (("\n" + "\n".join(runs[i])) if runs[i] else "")
+                            for i in range(len(sections))
+                        ]
+            except (json.JSONDecodeError, ValueError):
+                pass
 
         report = json.dumps({
             "ollama": result,

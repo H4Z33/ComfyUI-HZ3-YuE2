@@ -39,14 +39,6 @@ def _semantic_frames(cond):
     return semantic, first_prefix
 
 
-def _blend(left, right):
-    """Linear crossfade: weight goes 1 -> 0 over the overlap from left to right."""
-    o = left.shape[1]
-    weight = torch.linspace(1.0, 0.0, o, device=left.device, dtype=left.dtype)
-    weight = weight.view(1, o, 1)
-    return weight * left + (1.0 - weight) * right
-
-
 def _overlap_frames(report_json, fallback_seconds, n):
     """Per-section LEADING overlap in frames (index 0 is 0). Parsed from the MixMash
     report's conditioning_overlap.overlap_seconds_per_section; else fallback seconds."""
@@ -125,42 +117,52 @@ class HZ3_YuE2_CrossfadeConditioning:
             if sem.shape[1] < 1:
                 raise ValueError("A connected conditioning has no semantic frames.")
 
-        # Crossfade: keep section 0, then at each seam blend the previous tail with the
-        # next head over `overlap` frames, dropping the old tail and appending the rest.
-        out = sems[0]
-        used = [0.0] * len(conds)
-        for index in range(seams):
-            left = out
-            right = sems[index + 1]
-            o = min(overlap_frames_list[index + 1], left.shape[1], right.shape[1])
-            if o <= 0:
-                out = torch.cat([out, right], dim=1)
-                continue
-            blend = _blend(left[:, -o:, :], right[:, :o, :])
-            out = torch.cat([left[:, :-o, :], blend, right[:, o:, :]], dim=1)
-            used[index + 1] = o
+        # Preallocate the final tensor (padding where nothing sits), place each section
+        # at its offset, and accumulate with a fade envelope; divide by the summed gains
+        # so overlap regions become a weighted crossfade (prev 100% -> prev 0%).
+        n = len(conds)
+        frames = [s.shape[1] for s in sems]
+        o_used = [0] * n
+        offsets = [0] * n
+        for i in range(1, n):
+            o_used[i] = min(overlap_frames_list[i], frames[i - 1], frames[i])
+            offsets[i] = offsets[i - 1] + frames[i - 1] - o_used[i]
+        final_len = offsets[-1] + frames[-1]
+        device, dtype, feat = sems[0].device, sems[0].dtype, sems[0].shape[2]
 
-        feat = out.shape[2]
+        acc = torch.zeros(1, final_len, feat, device=device, dtype=dtype)
+        gains = torch.zeros(1, final_len, 1, device=device, dtype=dtype)
+        for i, sem in enumerate(sems):
+            g = torch.ones(1, frames[i], 1, device=device, dtype=dtype)
+            if i > 0 and o_used[i] > 0:                 # fade IN from the previous
+                g[:, :o_used[i], :] = torch.linspace(0.0, 1.0, o_used[i], device=device, dtype=dtype).view(1, o_used[i], 1)
+            if i < n - 1 and o_used[i + 1] > 0:          # fade OUT to the next
+                g[:, frames[i] - o_used[i + 1]:, :] = torch.linspace(1.0, 0.0, o_used[i + 1], device=device, dtype=dtype).view(1, o_used[i + 1], 1)
+            off = offsets[i]
+            acc[:, off:off + frames[i], :] += g * sem
+            gains[:, off:off + frames[i], :] += g
+        out = (acc / gains.clamp(min=1e-8)) * (gains > 0)   # zeros = padding where no info
+        total_frames = final_len
+
         prefix = prefixes[0]
         prefix_len = prefix.shape[1]
         end_token = prefix[:, :1, :] * 0.0
         context = torch.cat([prefix, out, end_token], dim=1)
-        total_frames = out.shape[1]
         base_meta = dict(_entry(conds[0], "first")[1])
         metadata = dict(base_meta)
         metadata["yue2_chunks"] = ((0, total_frames, 0, context.shape[1]),)
         metadata["yue2_frames"] = total_frames
         metadata["yue2_abc_ids"] = base_meta.get("yue2_abc_ids", [])
         metadata["hz3_crossfade"] = {
-            "overlap_frames_per_section": used,
+            "overlap_frames_per_section": o_used,
             "sections": len(conds),
         }
         conditioning = [[context, metadata]]
         seconds = total_frames / float(FRAMES_PER_SECOND)
         report = (
             f"Crossfaded {len(conds)} conditionings · {total_frames} frames · {seconds:.2f} s\n"
-            f"overlap frames per section: {used}\n"
-            f"(100% prev -> 0% prev over each overlap; total shrank by {sum(used)} frames)"
+            f"overlap frames per section: {o_used}\n"
+            f"(prealloc + fade + average; zeros are padding where no section)"
         )
         return {"ui": {"text": [report]}, "result": (conditioning, seconds, report)}
 

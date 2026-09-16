@@ -134,9 +134,10 @@ class HZ3_YuE2_CrossfadeConditioning:
         gains = torch.zeros(1, final_len, 1, device=device, dtype=dtype)
         for i, sem in enumerate(sems):
             g = torch.ones(1, frames[i], 1, device=device, dtype=dtype)
-            if i > 0 and o_used[i] > 0:                 # fade IN from the previous
-                g[:, :o_used[i], :] = torch.linspace(0.0, 1.0, o_used[i], device=device, dtype=dtype).view(1, o_used[i], 1)
-            if i < n - 1 and o_used[i + 1] > 0:          # fade OUT to the next
+            # The NEW section enters at full weight (1). Only the PREVIOUS section
+            # fades out 1 -> 0 over its trailing overlap, so the seam = prev fading
+            # out over the next (which already carries the shared instrument).
+            if i < n - 1 and o_used[i + 1] > 0:          # fade OUT the previous -> next
                 g[:, frames[i] - o_used[i + 1]:, :] = torch.linspace(1.0, 0.0, o_used[i + 1], device=device, dtype=dtype).view(1, o_used[i + 1], 1)
             off = offsets[i]
             acc[:, off:off + frames[i], :] += g * sem

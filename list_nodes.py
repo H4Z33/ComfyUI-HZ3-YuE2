@@ -76,14 +76,64 @@ class HZ3_YuE2_CreateBatch:
         return (list(value for key, value in kwargs.items() if key != "no_cache"),)
 
 
+class HZ3_YuE2_BatchGetItem:
+    CATEGORY = "HZ3 YuE2/List"
+    FUNCTION = "get_item"
+    RETURN_TYPES = (any, "INT")
+    RETURN_NAMES = ("item", "count")
+    DESCRIPTION = (
+        "Get one item from a batch by index (negative = from the end). Works on a "
+        "batched AUDIO (returns a single clip as an AUDIO with batch=1), on a Python "
+        "list/tuple, and on other batched tensors. The item comes out on output [0]."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "batch": (any,),
+                "index": ("INT", {"default": 0, "min": -99999, "max": 99999,
+                                  "tooltip": "0-based index; negative counts from the end (e.g. -1 = last)."}),
+            },
+        }
+
+    def get_item(self, batch, index, **kwargs):
+        # Batched AUDIO: a dict with waveform + sample_rate.
+        if isinstance(batch, dict) and "waveform" in batch and "sample_rate" in batch:
+            waveform = batch["waveform"]
+            count = waveform.shape[0]
+            i = index + count if index < 0 else index
+            i = max(0, min(count - 1, i))
+            clip = waveform[i:i + 1]                     # keep batch dim = 1
+            return ({"waveform": clip, "sample_rate": batch["sample_rate"]}, count)
+
+        # Python list/tuple.
+        if isinstance(batch, (list, tuple)):
+            count = len(batch)
+            i = index + count if index < 0 else index
+            i = max(0, min(count - 1, i))
+            return (batch[i], count)
+
+        # Other tensor-like batch (IMAGE, LATENT, ...).
+        if hasattr(batch, "shape") and batch.ndim >= 1:
+            count = batch.shape[0]
+            i = index + count if index < 0 else index
+            i = max(0, min(count - 1, i))
+            return (batch[i], count)
+
+        raise ValueError("batch must be a batched AUDIO, a list/tuple, or a 1D+ tensor.")
+
+
 NODE_CLASS_MAPPINGS = {
     "HZ3_YuE2_ListToBatch": HZ3_YuE2_ListToBatch,
     "HZ3_YuE2_BatchToList": HZ3_YuE2_BatchToList,
     "HZ3_YuE2_CreateBatch": HZ3_YuE2_CreateBatch,
+    "HZ3_YuE2_BatchGetItem": HZ3_YuE2_BatchGetItem,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "HZ3_YuE2_ListToBatch": "HZ3 YuE2 · List to Batch",
     "HZ3_YuE2_BatchToList": "HZ3 YuE2 · Batch to List",
     "HZ3_YuE2_CreateBatch": "HZ3 YuE2 · Create Batch",
+    "HZ3_YuE2_BatchGetItem": "HZ3 YuE2 · Get Batch Item",
 }

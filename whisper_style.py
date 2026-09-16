@@ -90,6 +90,9 @@ def _load_pipe(model_name, device):
     device_id = 0 if (device == "cuda" and torch.cuda.is_available()) else -1
     dtype = torch.float16 if device_id != -1 else torch.float32
     try:
+        # No chunk_length_s/stride_length_s: that generic seq2seq chunking is
+        # experimental and warns. Let Whisper use its own native long-form
+        # chunking (paper section 3.8) instead.
         return pipeline(
             "automatic-speech-recognition",
             model=local,
@@ -97,8 +100,6 @@ def _load_pipe(model_name, device):
             tokenizer=local,
             device=device_id,
             torch_dtype=dtype,
-            chunk_length_s=30,
-            stride_length_s=5,
         )
     except Exception as exc:
         raise RuntimeError(

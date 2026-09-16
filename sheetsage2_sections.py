@@ -14,12 +14,20 @@ import json
 import torch
 
 
+# Non-musical boundary labels: adjacent duplicates collapse into one span.
+_MERGEABLE_STRUCTURE = frozenset({
+    "intro", "outro", "interlude", "silence", "instrumental", "fade-out",
+})
+
+
 def structure_timeline(events, duration):
     """Build [{name, start, end}] section timeline (real seconds) from structure events.
 
-    Every distinct structure event starts a section; consecutive same-name events are
-    treated as separate sections (Verse 1, Verse 2, ...) and repeated names are
-    numbered. Real times come from the events, so intro/interlude/outro land correctly.
+    Every distinct structure event starts a section. Consecutive events with the SAME
+    label are merged when that label is a non-musical boundary marker
+    (intro/outro/interlude/silence/instrumental/fade-out), so a duplicated "intro"
+    becomes a single intro. Repeatable musical labels (verse/chorus/bridge/...) stay
+    separate and are numbered (verse, verse 2, ...).
     """
     rows = []
     for event in events:
@@ -30,12 +38,18 @@ def structure_timeline(events, duration):
         return [{"name": "section", "start": 0.0, "end": float(duration)}]
     rows.sort(key=lambda item: item[0])
 
+    kept = []
+    for time, label in rows:
+        if kept and abs(time - kept[-1][0]) < 1e-6:
+            continue                              # de-duplicate same-instant events
+        if kept and kept[-1][1] == label and label in _MERGEABLE_STRUCTURE:
+            continue                              # fold repeated boundary label
+        kept.append((time, label))
+
     timeline = []
     counters = {}
-    for index, (time, label) in enumerate(rows):
-        if timeline and abs(time - timeline[-1]["start"]) < 1e-6:
-            continue                    # de-duplicate same-instant events
-        end = rows[index + 1][0] if index + 1 < len(rows) else float(duration)
+    for index, (time, label) in enumerate(kept):
+        end = kept[index + 1][0] if index + 1 < len(kept) else float(duration)
         counters[label] = counters.get(label, 0) + 1
         name = label if counters[label] == 1 else f"{label} {counters[label]}"
         timeline.append({"name": name, "start": round(float(time), 3),
@@ -63,8 +77,12 @@ def cut_sections(audio, structure):
         s["end"] = max(0.0, min(duration, float(s["end"])))
     if not secs:
         secs = [{"name": "section", "start": 0.0, "end": duration}]
-    if secs[0]["start"] > 1e-3:
-        secs.insert(0, {"name": "intro", "start": 0.0, "end": secs[0]["start"]})
+    if secs and secs[0]["start"] > 1e-3:
+        if secs[0]["start"] <= 2.0:
+            # Tiny lead-in near 0 -> fold into the first section instead of a phantom clip.
+            secs[0]["start"] = 0.0
+        else:
+            secs.insert(0, {"name": "intro", "start": 0.0, "end": secs[0]["start"]})
     if secs[-1]["end"] < duration - 1e-3:
         secs.append({"name": "outro", "start": secs[-1]["end"], "end": duration})
 

@@ -115,15 +115,23 @@ class HZ3_YuE2_SaveAudio:
                 "prompt": "PROMPT",
                 "extra_pnginfo": "EXTRA_PNGINFO",
             },
+            "optional": {
+                "token_stream": ("HZ3_YUE2_TOKEN_STREAM", {
+                    "tooltip": "Optional semantic stream from HZ3 YuE2 · Generate Token Stream or Music From Token Stream."
+                }),
+            },
         }
 
-    def save(self, audio, abc, style, lyrics, filename_prefix, file_format, prompt=None, extra_pnginfo=None):
+    def save(self, audio, abc, style, lyrics, filename_prefix, file_format, prompt=None, extra_pnginfo=None,
+             token_stream=None):
         bundle = {
-            "schema": "hz3-yue2-generation/1",
+            "schema": "hz3-yue2-generation/2",
             "abc": abc,
             "style": style,
             "lyrics": lyrics,
         }
+        if isinstance(token_stream, dict) and token_stream.get("schema") == "hz3-yue2-token-stream/1":
+            bundle["token_stream"] = token_stream
         metadata = dict(extra_pnginfo or {})
         metadata["hz3_yue2"] = bundle
 
@@ -165,8 +173,8 @@ class HZ3_YuE2_SaveAudio:
 class HZ3_YuE2_LoadGeneration:
     CATEGORY = "HZ3 YuE2/Generation"
     FUNCTION = "load"
-    RETURN_TYPES = ("AUDIO", "STRING", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("audio", "abc", "style", "lyrics", "report")
+    RETURN_TYPES = ("AUDIO", "STRING", "STRING", "STRING", "STRING", "HZ3_YUE2_TOKEN_STREAM")
+    RETURN_NAMES = ("audio", "abc", "style", "lyrics", "report", "token_stream")
     OUTPUT_NODE = True
     DESCRIPTION = "Load generated audio and recover the ABC, style, and lyrics saved with it."
 
@@ -212,6 +220,10 @@ class HZ3_YuE2_LoadGeneration:
         abc = str(bundle.get("abc", ""))
         style = str(bundle.get("style", ""))
         lyrics = str(bundle.get("lyrics", ""))
+        token_stream = bundle.get("token_stream")
+        has_stream = isinstance(token_stream, dict) and token_stream.get("schema") == "hz3-yue2-token-stream/1"
+        if not has_stream:
+            token_stream = {"schema": "hz3-yue2-token-stream/1", "ids": [], "missing": True}
         if missing:
             report = (
                 f"Loaded {selected}. Found {source}, but runtime values were not saved: "
@@ -219,12 +231,13 @@ class HZ3_YuE2_LoadGeneration:
             )
         else:
             report = f"Loaded {selected} with ABC, style, and lyrics from {source}."
+        report += " Semantic token stream available." if has_stream else " No semantic token stream was stored."
         return {
             "ui": {
                 "audio": [{"filename": path.name, "subfolder": path.parent.relative_to(_output_root()).as_posix(), "type": "output"}],
                 "text": [report],
             },
-            "result": (audio, abc, style, lyrics, report),
+            "result": (audio, abc, style, lyrics, report, token_stream),
         }
 
 

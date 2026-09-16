@@ -1,15 +1,19 @@
-"""Split one audio clip into segment clips from a whisper/faster-whisper segment list.
+"""Split one audio clip into musical-section clips from whisper segments + ABC.
 
-The audio is cut at the whisper segment boundaries and the segments are packed into
-a single batched AUDIO (batch index per segment), so a downstream SheetSage2
-audio-to-ABC node transcribes every segment in one run (it iterates the batch).
+Boundaries always come from the REAL whisper timings (reliable). Sections are then
+grouped into vocal "runs" separated by instrumental gaps (>= min_gap seconds), the
+lead-in before the first vocal line becomes its own INTRO clip, and any trailing
+non-vocal tail becomes an OUTRO/INSTRUMENTAL clip. The output is packed into a
+single batched AUDIO (one clip per batch index).
 
-Boundary rule (requested): the FIRST output segment spans the whole pre-roll up to
-the end of the first segment (it contains everything before the first start), and
-the LAST output segment spans from the last segment start to the very end of the
-audio (the remainder after the last end). Middle segments are cut exactly to their
-whisper start/end. Provided the whisper boundaries are contiguous this tiles the
-whole file with no gaps.
+The optional `abc` adds SECTION NAMES: whenever the ABC has exactly as many vocal
+sections as there are vocal runs, each run is labelled *verse/chorus/...* from the
+ABC; otherwise runs are labelled "vocal N". The parsed ABC section list (names and
+bar shares) is also echoed in the layout so you can see the structure.
+
+Note: the ABC text alone cannot give exact real-time section boundaries (sections
+are reconstructed as bars * bpm and inspect_score drops intro/instrumental-only
+sections). Those cuts therefore come from whisper/energy, not from the ABC.
 """
 
 from __future__ import annotations
@@ -27,11 +31,7 @@ def _as_seconds(value, default):
 
 
 def _parse_segments(data):
-    """Return a sorted list of {start, end, text} from a JSON segment payload.
-
-    Accepts either a JSON array of {start, end, text} objects or an object wrapping
-    such an array under "segments" / "results".
-    """
+    """Return a sorted list of {start, end, text} from a JSON segment payload."""
     if isinstance(data, str):
         payload = json.loads(data) if data.strip() else []
     else:
@@ -63,27 +63,86 @@ def _parse_segments(data):
     return segments
 
 
-def _slice_plan(segments, duration_seconds):
-    """Build {(start_s, end_s, text)} covering the whole file with first/last merge.
+def _abc_vocal_sections(abc):
+    """Return [(name, bars)] vocal section list from the ABC, or None.
 
-    - First segment starts at 0 (grabbing the pre-roll before the first start).
-    - Last segment ends at the very end of the audio (grabbing the post-roll).
-    - Middle segments are the raw whisper intervals.
+    Uses inspect_score's roll sections (vocal-only, tiled over the vocal span) so
+    the share of each section is known even though real times are not.
     """
-    last = len(segments) - 1
-    plan = []
-    prev_end = 0.0
-    for index, segment in enumerate(segments):
-        start = 0.0 if index == 0 else max(prev_end, segment["start"])
-        end = duration_seconds if index == last else segment["end"]
-        end = min(duration_seconds, end)
-        if end <= start:
-            continue
-        plan.append((start, end, segment["text"]))
-        prev_end = end
-    if not plan:
-        raise ValueError("No audible interval remains to split; check the segment boundaries.")
-    return plan
+    if not (abc or "").strip():
+        return None
+    try:
+        from .score_analysis import inspect_score
+        info = inspect_score(abc)
+        sections = info["roll"]["sections"]
+        if not sections or sum(int(section["bars"]) for section in sections) <= 0:
+            return None
+        return [(str(section["name"] or "section"), int(section["bars"]))
+                for section in sections]
+    except Exception:
+        return None
+
+
+def _build_slots(segments, duration_seconds, abc, separate_intro, min_gap):
+    """Return (slots, abc_sections).
+
+    slots: list of (start, end, kind, name, text) in time order, contiguous.
+    kinds: intro / vocal / instrumental (also used for trailing tail).
+    """
+    abc_sections = _abc_vocal_sections(abc)
+
+    # Vocal runs: consecutive lines separated by < min_gap belong to the same run;
+    # a gap >= min_gap closes the run (an instrumental section separates them).
+    runs = [[segments[0]]]
+    for segment in segments[1:]:
+        if segment["start"] - runs[-1][-1]["end"] >= min_gap:
+            runs.append([])
+        runs[-1].append(segment)
+
+    vocal_items = []  # (start, end, name, text)
+    for index, run in enumerate(runs):
+        start = run[0]["start"]
+        end = run[-1]["end"]
+        text = " ".join(segment["text"] for segment in run)
+        name = "vocal"
+        if abc_sections and index < len(abc_sections):
+            name = abc_sections[index][0]
+        else:
+            name = f"vocal {index + 1}"
+        vocal_items.append((start, end, name, text))
+    vocal_items.sort(key=lambda item: item[0])
+
+    if not separate_intro and vocal_items:
+        # Merge the intro into the first vocal clip (its start becomes 0).
+        vocal_items[0] = (0.0, vocal_items[0][1], vocal_items[0][2], vocal_items[0][3])
+
+    slots = []
+    cursor = 0.0
+    first = True
+    for start, end, name, text in vocal_items:
+        if first and start > 1e-6:
+            # Lead-in before the first vocal line is always its own INTRO clip
+            # (independent of min_gap), unless separate_intro merged it away.
+            slots.append((0.0, min(start, duration_seconds), "intro", "intro", ""))
+        elif start - cursor >= min_gap:
+            slots.append((cursor, min(start, duration_seconds), "instrumental", "instrumental", ""))
+        if start < duration_seconds:
+            slots.append((min(start, duration_seconds), min(end, duration_seconds),
+                          "vocal", name, text))
+        first = False
+        cursor = min(max(start, end, cursor), duration_seconds)
+    if duration_seconds - cursor >= min_gap:
+        slots.append((cursor, duration_seconds, "instrumental", "instrumental", ""))
+    elif cursor < duration_seconds:
+        # Small tail: fold into the last slot so nothing is dropped.
+        if slots:
+            slots[-1] = (slots[-1][0], duration_seconds, slots[-1][2], slots[-1][3])
+        else:
+            slots.append((cursor, duration_seconds, "vocal", "vocal", ""))
+
+    # Keep only positive-length slots.
+    slots = [slot for slot in slots if slot[1] - slot[0] > 1e-6]
+    return slots, abc_sections
 
 
 class HZ3_YuE2_SplitAudioSegments:
@@ -92,11 +151,11 @@ class HZ3_YuE2_SplitAudioSegments:
     RETURN_TYPES = ("AUDIO", "STRING", "STRING")
     RETURN_NAMES = ("segments_audio", "layout", "report")
     DESCRIPTION = (
-        "Slice one audio into segment clips from a fast-whisper segment list and pack them "
-        "into a single batched AUDIO (one segment per batch index). The first clip includes "
-        "everything before the first start and the last clip the remainder after the last "
-        "end, so the whole file is covered. Connect segments_audio to a single SheetSage2 "
-        "audio-to-ABC node to transcribe all segments in one pass."
+        "Slice one audio into musical-section clips using REAL whisper timings. The "
+        "lead-in becomes an intro clip, vocal lines are grouped into runs, and gaps "
+        ">= min_gap become instrumental clips. Optional abc labels the runs by section "
+        "name. Outputs one batched AUDIO (one clip per batch index) for a single "
+        "SheetSage2 audio-to-ABC pass."
     )
 
     @classmethod
@@ -109,10 +168,28 @@ class HZ3_YuE2_SplitAudioSegments:
                     "forceInput": True,
                     "tooltip": "JSON list of {start, end, text} from faster-whisper (or wrap under 'segments').",
                 }),
+                "separate_intro": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "True: the lead-in before the first vocal line becomes its own INTRO clip. False: it merges into the first clip.",
+                }),
+                "min_gap": ("FLOAT", {
+                    "default": 4.0,
+                    "min": 0.0,
+                    "max": 120.0,
+                    "step": 0.5,
+                    "tooltip": "Whisper gap (s) in a vocal run used to close it and emit an instrumental clip.",
+                }),
+            },
+            "optional": {
+                "abc": ("STRING", {
+                    "multiline": True,
+                    "forceInput": True,
+                    "tooltip": "Optional ABC (e.g. from SheetSage2). Used to name the vocal runs by section; the parsed section list is echoed in layout.",
+                }),
             },
         }
 
-    def split(self, audio, segments):
+    def split(self, audio, segments, separate_intro=True, min_gap=4.0, abc=""):
         waveform = audio["waveform"]          # [batch, channels, samples]
         sample_rate = int(audio["sample_rate"])
         if waveform.shape[0] != 1:
@@ -122,11 +199,12 @@ class HZ3_YuE2_SplitAudioSegments:
         duration_seconds = total / float(sample_rate)
 
         parsed = _parse_segments(segments)
-        plan = _slice_plan(parsed, duration_seconds)
+        slots, abc_sections = _build_slots(parsed, duration_seconds, abc,
+                                           separate_intro, min_gap)
 
         clips = []
         layout = []
-        for index, (start, end, text) in enumerate(plan):
+        for index, (start, end, kind, name, text) in enumerate(slots):
             i0 = max(0, round(start * sample_rate))
             i1 = min(total, round(end * sample_rate))
             if i1 <= i0:
@@ -135,6 +213,8 @@ class HZ3_YuE2_SplitAudioSegments:
             clips.append(clip)
             layout.append({
                 "index": len(clips) - 1,
+                "kind": kind,
+                "name": name,
                 "start": round(start, 3),
                 "end": round(end, 3),
                 "duration": round((end - start), 3),
@@ -143,9 +223,14 @@ class HZ3_YuE2_SplitAudioSegments:
         if not clips:
             raise ValueError("None of the segments produced an audible audio clip.")
 
-        # Pack into one batched AUDIO: pad to the longest segment so the tensor
-        # stays rectangular. SheetSage2 pads its input window anyway; the short
-        # trailing silence on shorter segments yields only trailing silence/EOS.
+        # ABC structure echo (informative; boundaries come from whisper).
+        if abc_sections:
+            layout_meta = {
+                "abc_sections": [{"name": name, "bars": bars} for name, bars in abc_sections],
+            }
+        else:
+            layout_meta = {}
+
         max_samples = max(clip.shape[-1] for clip in clips)
         batch = len(clips)
         output = torch.zeros(
@@ -156,11 +241,13 @@ class HZ3_YuE2_SplitAudioSegments:
         for index, clip in enumerate(clips):
             output[index:index + 1, :, : clip.shape[-1]].copy_(clip)
 
-        layout_json = json.dumps(layout, ensure_ascii=False, indent=2)
+        payload = {"clips": layout, **layout_meta}
+        layout_json = json.dumps(payload, ensure_ascii=False, indent=2)
         report = (
-            f"Split audio ({duration_seconds:.2f} s) into {batch} segment(s): "
+            f"Split audio ({duration_seconds:.2f} s) into {batch} clip(s): "
             + "\n".join(
-                f"  [{j['index']}] {j['start']:.2f}-{j['end']:.2f}s ({j['duration']:.2f}s) {j['text']}"
+                f"  [{j['index']}] {j['kind']}:{j['name']} {j['start']:.2f}-{j['end']:.2f}s "
+                f"({j['duration']:.2f}s)"
                 for j in layout
             )
         )

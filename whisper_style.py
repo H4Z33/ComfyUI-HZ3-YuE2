@@ -614,6 +614,10 @@ def _score_evidence(abc):
             "note": None}
 
 
+# Seconds of instrumentation shared across an interface when the overlap SWITCH is ON.
+_OVERLAP_SECONDS = 4.0
+
+
 def _parse_structure(data):
     """Parse the structure JSON (from SheetSage2 Audio to ABC + Sections) into a
     sorted list of {name, start, end}. Accepts a bare list or a dict with 'sections'."""
@@ -646,23 +650,23 @@ def _parse_structure(data):
 class HZ3_YuE2_MixMashGenius:
     CATEGORY = "HZ3 YuE2"
     FUNCTION = "compose"
-    RETURN_TYPES = ("STRING", "STRING", "FLOAT", "STRING", "STRING")
-    RETURN_NAMES = ("style", "lyrics", "durations", "segments_abc", "report")
-    OUTPUT_IS_LIST = (True, True, True, True, False)
+    RETURN_TYPES = ("STRING", "STRING", "FLOAT", "STRING", "FLOAT", "STRING")
+    RETURN_NAMES = ("style", "lyrics", "durations", "segments_abc", "added_seconds", "report")
+    OUTPUT_IS_LIST = (True, True, True, True, True, False)
     OUTPUT_NODE = True
     DESCRIPTION = ("MixMash Genius: per-section style + lyrics from abc + structure + "
-                   "instructions. It splits the abc into per-section fragments internally, "
-                   "duplicates the instrumental tail of each section into the next (overlap s) "
-                   "and returns the overlapped segments_abc plus corrected durations. "
-                   "style[i]/lyrics[i]/durations[i]/segments_abc[i] are index-aligned.")
+                   "instructions. The `overlap` SWITCH applies the two-sided instrumental "
+                   "overlap across sections (grows segments_abc, corrects durations, and "
+                   "reports the per-section traslape for the Conditioning Overlap node). "
+                   "OFF: no overlap. style[i]/lyrics[i]/durations[i]/segments_abc[i]/added_seconds[i] are index-aligned.")
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "abc": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "The whole-song ABC from 'HZ3 YuE2 · SheetSage2 Audio to ABC + Sections'. Split into per-section fragments internally."}),
-                "overlap": ("FLOAT", {"default": 4.0, "min": 0.0, "max": 120.0, "step": 0.5,
-                                      "tooltip": "Overlap (s): instrumental tail duplicated from each section into the start of the next."}),
+                "overlap": ("BOOLEAN", {"default": True,
+                                        "tooltip": "SWITCH: ON applies the two-sided instrumental overlap across sections (grows segments_abc and corrects durations). OFF: no overlap, segments_abc and durations left unchanged."}),
                 "structure": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "Connect `structure` from 'HZ3 YuE2 · SheetSage2 Audio to ABC + Sections'."}),
                 "instructions": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "Direction to apply, e.g. 'start soft/acoustic and build to a rock finale with an older, raspy male voice'."}),
                 "lyrics": ("STRING", {"multiline": True, "default": "", "tooltip": "Real lyrics (the split's per-section text or the raw transcript)."}),
@@ -691,10 +695,7 @@ class HZ3_YuE2_MixMashGenius:
         lyrics = first(lyrics, "")
         model = str(first(model, "deepseek-v4.1-flash:cloud"))
         endpoint = str(first(endpoint, "http://127.0.0.1:11434"))
-        try:
-            overlap = float(first(overlap, 4.0))
-        except (TypeError, ValueError):
-            overlap = 4.0
+        overlap_on = bool(first(overlap, False))
         try:
             temperature = float(first(temperature, 0.35))
         except (TypeError, ValueError):
@@ -733,20 +734,36 @@ class HZ3_YuE2_MixMashGenius:
             lyric_blocks.append(f"[{sec['name']}]" + (f"\n{block_lyrics}" if block_lyrics else ""))
             orig_durations.append(round(float(sec["end"]) - float(sec["start"]), 3))
 
-        # Apply instrumental overlap and correct the per-section durations.
-        overlapped, added = apply_abc_overlap(segments, float(overlap))
+        # Overlap SWITCH: ON applies the two-sided instrumental overlap; OFF leaves unchanged.
+        if overlap_on and segments:
+            overlapped, added = apply_abc_overlap(segments, _OVERLAP_SECONDS)
+        else:
+            overlapped = list(segments)
+            added = [0.0] * len(segments)
         durations = [
             round(orig_durations[i] + (added[i] if i < len(added) else 0.0), 3)
             for i in range(len(orig_durations))
         ]
 
-        report = json.dumps(result, ensure_ascii=False, indent=2)
-        visible = ("PER-SECTION STYLE (style[0..N-1]):\n" +
-                   "\n\n".join(f"{sections[i]['name']}:\n{styles[i]}" for i in range(len(sections))) +
-                   "\n\nSECTIONED LYRICS (lyrics[0..N-1]):\n" + "\n\n".join(lyric_blocks) +
-                   "\n\nDURATIONS (corrected by overlap):\n" + ", ".join(str(d) for d in durations))
+        report = json.dumps({
+            "ollama": result,
+            "conditioning_overlap": {
+                "overlap_enabled": bool(overlap_on),
+                "overlap_amount": _OVERLAP_SECONDS,
+                "overlap_seconds_per_section": added,
+                "section_durations": durations,
+                "sections": [sec["name"] for sec in sections],
+            },
+        }, ensure_ascii=False, indent=2)
+        visible = (
+            "PER-SECTION STYLE (style[0..N-1]):\n" +
+            "\n\n".join(f"{sections[i]['name']}:\n{styles[i]}" for i in range(len(sections))) +
+            "\n\nSECTIONED LYRICS (lyrics[0..N-1]):\n" + "\n\n".join(lyric_blocks) +
+            "\n\nDURATIONS (corrected):\n" + ", ".join(str(d) for d in durations) +
+            "\n\nOVERLAP PER SECTION (s) [for Conditioning Overlap]:\n" +
+            ", ".join(str(a) for a in added))
         return {"ui": {"text": [visible]},
-                "result": (styles, lyric_blocks, durations, overlapped, report)}
+                "result": (styles, lyric_blocks, durations, overlapped, added, report)}
 
 
 NODE_CLASS_MAPPINGS = {

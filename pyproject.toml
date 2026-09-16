@@ -1,0 +1,10 @@
+[project]
+name = "comfyui-hz3-yue2"
+version = "0.1.0"
+description = "HZ3 audio analysis, lyric prosody, and style mashup nodes for YuE2 workflows"
+requires-python = ">=3.10"
+dependencies = ["numpy", "onnxruntime>=1.30.0", "soundfile", "pyphen>=0.17.2"]
+
+[tool.comfy]
+PublisherId = "hz3"
+DisplayName = "HZ3 YuE2"

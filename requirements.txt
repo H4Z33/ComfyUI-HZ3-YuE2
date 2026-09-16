@@ -1,0 +1,4 @@
+numpy
+onnxruntime>=1.30.0
+soundfile
+pyphen>=0.17.2

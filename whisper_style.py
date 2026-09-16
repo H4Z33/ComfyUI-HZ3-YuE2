@@ -511,14 +511,23 @@ class HZ3_YuE2_Transcribe:
                 "device": (["cpu", "cuda"], {"default": "cpu"}),
                 "beam_size": ("INT", {"default": 5, "min": 1, "max": 20, "tooltip": "Beam search width. Higher = more accurate but slower."}),
             },
+            "optional": {
+                "force_rerun": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Off (default): the node caches normally and only re-transcribes when an input changes. On: force re-transcription on every run.",
+                }),
+            },
         }
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
-        # Never cache: this node must re-transcribe with the current code every run.
-        return float("nan")
+        # force_rerun On -> always re-transcribe (nan != nan). Off (default) ->
+        # normal caching: only re-run when an input actually changes.
+        if kwargs.get("force_rerun"):
+            return float("nan")
+        return None
 
-    def transcribe(self, audio, backend, language, task, device, beam_size=5):
+    def transcribe(self, audio, backend, language, task, device, force_rerun=False, beam_size=5):
         mono = _to_mono_16k(audio)
         text, chunks = _transcribe(backend, mono, language, task, device, beam_size)
 

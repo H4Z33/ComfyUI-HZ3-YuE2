@@ -95,17 +95,59 @@ def cut_sections(audio, structure):
     return clips
 
 
+def split_abc_by_sections(abc):
+    """Return a list of (name, abc_fragment) in section order, splitting on '% [label]'.
+
+    Header is the text up to the `K:` line; after it, '% [section]' markers and the
+    'V: Vocal' / 'V: Ins' measure lines follow. A new section starts at each marker.
+    """
+    lines = (abc or "").replace("\r\n", "\n").split("\n")
+    header_end = None
+    for index, line in enumerate(lines):
+        if line.startswith("K:"):
+            header_end = index
+            break
+    if header_end is None:
+        header_end = 0
+    header = lines[:header_end + 1]
+    body = lines[header_end + 1:]
+
+    sections = []
+    current = None
+    for line in body:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("% "):
+            name = stripped[2:].strip() or "section"
+            current = {"name": name, "lines": []}
+            sections.append(current)
+        elif current is None:
+            name = "section"
+            current = {"name": name, "lines": []}
+            sections.append(current)
+        current["lines"].append(line.rstrip())
+
+    fragments = []
+    for section in sections:
+        text = "\n".join(header + section["lines"]).strip() + "\n"
+        if text.strip():
+            fragments.append((section["name"], text))
+    return fragments
+
+
 class HZ3_YuE2_SheetSage2Sections:
     CATEGORY = "HZ3 YuE2/Audio"
     FUNCTION = "transcribe"
-    RETURN_TYPES = ("STRING", "STRING", "AUDIO", "STRING")
-    RETURN_NAMES = ("abc", "structure", "segments_audio", "report")
-    OUTPUT_IS_LIST = (False, False, True, False)
+    RETURN_TYPES = ("STRING", "STRING", "AUDIO", "STRING", "STRING")
+    RETURN_NAMES = ("abc", "structure", "segments_audio", "segments_abc", "report")
+    OUTPUT_IS_LIST = (False, False, True, True, False)
     DESCRIPTION = (
         "Run SheetSage2 on the whole audio once and output the ABC text, the SECTION "
-        "STRUCTURE with REAL timestamps (Intro/Verse/Chorus/Interlude/Outro...), and the "
-        "audio cut into per-section clips. Connect audio_encoder from 'Load Audio "
-        "Encoder'. This is the accurate source for section segmentation."
+        "STRUCTURE with REAL timestamps (Intro/Verse/Chorus/Interlude/Outro...), the "
+        "audio cut into per-section clips, and segments_abc: the full ABC split into one "
+        "ABC fragment per section (index-aligned with segments_audio). Connect audio_encoder "
+        "from 'Load Audio Encoder'."
     )
 
     @classmethod
@@ -146,6 +188,11 @@ class HZ3_YuE2_SheetSage2Sections:
 
         segments = cut_sections(audio, structure)
         structure_json = json.dumps(structure, ensure_ascii=False, indent=2)
+        segments_abc = [fragment for _, fragment in split_abc_by_sections(abc)] if abc else []
+        count_warning = ""
+        if segments and len(segments_abc) != len(segments):
+            count_warning = (f" WARNING: ABC split produced {len(segments_abc)} segment(s) "
+                             f"but the structure produced {len(segments)}; index alignment may drift.")
         if segments:
             # Attach the matching section name to each clip's metadata (index-aligned).
             report_lines = [f"{s['name']} {s['start']:.2f}-{s['end']:.2f}s" for s in structure]
@@ -153,10 +200,11 @@ class HZ3_YuE2_SheetSage2Sections:
             report_lines = ["no audible sections"]
         report = (
             f"SheetSage2 · {mode} · {len(structure)} section(s) · "
-            f"{len(segments)} audio clip(s){abc_error}\n" + "\n".join(report_lines)
+            f"{len(segments)} audio clip(s) · {len(segments_abc)} ABC segment(s)"
+            f"{abc_error}{count_warning}\n" + "\n".join(report_lines)
         )
         return {"ui": {"text": [structure_json]},
-                "result": (abc, structure_json, segments, report)}
+                "result": (abc, structure_json, segments, segments_abc, report)}
 
 
 NODE_CLASS_MAPPINGS = {

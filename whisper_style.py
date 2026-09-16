@@ -566,17 +566,16 @@ GENIUS_SYSTEM = """You are a music editor that turns an audio section structure 
 You receive JSON with:
 - structure: the AUTHORITATIVE ordered list of sections, each {name, start, end} (seconds). Use exactly this order and count; never add, drop, or reorder sections.
 - lyrics: the real lyrics, each line with its whisper timestamps {start, end, text}.
-- instructions: the user's free-text direction. Apply it across the song, building in intensity from start to end (soft/acoustic early, fuller/louder at the choruses and the end, etc.).
+- instructions: the user's free-text direction. Apply it to EACH section as an INDEPENDENT, self-contained musical direction for that section.
 - score: measured BPM, meter, key and total seconds (may be empty if no score).
 
+HARD RULES (non-negotiable):
+- Each section's "style" must be SELF-CONTAINED: it describes ONLY that section's own content (BPM/tempo, genre, the voice, instruments, harmony, production, dynamics/mood).
+- NEVER reference other sections of the song. Forbidden: "builds toward the chorus", "hints at / sets up what comes later", "in anticipation of the drop", "before the outro/final", "toward the next section", "echoes the intro", etc. Every style must read correctly in isolation, as if that section were the whole song.
+
 TASKS:
-1. Place every lyric line into the structure section whose [start, end) span contains its timestamp. Sections with no lines (intro, interlude, outro, instrumental) get empty lyrics.
-2. For EVERY section (including intro/interlude/outro), write ONE concise style paragraph that explicitly states:
-   - tempo/BPM (use score.bpm when present, otherwise describe the beat feel),
-   - music genre / style and how the instruments are used,
-   - the VOICE (singer gender, age, tone and delivery),
-   - instrumentation, harmony, production and dynamics,
-   - how intensity builds toward the choruses and the final section.
+1. Place every lyric line into the structure section whose [start, end) span contains its timestamp. Sections with no lines (intro, interlude, outro, instrumental) get empty lyrics. For an instrumental-only section, say so ("instrumental") inside its style.
+2. For EVERY section write ONE concise style paragraph stating only ITS OWN: tempo/BPM (use score.bpm when present), music genre and instruments, the VOICE (gender, age, tone, delivery), harmony, production, dynamics/mood.
 3. Return one entry per structure section, in the same order.
 
 Return JSON only with the single key:

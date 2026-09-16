@@ -649,18 +649,18 @@ class HZ3_YuE2_MixMashGenius:
     RETURN_TYPES = ("STRING", "STRING", "FLOAT", "STRING", "STRING")
     RETURN_NAMES = ("style", "lyrics", "durations", "segments_abc", "report")
     OUTPUT_IS_LIST = (True, True, True, True, False)
-    INPUT_IS_LIST = (True, False, False, False, False, False, False, False, False, False)
     OUTPUT_NODE = True
-    DESCRIPTION = ("MixMash Genius: per-section style + lyrics from structure + instructions. "
-                   "Also takes segments_abc (list) and an overlap (s): it duplicates the "
-                   "instrumental tail of each section into the next (overlapped segments_abc) "
-                   "and returns corrected per-section durations. style[i]/lyrics[i]/durations[i]/segments_abc[i] are index-aligned.")
+    DESCRIPTION = ("MixMash Genius: per-section style + lyrics from abc + structure + "
+                   "instructions. It splits the abc into per-section fragments internally, "
+                   "duplicates the instrumental tail of each section into the next (overlap s) "
+                   "and returns the overlapped segments_abc plus corrected durations. "
+                   "style[i]/lyrics[i]/durations[i]/segments_abc[i] are index-aligned.")
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "segments_abc": ("STRING", {"tooltip": "Connect each per-section ABC fragment (from 'SheetSage2 Audio to ABC + Sections'.segments_abc)."}),
+                "abc": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "The whole-song ABC from 'HZ3 YuE2 · SheetSage2 Audio to ABC + Sections'. Split into per-section fragments internally."}),
                 "overlap": ("FLOAT", {"default": 4.0, "min": 0.0, "max": 120.0, "step": 0.5,
                                       "tooltip": "Overlap (s): instrumental tail duplicated from each section into the start of the next."}),
                 "structure": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "Connect `structure` from 'HZ3 YuE2 · SheetSage2 Audio to ABC + Sections'."}),
@@ -671,36 +671,42 @@ class HZ3_YuE2_MixMashGenius:
                 "temperature": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 1.5, "step": 0.05}),
                 "timeout": ("INT", {"default": 180, "min": 10, "max": 900}),
             },
-            "optional": {
-                "abc": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "Optional ABC: supplies measured BPM/meter/key as style evidence."}),
-            },
         }
 
-    def compose(self, segments_abc, overlap, structure, instructions, lyrics, model, endpoint,
-                temperature, timeout, abc=""):
+    def compose(self, abc, overlap, structure, instructions, lyrics, model, endpoint,
+                temperature, timeout):
         from .overlap_sections import apply_abc_overlap
+        from .sheetsage2_sections import split_abc_by_sections
 
-        def scalars(*values):
-            """Unwrap any input the executor passed as a 1-element list."""
-            out = []
-            for value in values:
-                if value is None:
-                    out.append("")
-                elif isinstance(value, (list, tuple)):
-                    out.append(value[0] if value else "")
-                else:
-                    out.append(value)
-            return out
+        def first(value, default=""):
+            if value is None:
+                return default
+            if isinstance(value, (list, tuple)):
+                return value[0] if value else default
+            return value
 
-        abc, structure, instructions, lyrics = scalars(abc, structure, instructions, lyrics)
+        abc = first(abc, "")
+        structure = first(structure, "")
+        instructions = first(instructions, "")
+        lyrics = first(lyrics, "")
+        model = str(first(model, "deepseek-v4.1-flash:cloud"))
+        endpoint = str(first(endpoint, "http://127.0.0.1:11434"))
         try:
-            overlap = float(overlap[0] if isinstance(overlap, (list, tuple)) else overlap)
-        except (TypeError, ValueError, IndexError):
+            overlap = float(first(overlap, 4.0))
+        except (TypeError, ValueError):
             overlap = 4.0
+        try:
+            temperature = float(first(temperature, 0.35))
+        except (TypeError, ValueError):
+            temperature = 0.35
+        try:
+            timeout = int(first(timeout, 180))
+        except (TypeError, ValueError):
+            timeout = 180
 
         evidence = _score_evidence(abc)
         sections = _parse_structure(structure)
-        segments = list(segments_abc or [])
+        segments = [fragment for _, fragment in split_abc_by_sections(abc)] if (abc or "").strip() else []
         payload = {
             "language_locale": "es-MX",
             "structure": sections,

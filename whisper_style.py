@@ -446,15 +446,9 @@ class HZ3_YuE2_Transcribe:
                 "task": (["transcribe", "translate"], {"default": "transcribe"}),
                 "device": (["cpu", "cuda"], {"default": "cpu"}),
             },
-            "optional": {
-                "abc": ("STRING", {"forceInput": True, "multiline": True,
-                                   "tooltip": "Optional SheetSage ABC (kept for compatibility; the ABCC has no reliable timing, so segmentation uses the audio's silence gaps instead)."}),
-            },
         }
 
-    def transcribe(self, audio, backend, language, task, device, abc=""):
-        _ = abc  # ABC has no reliable timing for this; segmentation reads audio silences
-        mono = _to_mono_16k(audio)
+    def transcribe(self, audio, backend, language, task, device):
         text, chunks = _transcribe(backend, mono, language, task, device)
 
         # Read the audio's silences: drop transcript content that falls inside

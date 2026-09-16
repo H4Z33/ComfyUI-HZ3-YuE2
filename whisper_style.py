@@ -141,7 +141,7 @@ def _rounded(value):
     return round(value, 2) if value is not None else None
 
 
-BACKENDS = ["whisper small", "whisper medium", "fast"]
+BACKENDS = ["whisper small", "whisper medium", "whisper large", "fast"]
 
 # module-level pipeline cache so a new node instance / re-run does not reload
 # the model every execution
@@ -151,7 +151,7 @@ _PIPE_CACHE = {}
 def _get_pipe(backend, model, device):
     key = (backend, model, device)
     if key not in _PIPE_CACHE:
-        if backend in ("whisper small", "whisper medium"):
+        if backend in ("whisper small", "whisper medium", "whisper large"):
             _PIPE_CACHE[key] = _load_pipe(model, device)
         elif backend == "fast":
             try:
@@ -168,6 +168,7 @@ def _backend_model(backend):
     return {
         "whisper small": "openai/whisper-small",
         "whisper medium": "openai/whisper-medium",
+        "whisper large": "openai/whisper-large-v3",
         "fast": "small",
     }[backend]
 
@@ -176,17 +177,18 @@ def _compute_type(device):
     return "int8" if device == "cpu" else "float16"
 
 
-def _transcribe(backend, mono, language, task, device):
+def _transcribe(backend, mono, language, task, device, beam_size=5):
     """Run one backend and return (full_text, [(start, end, text), ...])."""
     lang = None
     if language and language.strip().lower() not in ("auto", ""):
         lang = language.strip().lower()
     model = _backend_model(backend)
+    beams = max(1, int(beam_size))
 
-    if backend in ("whisper small", "whisper medium"):
+    if backend in ("whisper small", "whisper medium", "whisper large"):
         # Transformers Whisper pipeline
         pipe = _get_pipe(backend, model, device)
-        gen_kwargs = {"task": task}
+        gen_kwargs = {"task": task, "num_beams": beams}
         if lang:
             gen_kwargs["language"] = lang
         result = pipe(mono, generate_kwargs=gen_kwargs, return_timestamps="word")
@@ -198,7 +200,7 @@ def _transcribe(backend, mono, language, task, device):
 
     if backend == "fast":
         _pipe = _get_pipe(backend, model, device)
-        segments, _info = _pipe.transcribe(mono, language=lang, task=task, beam_size=5)
+        segments, _info = _pipe.transcribe(mono, language=lang, task=task, beam_size=beams)
         chunks = []
         pieces = []
         for segment in segments:
@@ -445,6 +447,7 @@ class HZ3_YuE2_Transcribe:
                 "language": ("STRING", {"default": "auto", "tooltip": "auto detects the spoken language. Or force an ISO-639-1 code (es, en, ...)."}),
                 "task": (["transcribe", "translate"], {"default": "transcribe"}),
                 "device": (["cpu", "cuda"], {"default": "cpu"}),
+                "beam_size": ("INT", {"default": 5, "min": 1, "max": 20, "tooltip": "Beam search width. Higher = more accurate but slower."}),
             },
         }
 
@@ -453,9 +456,9 @@ class HZ3_YuE2_Transcribe:
         # Never cache: this node must re-transcribe with the current code every run.
         return float("nan")
 
-    def transcribe(self, audio, backend, language, task, device):
+    def transcribe(self, audio, backend, language, task, device, beam_size=5):
         mono = _to_mono_16k(audio)
-        text, chunks = _transcribe(backend, mono, language, task, device)
+        text, chunks = _transcribe(backend, mono, language, task, device, beam_size)
 
         # Read the audio's silences: drop transcript content that falls inside
         # non-vocal gaps so only actually-sung content is extracted.

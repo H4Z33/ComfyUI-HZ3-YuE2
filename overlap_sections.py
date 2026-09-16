@@ -20,7 +20,7 @@ import re
 def _parse_section(abc):
     """Return {lines, bpm, num, den, spb, name, vocal, ins, header_end}
     where vocal/ins are ordered flat bars (vocal keeps inline chord symbols)."""
-    lines = (abc or "").replace("\r\n", "\n").split("\n")
+    lines = (abc or "").replace("\r\n", "\n").splitlines()
     header_end = None
     bpm = num = den = None
     for index, line in enumerate(lines):
@@ -65,8 +65,18 @@ def _render(bars):
     return ("|".join(bars)) + ("|" if bars else "")
 
 
+def _chords_only(bars):
+    """Keep only the CHORD symbols of each vocal bar (over rests); discard the melody
+    notes, so the duplicated seam carries harmony but not a second vocal melody."""
+    out = []
+    for bar in bars:
+        chords = re.findall(r'"([^"]*)"', bar)
+        out.append("".join(f'"{c}"z' for c in chords) if chords else "z")
+    return out
+
+
 def _voice_block(vocal_bars, ins_bars):
-    return ["V: Vocal", _render(vocal_bars), "V: Ins", _render(ins_bars)]
+    return ["V: Vocal", _render(_chords_only(vocal_bars)), "V: Ins", _render(ins_bars)]
 
 
 def _insert_prepend(lines, header_end, block):

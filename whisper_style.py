@@ -646,16 +646,23 @@ def _parse_structure(data):
 class HZ3_YuE2_MixMashGenius:
     CATEGORY = "HZ3 YuE2"
     FUNCTION = "compose"
-    RETURN_TYPES = ("STRING", "STRING", "FLOAT", "STRING")
-    RETURN_NAMES = ("style", "lyrics", "durations", "report")
-    OUTPUT_IS_LIST = (True, True, True, False)
+    RETURN_TYPES = ("STRING", "STRING", "FLOAT", "STRING", "STRING")
+    RETURN_NAMES = ("style", "lyrics", "durations", "segments_abc", "report")
+    OUTPUT_IS_LIST = (True, True, True, True, False)
+    INPUT_IS_LIST = (True, False, False, False, False, False, False, False, False)
     OUTPUT_NODE = True
-    DESCRIPTION = "MixMash Genius: turn the real section structure + instructions + lyrics (+ optional ABC for BPM/meter/key) into a LIST of per-section style descriptions and a LIST of per-section lyrics. Index-aligned: style[i] describes lyrics[i]."
+    DESCRIPTION = ("MixMash Genius: per-section style + lyrics from structure + instructions. "
+                   "Also takes segments_abc (list) and an overlap (s): it duplicates the "
+                   "instrumental tail of each section into the next (overlapped segments_abc) "
+                   "and returns corrected per-section durations. style[i]/lyrics[i]/durations[i]/segments_abc[i] are index-aligned.")
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "segments_abc": ("STRING", {"tooltip": "Connect each per-section ABC fragment (from 'SheetSage2 Audio to ABC + Sections'.segments_abc)."}),
+                "overlap": ("FLOAT", {"default": 4.0, "min": 0.0, "max": 120.0, "step": 0.5,
+                                      "tooltip": "Overlap (s): instrumental tail duplicated from each section into the start of the next."}),
                 "structure": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "Connect `structure` from 'HZ3 YuE2 · SheetSage2 Audio to ABC + Sections'."}),
                 "instructions": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "Direction to apply, e.g. 'start soft/acoustic and build to a rock finale with an older, raspy male voice'."}),
                 "lyrics": ("STRING", {"multiline": True, "default": "", "tooltip": "Real lyrics (the split's per-section text or the raw transcript)."}),
@@ -669,12 +676,17 @@ class HZ3_YuE2_MixMashGenius:
             },
         }
 
-    def compose(self, structure, instructions, lyrics, model, endpoint, temperature, timeout, abc=""):
+    def compose(self, segments_abc, overlap, structure, instructions, lyrics, model, endpoint,
+                temperature, timeout, abc=""):
+        from .overlap_sections import apply_abc_overlap
+
         evidence = _score_evidence(abc)
         sections = _parse_structure(structure)
+        segments = list(segments_abc or [])
         payload = {
             "language_locale": "es-MX",
             "structure": sections,
+            "segments_abc": segments,
             "lyrics": lyrics,
             "instructions": instructions,
             "score": {k: evidence[k] for k in ("bpm", "meter", "key", "seconds")},
@@ -688,21 +700,29 @@ class HZ3_YuE2_MixMashGenius:
 
         styles = []
         lyric_blocks = []
-        durations = []
+        orig_durations = []
         for index, sec in enumerate(sections):
             item = result_sections[index] if index < len(result_sections) and isinstance(result_sections[index], dict) else {}
             style = str(item.get("style", "") or "").strip().replace("\n", " ")
             block_lyrics = str(item.get("lyrics", "") or "").strip()
             styles.append(style if style else f"[{sec['name']}] (style not provided)")
             lyric_blocks.append(f"[{sec['name']}]" + (f"\n{block_lyrics}" if block_lyrics else ""))
-            durations.append(round(float(sec["end"]) - float(sec["start"]), 3))
+            orig_durations.append(round(float(sec["end"]) - float(sec["start"]), 3))
+
+        # Apply instrumental overlap and correct the per-section durations.
+        overlapped, added = apply_abc_overlap(segments, float(overlap))
+        durations = [
+            round(orig_durations[i] + (added[i] if i < len(added) else 0.0), 3)
+            for i in range(len(orig_durations))
+        ]
 
         report = json.dumps(result, ensure_ascii=False, indent=2)
-        visible = ("PER-SECTION STYLE (output: style[0..N-1]):\n" +
+        visible = ("PER-SECTION STYLE (style[0..N-1]):\n" +
                    "\n\n".join(f"{sections[i]['name']}:\n{styles[i]}" for i in range(len(sections))) +
-                   "\n\nSECTIONED LYRICS (output: lyrics[0..N-1]):\n" +
-                   "\n\n".join(lyric_blocks))
-        return {"ui": {"text": [visible]}, "result": (styles, lyric_blocks, durations, report)}
+                   "\n\nSECTIONED LYRICS (lyrics[0..N-1]):\n" + "\n\n".join(lyric_blocks) +
+                   "\n\nDURATIONS (corrected by overlap):\n" + ", ".join(str(d) for d in durations))
+        return {"ui": {"text": [visible]},
+                "result": (styles, lyric_blocks, durations, overlapped, report)}
 
 
 NODE_CLASS_MAPPINGS = {

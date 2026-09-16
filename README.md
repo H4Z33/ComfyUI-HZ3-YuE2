@@ -15,6 +15,9 @@ Independent ComfyUI node pack for YuE2 workflow preparation.
 - HZ3 YuE2 · Music From Token Stream
 - HZ3 YuE2 · Conditioning Cut
 - HZ3 YuE2 · Conditioning Paste
+- HZ3 YuE2 · Save Conditioning
+- HZ3 YuE2 · Load Conditioning
+- HZ3 YuE2 · Conditioning Timeline
 
 The audio classifier expects `discogs-effnet-bsdynamic-1.onnx` and its matching
 JSON metadata under `models/audio_classifiers/discogs_effnet`. The Ollama nodes
@@ -46,6 +49,10 @@ Connect `token_stream` or `sliced_stream` to the optional input on `HZ3 YuE2 · 
 ## Editing conditioning on a timeline
 
 Native YuE2 conditioning stores a repeated text/ABC prefix plus one semantic KV position per 1/25 second audio frame in each `yue2_chunk`. `Conditioning Cut` rebuilds valid chunks for a selected interval. `Conditioning Paste` preserves the base duration and replaces only the selected base frames with the same number of donor frames, retaining each donor chunk's own prefix. Connect the returned `seconds` to `Empty YuE2 Latent Audio`. Cuts are hard chunk boundaries; crossfading should be performed on decoded audio until a context-aware conditioning blend is validated.
+
+`Save Conditioning` writes the tensor losslessly to a `.safetensors` sidecar under the ComfyUI output directory. The tensor is intentionally not embedded in MP3/FLAC tags because a YuE2 KV conditioning can occupy hundreds of MiB. Connect its `asset_file` to the optional `conditioning_asset` input on `Save Audio`; the audio metadata then carries the sidecar reference. `Load Generation.conditioning_asset` connects directly to `Load Conditioning.asset_file`.
+
+`Conditioning Timeline` accepts up to six loaded or live takes. Each non-comment line uses `baseStart-baseEnd: take@takeStart`; for example `12-18: 2@12` replaces seconds 12–18 of take 1 with seconds 12–18 from take 2. Omit `@takeStart` to use the same source and destination time. Unspecified regions remain from take 1. Connect the timeline's `conditioning` to KSampler and its `seconds` to `Empty YuE2 Latent Audio`.
 ABC -> Lyrics Prosody.score_abc
 ```
 

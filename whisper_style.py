@@ -139,7 +139,7 @@ class HZ3_YuE2_Whisper:
             "required": {
                 "audio": ("AUDIO",),
                 "model": ("STRING", {"default": "openai/whisper-small"}),
-                "language": ("STRING", {"default": "es", "tooltip": "ISO-639-1, e.g. es, en. Use 'auto' to let the model decide."}),
+                "language": ("STRING", {"default": "auto", "tooltip": "auto detects the spoken language. Or force an ISO-639-1 code (es, en, ...)."}),
                 "task": (["transcribe", "translate"], {"default": "transcribe"}),
                 "device": (["cpu", "cuda"], {"default": "cpu"}),
             }

@@ -64,21 +64,24 @@ def _render_bar_line(bars):
 
 
 def _prepend_ins_pickup(abc, pickup_bars):
-    """Insert the pickup bars into the target section's Ins voice (after its first
-    'V: Ins' line). If the section has no Ins voice, add an Ins block first."""
+    """Insert the pickup INSIDE the target section, AFTER its '% [tag]' line, so the
+    section tag is never duplicated and the pickup (bare Ins bars, no '%') belongs to
+    the section. If the section already has a 'V: Ins', insert right after it."""
     lines = (abc or "").replace("\r\n", "\n").split("\n")
     if not pickup_bars:
         return abc
     pickup_line = _render_bar_line(pickup_bars)
 
+    # Preferred: insert after the section's own 'V: Ins' selection.
     for index, line in enumerate(lines):
         if line.strip() == "V: Ins":
             lines.insert(index + 1, pickup_line)
             return "\n".join(lines) + "\n"
-    # no Ins voice: add an Ins block right after the header end / before first V: Vocal
+    # Fallback (no Ins voice): add an Ins block right AFTER the section tag so the
+    # pickup stays inside the section and the tag is not duplicated.
     for index, line in enumerate(lines):
-        if line.strip().startswith("V: Vocal") or line.strip().startswith("% "):
-            lines[index:index] = ["V: Ins", pickup_line]
+        if line.strip().startswith("% "):
+            lines[index + 1:index + 1] = ["V: Ins", pickup_line]
             return "\n".join(lines) + "\n"
     return abc
 

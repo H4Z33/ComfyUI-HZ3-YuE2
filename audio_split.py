@@ -1,32 +1,20 @@
-"""Split one audio into musical-section clips from whisper timings + optional ABC.
+"""Split one audio into SECTION clips using the SheetSage2 structure, mapping lyrics.
 
-Each clip keeps its TRUE real length (no padding) and is emitted as a LIST of
-AUDIO (one per output socket) so short intro/instrumental clips stay short.
+Takes the SECTION STRUCTURE (real timestamps) from the companion
+`HZ3 YuE2 · SheetSage2 Audio to ABC + Sections` node, cuts the audio at those
+boundaries (intro/interlude/outro included), and assigns every faster-whisper line
+to the section that contains its midpoint. Emits one AUDIO per section at its true
+length (list output) plus a layout with each section's aligned lyrics.
 
-Boundaries always come from the REAL whisper timings. Vocal lines are grouped into
-runs separated by gaps >= min_gap; the lead-in becomes its own INTRO clip, interior
-gaps and the trailing tail become INSTRUMENTAL clips. When `abc` is supplied and
-`subdivide` is on, each vocal run is further split into the ABC's vocal sections
-(verse/chorus/...) by their bar shares, labelling each piece.
-
-Note: the ABC never provides exact real times (sections are reconstructed as
-bars*bpm and inspect_score drops intro/instrumental-only sections), so cuts are
-from whisper; the ABC only names/subdivides the vocal runs.
+This node only maps lyrics onto the structure; the audio cuts come from the real
+section timestamps, so whisper is NOT used to place boundaries any more.
 """
 
 from __future__ import annotations
 
-import bisect
 import json
 
 import torch
-
-
-def _as_seconds(value, default):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _parse_segments(data):
@@ -48,9 +36,11 @@ def _parse_segments(data):
     for item in raw:
         if not isinstance(item, dict):
             continue
-        start = _as_seconds(item.get("start"), None)
-        end = _as_seconds(item.get("end"), None)
-        if start is None or end is None:
+        start = item.get("start")
+        end = item.get("end")
+        try:
+            start, end = float(start), float(end)
+        except (TypeError, ValueError):
             raise ValueError("Each segment needs numeric start and end fields.")
         text = str(item.get("text", "") or "").strip()
         if end <= start:
@@ -62,100 +52,68 @@ def _parse_segments(data):
     return segments
 
 
-def _abc_vocal_sections(abc):
-    """Return [(name, bars)] vocal section list from the ABC, or None."""
-    if not (abc or "").strip():
-        return None
-    try:
-        from .score_analysis import inspect_score
-        info = inspect_score(abc)
-        sections = info["roll"]["sections"]
-        if not sections or sum(int(section["bars"]) for section in sections) <= 0:
-            return None
-        return [(str(section["name"] or "section"), int(section["bars"]))
-                for section in sections]
-    except Exception:
-        return None
+def _parse_structure(data):
+    """Return a sorted list of {name, start, end} from the SheetSage2 structure JSON."""
+    if isinstance(data, str):
+        payload = json.loads(data) if data.strip() else []
+    else:
+        payload = data
+    if isinstance(payload, dict):
+        payload = payload.get("sections") or payload.get("structure") or payload.get("clips") or []
+    if not isinstance(payload, list):
+        raise ValueError("structure must be a JSON list of {name, start, end} objects.")
+    sections = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        if item.get("start") is None or item.get("end") is None:
+            continue
+        sections.append({
+            "name": str(item.get("name") or item.get("kind") or "section"),
+            "start": float(item["start"]),
+            "end": float(item["end"]),
+        })
+    sections.sort(key=lambda section: section["start"])
+    sections = [section for section in sections if section["end"] - section["start"] > 1e-6]
+    if not sections:
+        raise ValueError("No valid sections were parsed from the structure payload.")
+    return sections
 
 
-def _vocal_items(runs, abc_sections, subdivide):
-    """Build [(start, end, name, text)] vocal clips from the runs.
-
-    With subdivision, a run is cut at the ABC section bands (by bar share) and
-    whole whisper lines are assigned to the section containing their midpoint.
-    """
-    items = []
-    for run_index, run in enumerate(runs):
-        run_start = run[0]["start"]
-        run_end = run[-1]["end"]
-        run_span = run_end - run_start
-        text = " ".join(segment["text"] for segment in run)
-
-        if subdivide and abc_sections and run_span > 0:
-            total_bars = sum(bars for _, bars in abc_sections)
-            boundaries = []
-            cumulative = 0.0
-            for name, bars in abc_sections:
-                cumulative += bars / total_bars if total_bars else 0.0
-                boundaries.append(cumulative)
-            bands = [[] for _ in abc_sections]
-            for segment in run:
-                mid = (segment["start"] + segment["end"]) / 2.0
-                frac = (mid - run_start) / run_span
-                idx = bisect.bisect_right(boundaries, frac)
-                bands[min(idx, len(bands) - 1)].append(segment)
-            for band_index, band in enumerate(bands):
-                if not band:
-                    continue
-                name = abc_sections[band_index][0]
-                band_text = " ".join(segment["text"] for segment in band)
-                items.append((band[0]["start"], band[-1]["end"], name, band_text))
-        else:
-            if abc_sections and run_index < len(abc_sections):
-                name = abc_sections[run_index][0]
-            else:
-                name = f"vocal {run_index + 1}"
-            items.append((run_start, run_end, name, text))
-    return items
+def _coverage(sections, duration):
+    """Ensure sections tile [0, duration]: prepend intro, append outro."""
+    sections = [dict(section) for section in sections]
+    for section in sections:
+        section["start"] = max(0.0, min(duration, section["start"]))
+        section["end"] = max(0.0, min(duration, section["end"]))
+        section.setdefault("lines", [])
+        section.setdefault("text", "")
+    sections = [section for section in sections if section["end"] - section["start"] > 1e-6]
+    if sections[0]["start"] > 1e-3:
+        sections.insert(0, {"name": "intro", "start": 0.0,
+                            "end": sections[0]["start"], "lines": [], "text": ""})
+    if sections[-1]["end"] < duration - 1e-3:
+        sections.append({"name": "outro", "start": sections[-1]["end"],
+                         "end": duration, "lines": [], "text": ""})
+    return sections
 
 
-def _build_slots(segments, duration_seconds, abc, separate_intro, min_gap, subdivide):
-    """Return (slots, abc_sections). slots: (start, end, kind, name, text) in order."""
-    abc_sections = _abc_vocal_sections(abc)
-
-    # Vocal runs: a gap >= min_gap closes the run (an instrumental section).
-    runs = [[segments[0]]]
-    for segment in segments[1:]:
-        if segment["start"] - runs[-1][-1]["end"] >= min_gap:
-            runs.append([])
-        runs[-1].append(segment)
-
-    vocal_items = _vocal_items(runs, abc_sections, subdivide)
-    vocal_items.sort(key=lambda item: item[0])
-
-    if not separate_intro and vocal_items:
-        vocal_items[0] = (0.0, vocal_items[0][1], vocal_items[0][2], vocal_items[0][3])
-
-    slots = []
-    cursor = 0.0
-    first = True
-    for start, end, name, text in vocal_items:
-        if first and start > 1e-6:
-            slots.append((0.0, min(start, duration_seconds), "intro", "intro", ""))
-        elif start - cursor >= min_gap:
-            slots.append((cursor, min(start, duration_seconds), "instrumental", "instrumental", ""))
-        if start < duration_seconds:
-            slots.append((min(start, duration_seconds), min(end, duration_seconds),
-                          "vocal", name, text))
-        first = False
-        cursor = min(max(start, end, cursor), duration_seconds)
-    if duration_seconds - cursor >= min_gap:
-        slots.append((cursor, duration_seconds, "instrumental", "instrumental", ""))
-    elif cursor < duration_seconds and slots:
-        slots[-1] = (slots[-1][0], duration_seconds, slots[-1][2], slots[-1][3])
-
-    slots = [slot for slot in slots if slot[1] - slot[0] > 1e-6]
-    return slots, abc_sections
+def _assign_lines(sections, segments):
+    """Assign each whisper line to the section whose span contains its midpoint."""
+    for section in sections:
+        section["lines"] = []
+        section["text"] = ""
+    for segment in segments:
+        mid = (segment["start"] + segment["end"]) / 2.0
+        target = None
+        for section in sections:
+            if section["start"] - 1e-6 <= mid < section["end"] + 1e-6:
+                target = section
+                break
+        if target is None:  # line outside any section -> nearest by start
+            target = min(sections, key=lambda section: abs(segment["start"] - section["start"]))
+        target["lines"].append(segment)
+        target["text"] = " ".join(line["text"] for line in target["lines"])
 
 
 class HZ3_YuE2_SplitAudioSegments:
@@ -165,11 +123,10 @@ class HZ3_YuE2_SplitAudioSegments:
     RETURN_NAMES = ("segments_audio", "layout", "report")
     OUTPUT_IS_LIST = (True, False, False)
     DESCRIPTION = (
-        "Slice one audio into musical-section clips from REAL whisper timings, emitted "
-        "as a LIST of AUDIO with each clip at its TRUE length (no padding). Lead-in "
-        "becomes an intro clip, vocal lines group into runs, gaps >= min_gap become "
-        "instrumental clips. The optional abc LABELS each clip by section name (and can "
-        "subdivide runs if subdivide is on). Use Get Batch Item to pull one clip by index."
+        "Cut one audio into SECTION clips using the structure (real timestamps) from "
+        "'SheetSage2 Audio to ABC + Sections', and assign each faster-whisper line to "
+        "its section. Emits one AUDIO per section (list) with the aligned lyrics in the "
+        "layout."
     )
 
     @classmethod
@@ -180,34 +137,17 @@ class HZ3_YuE2_SplitAudioSegments:
                 "segments": ("STRING", {
                     "multiline": True,
                     "forceInput": True,
-                    "tooltip": "JSON list of {start, end, text} from faster-whisper (or wrap under 'segments').",
+                    "tooltip": "JSON list of {start, end, text} from faster-whisper.",
                 }),
-                "separate_intro": ("BOOLEAN", {
-                    "default": True,
-                    "tooltip": "True: the lead-in before the first vocal line becomes its own INTRO clip. False: it merges into the first clip.",
-                }),
-                "min_gap": ("FLOAT", {
-                    "default": 4.0,
-                    "min": 0.0,
-                    "max": 120.0,
-                    "step": 0.5,
-                    "tooltip": "Whisper gap (s) between lines that closes a vocal run and emits an instrumental clip.",
-                }),
-                "subdivide": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Off (default): the ABC only LABELS each clip by section name; clip boundaries stay from whisper gaps. On: subdivide each vocal run into the ABC's section bands (verse/chorus/...), which can cut a contiguous sequence.",
-                }),
-            },
-            "optional": {
-                "abc": ("STRING", {
+                "structure": ("STRING", {
                     "multiline": True,
                     "forceInput": True,
-                    "tooltip": "Optional ABC (e.g. from SheetSage2). Used to label and subdivide the vocal runs; the parsed section list is echoed in layout.",
+                    "tooltip": "JSON structure from 'SheetSage2 Audio to ABC + Sections' (list of {name, start, end} with real times).",
                 }),
             },
         }
 
-    def split(self, audio, segments, separate_intro=True, min_gap=4.0, subdivide=False, abc=""):
+    def split(self, audio, segments, structure):
         waveform = audio["waveform"]          # [batch, channels, samples]
         sample_rate = int(audio["sample_rate"])
         if waveform.shape[0] != 1:
@@ -217,39 +157,36 @@ class HZ3_YuE2_SplitAudioSegments:
         duration_seconds = total / float(sample_rate)
 
         parsed = _parse_segments(segments)
-        slots, abc_sections = _build_slots(parsed, duration_seconds, abc,
-                                           separate_intro, min_gap, subdivide)
+        sections = _coverage(_parse_structure(structure), duration_seconds)
+        _assign_lines(sections, parsed)
 
         clips = []          # list of AUDIO dicts, each at its true length
         layout = []
-        for index, (start, end, kind, name, text) in enumerate(slots):
-            i0 = max(0, round(start * sample_rate))
-            i1 = min(total, round(end * sample_rate))
+        for index, section in enumerate(sections):
+            i0 = max(0, round(section["start"] * sample_rate))
+            i1 = min(total, round(section["end"] * sample_rate))
             if i1 <= i0:
                 continue
-            clip = waveform[:, :, i0:i1]      # [1, channels, n_samples], true length
+            clip = waveform[:, :, i0:i1]
             clips.append({"waveform": clip, "sample_rate": sample_rate})
             layout.append({
                 "index": len(clips) - 1,
-                "kind": kind,
-                "name": name,
-                "start": round(start, 3),
-                "end": round(end, 3),
-                "duration": round((end - start), 3),
-                "text": text,
+                "name": section["name"],
+                "start": round(section["start"], 3),
+                "end": round(section["end"], 3),
+                "duration": round(section["end"] - section["start"], 3),
+                "text": section["text"],
+                "vocal_notes": len([1 for line in section["lines"] if line["text"]]),
             })
         if not clips:
-            raise ValueError("None of the segments produced an audible audio clip.")
+            raise ValueError("None of the sections produced an audible audio clip.")
 
-        payload = {"clips": layout}
-        if abc_sections:
-            payload["abc_sections"] = [{"name": name, "bars": bars} for name, bars in abc_sections]
-        layout_json = json.dumps(payload, ensure_ascii=False, indent=2)
+        layout_json = json.dumps({"sections": layout}, ensure_ascii=False, indent=2)
         report = (
-            f"Split audio ({duration_seconds:.2f} s) into {len(clips)} true-length clip(s): "
+            f"Split audio ({duration_seconds:.2f} s) into {len(clips)} section(s): "
             + "\n".join(
-                f"  [{j['index']}] {j['kind']}:{j['name']} {j['start']:.2f}-{j['end']:.2f}s "
-                f"({j['duration']:.2f}s)"
+                f"  [{j['index']}] {j['name']} {j['start']:.2f}-{j['end']:.2f}s "
+                f"({j['duration']:.2f}s) | {j['text'][:60]}"
                 for j in layout
             )
         )

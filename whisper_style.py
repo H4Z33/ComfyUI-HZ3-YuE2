@@ -123,6 +123,21 @@ def _to_mono_16k(audio):
     return waveform.numpy().astype("float32")
 
 
+def _seg_times(chunk):
+    """Whisper chunk timestamps can be `(start, end)`, a bare float, or contain
+    None endpoints (e.g. no predicted ending). Normalize to (start, end|None)."""
+    ts = chunk.get("timestamp")
+    if isinstance(ts, (tuple, list)) and len(ts) == 2:
+        return ts[0], ts[1]
+    if isinstance(ts, (int, float)):
+        return ts, None
+    return None, None
+
+
+def _rounded(value):
+    return round(value, 2) if value is not None else None
+
+
 class HZ3_YuE2_Whisper:
     CATEGORY = "HZ3 YuE2"
     FUNCTION = "transcribe"
@@ -165,8 +180,7 @@ class HZ3_YuE2_Whisper:
         current = []
         prev_end = None
         for chunk in chunks:
-            ts = chunk.get("timestamp")
-            start, end = ts if ts else (None, None)
+            start, end = _seg_times(chunk)
             piece = (chunk.get("text") or "").strip()
             if not piece:
                 continue
@@ -179,12 +193,14 @@ class HZ3_YuE2_Whisper:
             lines.append(" ".join(current))
         lyrics = "\n".join(lines) if lines else text
 
-        segments = [
-            {"start": round(c["timestamp"][0], 2) if c.get("timestamp") else None,
-             "end": round(c["timestamp"][1], 2) if c.get("timestamp") else None,
-             "text": c.get("text", "").strip()}
-            for c in chunks
-        ]
+        segments = []
+        for chunk in chunks:
+            start, end = _seg_times(chunk)
+            segments.append({
+                "start": _rounded(start),
+                "end": _rounded(end),
+                "text": (chunk.get("text") or "").strip(),
+            })
         report = (f"Whisper {model} · {task} · {language or 'auto'} · "
                   f"{len(chunks)} segments · {len(lines)} lines")
         visible = "LYRICS (RAW)\n" + lyrics

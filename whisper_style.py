@@ -200,7 +200,13 @@ def _transcribe(backend, mono, language, task, device, beam_size=5):
 
     if backend == "fast":
         _pipe = _get_pipe(backend, model, device)
-        segments, _info = _pipe.transcribe(mono, language=lang, task=task, beam_size=beams)
+        # VAD is OFF by default; enabling it skips the non-speech intro (so it
+        # can't hallucinate a fake first segment) and splits on real speech.
+        segments, _info = _pipe.transcribe(
+            mono, language=lang, task=task, beam_size=beams,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+        )
         chunks = []
         pieces = []
         for segment in segments:
@@ -353,6 +359,32 @@ def _drop_silent(atoms, spans, margin=0.06):
     return kept
 
 
+def _first_voice(mono_len_s, spans):
+    """Start time of the first actually-vocal region (after an instrumental
+    lead-in), derived from the silence spans."""
+    if not spans:
+        return 0.0
+    if spans[0][0] <= 0.25:  # audio starts silent (intro) -> vocals begin after it
+        return spans[0][1]
+    return 0.0
+
+
+def _drop_preshape(atoms, first_voice, margin=0.1):
+    """Drop transcript atoms entirely before the first real vocal onset (i.e.
+    hallucinated content from the instrumental lead-in)."""
+    if first_voice <= 0.15:
+        return atoms
+    kept = []
+    for start, end, text in atoms:
+        if start is None or end is None:
+            kept.append((start, end, text))
+            continue
+        if end <= first_voice + margin:
+            continue
+        kept.append((start, end, text))
+    return kept
+
+
 def _audio_cuts(mono, min_gap=0.45):
     """Detect silence gaps in the (16k mono) audio and return the midpoint
     second of each gap >= min_gap. These are the phrase/paragraph boundaries
@@ -464,6 +496,8 @@ class HZ3_YuE2_Transcribe:
         # non-vocal gaps so only actually-sung content is extracted.
         spans = _silence_spans(mono)
         chunks = _drop_silent(chunks, spans)
+        fv = _first_voice(len(mono) / 16000.0, spans)
+        chunks = _drop_preshape(chunks, fv)
         cuts = [(a + b) / 2.0 for a, b in spans]  # phrase boundaries = silence midpoints
 
         if backend == "fast":

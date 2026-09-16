@@ -649,7 +649,7 @@ class HZ3_YuE2_MixMashGenius:
     RETURN_TYPES = ("STRING", "STRING", "FLOAT", "STRING", "STRING")
     RETURN_NAMES = ("style", "lyrics", "durations", "segments_abc", "report")
     OUTPUT_IS_LIST = (True, True, True, True, False)
-    INPUT_IS_LIST = (True, False, False, False, False, False, False, False, False)
+    INPUT_IS_LIST = (True, False, False, False, False, False, False, False, False, False)
     OUTPUT_NODE = True
     DESCRIPTION = ("MixMash Genius: per-section style + lyrics from structure + instructions. "
                    "Also takes segments_abc (list) and an overlap (s): it duplicates the "
@@ -679,6 +679,24 @@ class HZ3_YuE2_MixMashGenius:
     def compose(self, segments_abc, overlap, structure, instructions, lyrics, model, endpoint,
                 temperature, timeout, abc=""):
         from .overlap_sections import apply_abc_overlap
+
+        def scalars(*values):
+            """Unwrap any input the executor passed as a 1-element list."""
+            out = []
+            for value in values:
+                if value is None:
+                    out.append("")
+                elif isinstance(value, (list, tuple)):
+                    out.append(value[0] if value else "")
+                else:
+                    out.append(value)
+            return out
+
+        abc, structure, instructions, lyrics = scalars(abc, structure, instructions, lyrics)
+        try:
+            overlap = float(overlap[0] if isinstance(overlap, (list, tuple)) else overlap)
+        except (TypeError, ValueError, IndexError):
+            overlap = 4.0
 
         evidence = _score_evidence(abc)
         sections = _parse_structure(structure)

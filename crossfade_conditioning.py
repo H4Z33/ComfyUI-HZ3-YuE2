@@ -21,22 +21,27 @@ from .conditioning_edit import _entry
 
 
 def _semantic_frames(cond):
-    """Return the contiguous semantic [1, frames, C] tensor of a conditioning,
-    and the [1, prefix_len, C] prefix of its first chunk."""
+    """Return (semantic [1, frames, C], first_prefix [1,p,C], first_end [1,1,C]) of a
+    conditioning, by slicing each chunk's semantic region and keeping the first chunk's
+    leading prefix and trailing end token (so the wrap can reuse a real prefix/end)."""
     context, _meta, chunks, frames = _entry(cond, "conditioning")
     parts = []
     first_prefix = None
+    first_end = None
     for (start, end, kv_start, kv_end) in chunks:
         prefix_count = (kv_end - kv_start) - (end - start) - 1
         if first_prefix is None:
             first_prefix = context[:, kv_start:kv_start + prefix_count, :]
+            first_end = context[:, kv_end - 1:kv_end, :]
         parts.append(context[:, kv_start + prefix_count:kv_end - 1, :])
     semantic = torch.cat(parts, dim=1)
     if semantic.shape[1] != frames:
         raise ValueError("Semantic frames do not match yue2_frames")
     if first_prefix is None:
         first_prefix = context[:, :1, :]
-    return semantic, first_prefix
+    if first_end is None:
+        first_end = context[:, :1, :] * 0.0
+    return semantic, first_prefix, first_end
 
 
 def _overlap_frames(report_json, fallback_seconds, n):
@@ -110,10 +115,12 @@ class HZ3_YuE2_CrossfadeConditioning:
 
         sems = []
         prefixes = []
+        end_tokens = []
         for cond in conds:
-            sem, pref = _semantic_frames(cond)
+            sem, pref, end = _semantic_frames(cond)
             sems.append(sem)
             prefixes.append(pref)
+            end_tokens.append(end)
             if sem.shape[1] < 1:
                 raise ValueError("A connected conditioning has no semantic frames.")
 
@@ -147,7 +154,7 @@ class HZ3_YuE2_CrossfadeConditioning:
 
         prefix = prefixes[0]
         prefix_len = prefix.shape[1]
-        end_token = prefix[:, :1, :] * 0.0
+        end_token = end_tokens[0]
         context = torch.cat([prefix, out, end_token], dim=1)
         base_meta = dict(_entry(conds[0], "first")[1])
         metadata = dict(base_meta)

@@ -14,6 +14,8 @@ from __future__ import annotations
 import bisect
 import json
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -21,6 +23,7 @@ from pathlib import Path
 import torch
 
 import folder_paths
+import comfy.model_management as _mm
 
 from .score_analysis import inspect_score
 
@@ -141,6 +144,32 @@ def _rounded(value):
     return round(value, 2) if value is not None else None
 
 
+def _check_interrupt():
+    """Honor ComfyUI's Cancel/Stop (throws if the UI interrupt flag is set)."""
+    _mm.throw_exception_if_processing_interrupted()
+
+
+def _interruptible(callable_fn):
+    """Run a blocking call in a daemon thread and poll ComfyUI's interrupt flag,
+    so Cancel/Stop returns immediately instead of hanging on a C-library call."""
+    box = {}
+
+    def _run():
+        try:
+            box["value"] = callable_fn()
+        except BaseException as exc:
+            box["error"] = exc
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    while thread.is_alive():
+        _check_interrupt()
+        time.sleep(0.05)
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
 BACKENDS = ["whisper small", "whisper medium", "whisper large", "fast"]
 
 # module-level pipeline cache so a new node instance / re-run does not reload
@@ -191,7 +220,7 @@ def _transcribe(backend, mono, language, task, device, beam_size=5):
         gen_kwargs = {"task": task, "num_beams": beams}
         if lang:
             gen_kwargs["language"] = lang
-        result = pipe(mono, generate_kwargs=gen_kwargs, return_timestamps="word")
+        result = _interruptible(lambda: pipe(mono, generate_kwargs=gen_kwargs, return_timestamps="word"))
         chunks = []
         for chunk in result.get("chunks") or []:
             start, end = _seg_times(chunk)
@@ -210,6 +239,7 @@ def _transcribe(backend, mono, language, task, device, beam_size=5):
         chunks = []
         pieces = []
         for segment in segments:
+            _check_interrupt()
             text = segment.text.strip()
             if text:
                 chunks.append((segment.start, segment.end, text))
@@ -605,7 +635,7 @@ class HZ3_YuE2_MixMashGenius:
             "score": {k: evidence[k] for k in ("bpm", "meter", "key", "seconds", "sections")},
             "output_contract": "{\"lyrics\": string, \"style\": string}",
         }
-        result = _ollama_chat(GENIUS_SYSTEM, payload, model, endpoint, temperature, timeout)
+        result = _interruptible(lambda: _ollama_chat(GENIUS_SYSTEM, payload, model, endpoint, temperature, timeout))
         style = str(result.get("style", "")).replace("\r\n", "\n").strip()
         new_lyrics = str(result.get("lyrics", "")).replace("\r\n", "\n").strip()
         if not style or not new_lyrics:

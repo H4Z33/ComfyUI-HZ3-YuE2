@@ -81,7 +81,7 @@ def _parse_structure(data):
 
 
 def _coverage(sections, duration):
-    """Ensure sections tile [0, duration]: prepend intro, append outro."""
+    """Clip sections to [0, duration]; append a trailing outro if needed. No intro here."""
     sections = [dict(section) for section in sections]
     for section in sections:
         section["start"] = max(0.0, min(duration, section["start"]))
@@ -89,10 +89,7 @@ def _coverage(sections, duration):
         section.setdefault("lines", [])
         section.setdefault("text", "")
     sections = [section for section in sections if section["end"] - section["start"] > 1e-6]
-    if sections[0]["start"] > 1e-3:
-        sections.insert(0, {"name": "intro", "start": 0.0,
-                            "end": sections[0]["start"], "lines": [], "text": ""})
-    if sections[-1]["end"] < duration - 1e-3:
+    if sections and sections[-1]["end"] < duration - 1e-3:
         sections.append({"name": "outro", "start": sections[-1]["end"],
                          "end": duration, "lines": [], "text": ""})
     return sections
@@ -114,6 +111,29 @@ def _assign_lines(sections, segments):
             target = min(sections, key=lambda section: abs(segment["start"] - section["start"]))
         target["lines"].append(segment)
         target["text"] = " ".join(line["text"] for line in target["lines"])
+
+
+def _intro_rule(sections):
+    """Collapse everything before the FIRST sung section into one INTRO clip.
+
+    "Intro" is defined as all leading audio up to the first section that actually
+    carries lyric lines (the first verse). Any pre-verse sections (silence,
+    instrumental, a structure-labelled intro) are merged into a single intro, and no
+    intro is created when the first verse starts at ~0 (no ghost)."""
+    sung_index = None
+    for index, section in enumerate(sections):
+        if any((line.get("text") or "").strip() for line in section["lines"]):
+            sung_index = index
+            break
+    if sung_index is None:
+        return sections
+    first = sections[sung_index]
+    if first["start"] > 1e-3:
+        return ([{"name": "intro", "start": 0.0, "end": first["start"],
+                  "lines": [], "text": ""}] + sections[sung_index:])
+    if sung_index > 0:
+        return sections[sung_index:]
+    return sections
 
 
 class HZ3_YuE2_SplitAudioSegments:
@@ -159,6 +179,7 @@ class HZ3_YuE2_SplitAudioSegments:
         parsed = _parse_segments(segments)
         sections = _coverage(_parse_structure(structure), duration_seconds)
         _assign_lines(sections, parsed)
+        sections = _intro_rule(sections)
 
         clips = []          # list of AUDIO dicts, each at its true length
         layout = []

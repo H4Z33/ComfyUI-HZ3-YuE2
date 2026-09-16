@@ -294,12 +294,54 @@ class HZ3_YuE2_AssembleSections:
         return {"ui": {"text": [report]}, "result": (conditioning, seconds, report)}
 
 
+class HZ3_YuE2_ConcatConditionings:
+    CATEGORY = "HZ3 YuE2/Conditioning"
+    FUNCTION = "assemble"
+    RETURN_TYPES = ("CONDITIONING", "FLOAT", "STRING")
+    RETURN_NAMES = ("conditioning", "seconds", "report")
+    INPUT_IS_LIST = (True,)
+    OUTPUT_NODE = True
+    DESCRIPTION = (
+        "Concatenate a LIST of per-section YuE2 conditionings (e.g. one from each per-section "
+        "YuE2 Generate Music) into one contiguous conditioning, in connection order. Connect "
+        "every per-section conditioning to the single `conditionings` list input."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "conditionings": ("CONDITIONING", {
+                "tooltip": "Connect each per-section conditioning (from YuE2 Generate Music) to this list input; order = connection order.",
+            }),
+        }}
+
+    def assemble(self, conditionings):
+        takes = [take for take in (conditionings or []) if take is not None]
+        if not takes:
+            raise ValueError("Connect at least one per-section conditioning to concatenate.")
+        start_frames = []
+        cursor = 0
+        for index, take in enumerate(takes, 1):
+            _ctx, _meta, _chunks, frames = _entry(take, f"conditioning {index}")
+            start_frames.append(cursor)
+            cursor += frames
+        conditioning, total_frames = assemble_conditionings(takes, start_frames)
+        seconds = total_frames / FRAMES_PER_SECOND
+        report = (
+            f"Concatenated {len(takes)} per-section conditioning(s) in order · "
+            f"{seconds:.2f} s · {total_frames} frames"
+        )
+        return {"ui": {"text": [report]}, "result": (conditioning, seconds, report)}
+
+
 NODE_CLASS_MAPPINGS = {
     "HZ3_YuE2_SectionPlan": HZ3_YuE2_SectionPlan,
     "HZ3_YuE2_AssembleSections": HZ3_YuE2_AssembleSections,
+    "HZ3_YuE2_ConcatConditionings": HZ3_YuE2_ConcatConditionings,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "HZ3_YuE2_SectionPlan": "HZ3 YuE2 · Section Plan",
     "HZ3_YuE2_AssembleSections": "HZ3 YuE2 · Assemble Sections",
+    "HZ3_YuE2_ConcatConditionings": "HZ3 YuE2 · Concat Conditionings (list)",
 }

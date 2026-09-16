@@ -158,17 +158,18 @@ class HZ3_YuE2_Whisper:
                 "language": ("STRING", {"default": "auto", "tooltip": "auto detects the spoken language. Or force an ISO-639-1 code (es, en, ...)."}),
                 "task": (["transcribe", "translate"], {"default": "transcribe"}),
                 "device": (["cpu", "cuda"], {"default": "cpu"}),
+                "condition_on_previous_text": ("BOOLEAN", {"default": False, "tooltip": "Set False to reduce Whisper's repeated/hallucinated phrases on long or music audio (native long-form chunking). Off is the recommended default."}),
             }
         }
 
-    def transcribe(self, audio, model, language, task, device):
-        key = (model, device, language, task)
+    def transcribe(self, audio, model, language, task, device, condition_on_previous_text=False):
+        key = (model, device, language, task, condition_on_previous_text)
         if self._pipe is None or self._pipe_key != key:
             self._pipe = _load_pipe(model, device)
             self._pipe_key = key
 
         mono = _to_mono_16k(audio)
-        gen_kwargs = {"task": task}
+        gen_kwargs = {"task": task, "condition_on_previous_text": bool(condition_on_previous_text)}
         if language and language.strip().lower() not in ("auto", ""):
             gen_kwargs["language"] = language.strip().lower()
         result = self._pipe(mono, generate_kwargs=gen_kwargs, return_timestamps=True)

@@ -140,70 +140,123 @@ def _rounded(value):
     return round(value, 2) if value is not None else None
 
 
-class HZ3_YuE2_Whisper:
+BACKENDS = ["whisper small", "whisper medium", "fast", "x"]
+
+
+def _backend_model(backend):
+    return {
+        "whisper small": "openai/whisper-small",
+        "whisper medium": "openai/whisper-medium",
+        "fast": "small",
+        "x": "small",
+    }[backend]
+
+
+def _compute_type(device):
+    return "int8" if device == "cpu" else "float16"
+
+
+def _transcribe(backend, mono, language, task, device):
+    """Run one backend and return (full_text, [(start, end, text), ...])."""
+    lang = None
+    if language and language.strip().lower() not in ("auto", ""):
+        lang = language.strip().lower()
+    model = _backend_model(backend)
+
+    if backend in ("whisper small", "whisper medium"):
+        # Transformers Whisper pipeline
+        pipe = _load_pipe(model, device)
+        gen_kwargs = {"task": task}
+        if lang:
+            gen_kwargs["language"] = lang
+        result = pipe(mono, generate_kwargs=gen_kwargs, return_timestamps=True)
+        chunks = []
+        for chunk in result.get("chunks") or []:
+            start, end = _seg_times(chunk)
+            chunks.append((start, end, (chunk.get("text") or "").strip()))
+        return (result.get("text") or "").strip(), chunks
+
+    if backend == "fast":
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError:
+            raise RuntimeError("'fast' (faster-whisper) is not installed. Run: pip install faster-whisper")
+        _pipe = WhisperModel(model, device=device, compute_type=_compute_type(device))
+        segments, _info = _pipe.transcribe(mono, language=lang, task=task, beam_size=5)
+        chunks = []
+        pieces = []
+        for segment in segments:
+            text = segment.text.strip()
+            if text:
+                chunks.append((segment.start, segment.end, text))
+                pieces.append(text)
+        return "\n".join(pieces), chunks
+
+    if backend == "x":
+        try:
+            import whisperx
+        except ImportError:
+            raise RuntimeError("'x' (WhisperX) is not installed. Run: pip install whisperx")
+        _pipe = whisperx.load_model(model, device, compute_type=_compute_type(device))
+        result = _pipe.transcribe(mono, batch_size=16, language=lang, task=task)
+        chunks = []
+        pieces = []
+        for segment in result.get("segments") or []:
+            text = (segment.get("text") or "").strip()
+            if text:
+                chunks.append((segment.get("start"), segment.get("end"), text))
+                pieces.append(text)
+        return "\n".join(pieces), chunks
+
+    raise ValueError(f"Unknown backend: {backend!r}")
+
+
+def _build_lines(chunks, fallback_text):
+    lines = []
+    current = []
+    prev_end = None
+    for start, end, text in chunks:
+        if not text:
+            continue
+        if start is not None and prev_end is not None and start - prev_end > 0.35 and current:
+            lines.append(" ".join(current))
+            current = []
+        current.append(text)
+        prev_end = end
+    if current:
+        lines.append(" ".join(current))
+    if not lines and fallback_text:
+        lines.append(fallback_text)
+    return lines
+
+
+class HZ3_YuE2_Transcribe:
     CATEGORY = "HZ3 YuE2"
     FUNCTION = "transcribe"
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("lyrics", "segments", "report")
     OUTPUT_NODE = True
-    DESCRIPTION = "Transcribe the input audio to lyrics with Whisper (Transformers). SheetSage keeps producing the ABC separately."
-
-    _pipe = None
-    _pipe_key = None
+    DESCRIPTION = "Transcribe the input audio to lyrics. Backends: transformers Whisper (small/medium), faster-whisper (fast) or WhisperX (x). SheetSage keeps producing the ABC separately."
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "audio": ("AUDIO",),
-                "model": ("STRING", {"default": "openai/whisper-small"}),
+                "backend": (BACKENDS, {"default": "whisper medium"}),
                 "language": ("STRING", {"default": "auto", "tooltip": "auto detects the spoken language. Or force an ISO-639-1 code (es, en, ...)."}),
                 "task": (["transcribe", "translate"], {"default": "transcribe"}),
                 "device": (["cpu", "cuda"], {"default": "cpu"}),
             }
         }
 
-    def transcribe(self, audio, model, language, task, device):
-        key = (model, device, language, task)
-        if self._pipe is None or self._pipe_key != key:
-            self._pipe = _load_pipe(model, device)
-            self._pipe_key = key
-
+    def transcribe(self, audio, backend, language, task, device):
         mono = _to_mono_16k(audio)
-        gen_kwargs = {"task": task}
-        if language and language.strip().lower() not in ("auto", ""):
-            gen_kwargs["language"] = language.strip().lower()
-        result = self._pipe(mono, generate_kwargs=gen_kwargs, return_timestamps=True)
-
-        text = (result.get("text") or "").strip()
-        chunks = result.get("chunks") or []
-
-        lines = []
-        current = []
-        prev_end = None
-        for chunk in chunks:
-            start, end = _seg_times(chunk)
-            piece = (chunk.get("text") or "").strip()
-            if not piece:
-                continue
-            if start is not None and prev_end is not None and start - prev_end > 0.35 and current:
-                lines.append(" ".join(current))
-                current = []
-            current.append(piece)
-            prev_end = end
-        if current:
-            lines.append(" ".join(current))
-        lyrics = "\n".join(lines) if lines else text
-
-        segments = []
-        for chunk in chunks:
-            start, end = _seg_times(chunk)
-            segments.append({
-                "start": _rounded(start),
-                "end": _rounded(end),
-                "text": (chunk.get("text") or "").strip(),
-            })
-        report = (f"Whisper {model} · {task} · {language or 'auto'} · "
+        text, chunks = _transcribe(backend, mono, language, task, device)
+        lines = _build_lines(chunks, text)
+        lyrics = "\n".join(lines)
+        segments = [{"start": _rounded(s), "end": _rounded(e), "text": t} for s, e, t in chunks]
+        report = (f"Transcribe · {backend} · {task} · {language or 'auto'} · "
                   f"{len(chunks)} segments · {len(lines)} lines")
         visible = "LYRICS (RAW)\n" + lyrics
         return {"ui": {"text": [visible]},
@@ -311,11 +364,13 @@ class HZ3_YuE2_MixMashGenius:
 
 
 NODE_CLASS_MAPPINGS = {
-    "HZ3_YuE2_Whisper": HZ3_YuE2_Whisper,
+    "HZ3_YuE2_Transcribe": HZ3_YuE2_Transcribe,
+    "HZ3_YuE2_Whisper": HZ3_YuE2_Transcribe,  # backwards-compatible alias
     "HZ3_YuE2_MixMashGenius": HZ3_YuE2_MixMashGenius,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "HZ3_YuE2_Whisper": "HZ3 YuE2 · Whisper",
+    "HZ3_YuE2_Transcribe": "HZ3 YuE2 · Transcribe",
+    "HZ3_YuE2_Whisper": "HZ3 YuE2 · Transcribe",
     "HZ3_YuE2_MixMashGenius": "HZ3 YuE2 · MixMash Genius (Ollama)",
 }

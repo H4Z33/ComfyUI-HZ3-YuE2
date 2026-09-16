@@ -448,7 +448,13 @@ class HZ3_YuE2_Transcribe:
             },
         }
 
+    @classmethod
+    def IS_CHANGED(cls, *args, **kwargs):
+        # Never cache: this node must re-transcribe with the current code every run.
+        return float("nan")
+
     def transcribe(self, audio, backend, language, task, device):
+        mono = _to_mono_16k(audio)
         text, chunks = _transcribe(backend, mono, language, task, device)
 
         # Read the audio's silences: drop transcript content that falls inside

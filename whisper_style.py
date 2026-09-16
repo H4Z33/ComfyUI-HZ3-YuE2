@@ -142,6 +142,26 @@ def _rounded(value):
 
 BACKENDS = ["whisper small", "whisper medium", "fast"]
 
+# module-level pipeline cache so a new node instance / re-run does not reload
+# the model every execution
+_PIPE_CACHE = {}
+
+
+def _get_pipe(backend, model, device):
+    key = (backend, model, device)
+    if key not in _PIPE_CACHE:
+        if backend in ("whisper small", "whisper medium"):
+            _PIPE_CACHE[key] = _load_pipe(model, device)
+        elif backend == "fast":
+            try:
+                from faster_whisper import WhisperModel
+            except ImportError:
+                raise RuntimeError("'fast' (faster-whisper) is not installed. Run: pip install faster-whisper")
+            _PIPE_CACHE[key] = WhisperModel(model, device=device, compute_type=_compute_type(device))
+        else:
+            raise ValueError(f"Unknown backend: {backend!r}")
+    return _PIPE_CACHE[key]
+
 
 def _backend_model(backend):
     return {
@@ -164,7 +184,7 @@ def _transcribe(backend, mono, language, task, device):
 
     if backend in ("whisper small", "whisper medium"):
         # Transformers Whisper pipeline
-        pipe = _load_pipe(model, device)
+        pipe = _get_pipe(backend, model, device)
         gen_kwargs = {"task": task}
         if lang:
             gen_kwargs["language"] = lang
@@ -176,11 +196,7 @@ def _transcribe(backend, mono, language, task, device):
         return (result.get("text") or "").strip(), chunks
 
     if backend == "fast":
-        try:
-            from faster_whisper import WhisperModel
-        except ImportError:
-            raise RuntimeError("'fast' (faster-whisper) is not installed. Run: pip install faster-whisper")
-        _pipe = WhisperModel(model, device=device, compute_type=_compute_type(device))
+        _pipe = _get_pipe(backend, model, device)
         segments, _info = _pipe.transcribe(mono, language=lang, task=task, beam_size=5)
         chunks = []
         pieces = []

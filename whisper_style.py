@@ -646,11 +646,11 @@ def _parse_structure(data):
 class HZ3_YuE2_MixMashGenius:
     CATEGORY = "HZ3 YuE2"
     FUNCTION = "compose"
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("style", "lyrics", "abc", "report")
-    OUTPUT_IS_LIST = (True, False, False, False)
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("style", "lyrics", "report")
+    OUTPUT_IS_LIST = (True, True, False)
     OUTPUT_NODE = True
-    DESCRIPTION = "MixMash Genius: turn the real section structure + instructions + lyrics into a LIST of per-section style descriptions (one per section: BPM, genre, voice, instrumentation, build). The ABC passes through unchanged."
+    DESCRIPTION = "MixMash Genius: turn the real section structure + instructions + lyrics (+ optional ABC for BPM/meter/key) into a LIST of per-section style descriptions and a LIST of per-section lyrics. Index-aligned: style[i] describes lyrics[i]."
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -687,20 +687,20 @@ class HZ3_YuE2_MixMashGenius:
             raise RuntimeError("MixMash Genius did not return a 'sections' list.")
 
         styles = []
-        lyrics_blocks = []
+        lyric_blocks = []
         for index, sec in enumerate(sections):
             item = result_sections[index] if index < len(result_sections) and isinstance(result_sections[index], dict) else {}
             style = str(item.get("style", "") or "").strip().replace("\n", " ")
             block_lyrics = str(item.get("lyrics", "") or "").strip()
             styles.append(style if style else f"[{sec['name']}] (style not provided)")
-            lyrics_blocks.append(f"[{sec['name']}]" + (f"\n{block_lyrics}" if block_lyrics else ""))
-        new_lyrics = "\n\n".join(lyrics_blocks)
+            lyric_blocks.append(f"[{sec['name']}]" + (f"\n{block_lyrics}" if block_lyrics else ""))
 
         report = json.dumps(result, ensure_ascii=False, indent=2)
         visible = ("PER-SECTION STYLE (output: style[0..N-1]):\n" +
                    "\n\n".join(f"{sections[i]['name']}:\n{styles[i]}" for i in range(len(sections))) +
-                   "\n\nSECTIONED LYRICS:\n" + new_lyrics)
-        return {"ui": {"text": [visible]}, "result": (styles, new_lyrics, abc, report)}
+                   "\n\nSECTIONED LYRICS (output: lyrics[0..N-1]):\n" +
+                   "\n\n".join(lyric_blocks))
+        return {"ui": {"text": [visible]}, "result": (styles, lyric_blocks, report)}
 
 
 NODE_CLASS_MAPPINGS = {

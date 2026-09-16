@@ -106,10 +106,10 @@ class HZ3_YuE2_SaveAudio:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "audio": ("AUDIO",),
-                "abc": ("STRING", {"multiline": True, "forceInput": True}),
                 "style": ("STRING", {"multiline": True, "forceInput": True}),
                 "lyrics": ("STRING", {"multiline": True, "forceInput": True}),
+                "abc": ("STRING", {"multiline": True, "forceInput": True}),
+                "audio": ("AUDIO",),
                 "filename_prefix": ("STRING", {"default": "audio/HZ3-YuE2"}),
                 "file_format": (["mp3 320k", "mp3 V0", "flac", "opus 128k"], {"default": "mp3 320k"}),
             },
@@ -118,15 +118,15 @@ class HZ3_YuE2_SaveAudio:
                 "extra_pnginfo": "EXTRA_PNGINFO",
             },
             "optional": {
+                "conditioning": ("CONDITIONING", {
+                    "tooltip": "Connect the original YuE2 conditioning to archive it automatically as a lossless sidecar."
+                }),
                 "token_stream": ("HZ3_YUE2_TOKEN_STREAM", {
                     "tooltip": "Optional semantic stream from HZ3 YuE2 · Generate Token Stream or Music From Token Stream."
                 }),
                 "conditioning_asset": ("STRING", {
                     "forceInput": True,
                     "tooltip": "Connect HZ3 YuE2 · Save Conditioning.asset_file to associate its sidecar with this audio."
-                }),
-                "conditioning": ("CONDITIONING", {
-                    "tooltip": "Connect the original YuE2 conditioning to archive it automatically as a lossless sidecar."
                 }),
             },
         }

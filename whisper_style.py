@@ -505,7 +505,7 @@ class HZ3_YuE2_Transcribe:
         return {
             "required": {
                 "audio": ("AUDIO",),
-                "backend": (BACKENDS, {"default": "whisper medium"}),
+                "backend": (BACKENDS, {"default": "fast"}),
                 "language": ("STRING", {"default": "auto", "tooltip": "auto detects the spoken language. Or force an ISO-639-1 code (es, en, ...)."}),
                 "task": (["transcribe", "translate"], {"default": "transcribe"}),
                 "device": (["cpu", "cuda"], {"default": "cpu"}),

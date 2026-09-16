@@ -13,6 +13,8 @@ Independent ComfyUI node pack for YuE2 workflow preparation.
 - HZ3 YuE2 · Load Generation
 - HZ3 YuE2 · Generate Token Stream
 - HZ3 YuE2 · Music From Token Stream
+- HZ3 YuE2 · Conditioning Cut
+- HZ3 YuE2 · Conditioning Paste
 
 The audio classifier expects `discogs-effnet-bsdynamic-1.onnx` and its matching
 JSON metadata under `models/audio_classifiers/discogs_effnet`. The Ollama nodes
@@ -40,6 +42,10 @@ Procedural Prosody.agent_evidence -> Lyrics Prosody.procedural_evidence
 `Generate Token Stream` separates YuE2's autoregressive semantic-token sampling from acoustic conditioning. Connect its `token_stream` output to `Music From Token Stream`; changing style, lyrics, or ABC on the second node rebuilds conditioning without resampling the music-token IDs. `start_seconds` and `duration` select a 25-token-per-second slice for sectional experiments. A slice is a controlled reuse test, not semantic infilling: it has no guarantee of seamless continuity with omitted audio before or after it.
 
 Connect `token_stream` or `sliced_stream` to the optional input on `HZ3 YuE2 · Save Audio` to embed the semantic IDs in the audio metadata. `HZ3 YuE2 · Load Generation` exposes that stored stream as a connectable output. Older files remain loadable but report that no stream is available.
+
+## Editing conditioning on a timeline
+
+Native YuE2 conditioning stores a repeated text/ABC prefix plus one semantic KV position per 1/25 second audio frame in each `yue2_chunk`. `Conditioning Cut` rebuilds valid chunks for a selected interval. `Conditioning Paste` preserves the base duration and replaces only the selected base frames with the same number of donor frames, retaining each donor chunk's own prefix. Connect the returned `seconds` to `Empty YuE2 Latent Audio`. Cuts are hard chunk boundaries; crossfading should be performed on decoded audio until a context-aware conditioning blend is validated.
 ABC -> Lyrics Prosody.score_abc
 ```
 

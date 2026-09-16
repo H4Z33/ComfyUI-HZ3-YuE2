@@ -561,26 +561,27 @@ class HZ3_YuE2_Transcribe:
 # ---------------------------------------------------------------------------
 # MixMash Genius (Ollama): sectioned lyrics + per-section style
 # ---------------------------------------------------------------------------
-GENIUS_SYSTEM = """You are a music editor that turns raw transcribed lyrics and an ABC score into a YuE2 cover plan.
+GENIUS_SYSTEM = """You are a music editor that turns an audio section structure + real lyrics + a user direction into a per-section YuE2 cover plan.
 
 You receive JSON with:
-- lyrics: a raw transcript (may contain non-sung phrases, repeated lines, a chorus, ad-libs).
-- instructions: free-text direction from the user. Follow it exactly, especially if it says which source drives a section or a specific build.
-- score: measured BPM, meter, key and total seconds derived from the ABC.
-- sections: the actual section list of the score with bars, seconds and vocal_notes. A section with vocal_notes == 0 is instrumental-only (no sung melody).
+- structure: the AUTHORITATIVE ordered list of sections, each {name, start, end} (seconds). Use exactly this order and count; never add, drop, or reorder sections.
+- lyrics: the real lyrics, each line with its whisper timestamps {start, end, text}.
+- instructions: the user's free-text direction. Apply it across the song, building in intensity from start to end (soft/acoustic early, fuller/louder at the choruses and the end, etc.).
+- score: measured BPM, meter, key and total seconds (may be empty if no score).
 
 TASKS:
-1. Rebuild lyrics into the score's section order with a [Section] label per block:
-   - [Intro], [Verse 1], [Verse 2], [Chorus], ..., ending with [Outro].
-   - Put an empty [Instrumental] block where a section has no sung melody, and keep unsung or off-melody lines (repeated chorus phrases, ad-libs) exactly as you found them.
-   - Do not invent, translate or rewrite the Spanish words; only restructure and place them.
-2. Produce ONE section-tagged style string, sections in the same order. For each [Section] write a short musical instruction (delivery, drums, bass, harmony, timbre, production) that applies the user's instructions to that section. Where reliable, use the measured BPM/meter/key. Keep the section naming the instructions/score uses.
-3. abc is handled by the caller; never touch or return it.
+1. Place every lyric line into the structure section whose [start, end) span contains its timestamp. Sections with no lines (intro, interlude, outro, instrumental) get empty lyrics.
+2. For EVERY section (including intro/interlude/outro), write ONE concise style paragraph that explicitly states:
+   - tempo/BPM (use score.bpm when present, otherwise describe the beat feel),
+   - music genre / style and how the instruments are used,
+   - the VOICE (singer gender, age, tone and delivery),
+   - instrumentation, harmony, production and dynamics,
+   - how intensity builds toward the choruses and the final section.
+3. Return one entry per structure section, in the same order.
 
-Return JSON only with exactly these keys:
-- "lyrics": the sectioned lyrics as a single string.
-- "style": the single section-tagged style string.
-No commentary, no markdown, no confidence values."""
+Return JSON only with the single key:
+- "sections": [ { "name": <structure name>, "lyrics": <lines for this section or "">, "style": <the paragraph> } ]
+No commentary, no markdown, no extra keys."""
 
 
 def _score_evidence(abc):
@@ -613,49 +614,93 @@ def _score_evidence(abc):
             "note": None}
 
 
+def _parse_structure(data):
+    """Parse the structure JSON (from SheetSage2 Audio to ABC + Sections) into a
+    sorted list of {name, start, end}. Accepts a bare list or a dict with 'sections'."""
+    if isinstance(data, str):
+        payload = json.loads(data) if data.strip() else []
+    else:
+        payload = data
+    if isinstance(payload, dict):
+        payload = payload.get("sections") or payload.get("structure") or payload.get("clips") or []
+    if not isinstance(payload, list):
+        raise ValueError("`structure` must be a JSON list of {name, start, end} objects.")
+    sections = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        if item.get("start") is None or item.get("end") is None:
+            continue
+        sections.append({
+            "name": str(item.get("name") or item.get("kind") or "section"),
+            "start": round(float(item["start"]), 3),
+            "end": round(float(item["end"]), 3),
+        })
+    sections.sort(key=lambda s: s["start"])
+    sections = [s for s in sections if s["end"] - s["start"] > 1e-6]
+    if not sections:
+        raise ValueError("No valid sections were parsed from `structure`.")
+    return sections
+
+
 class HZ3_YuE2_MixMashGenius:
     CATEGORY = "HZ3 YuE2"
     FUNCTION = "compose"
     RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
     RETURN_NAMES = ("style", "lyrics", "abc", "report")
+    OUTPUT_IS_LIST = (True, False, False, False)
     OUTPUT_NODE = True
-    DESCRIPTION = "Ollama agent: convert raw lyrics + ABC + user instructions into sectioned lyrics and a per-section style for YuE2. The ABC passes through unchanged."
+    DESCRIPTION = "MixMash Genius: turn the real section structure + instructions + lyrics into a LIST of per-section style descriptions (one per section: BPM, genre, voice, instrumentation, build). The ABC passes through unchanged."
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "lyrics": ("STRING", {"multiline": True, "default": ""}),
-                "abc": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "Connect the SheetSage2 ABC."}),
-                "instructions": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "Connect a text box with the direction to apply per section."}),
+                "structure": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "Connect `structure` from 'HZ3 YuE2 · SheetSage2 Audio to ABC + Sections'."}),
+                "instructions": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "Direction to apply, e.g. 'start soft/acoustic and build to a rock finale with an older, raspy male voice'."}),
+                "lyrics": ("STRING", {"multiline": True, "default": "", "tooltip": "Real lyrics (the split's per-section text or the raw transcript)."}),
                 "model": ("STRING", {"default": "deepseek-v4.1-flash:cloud"}),
                 "endpoint": ("STRING", {"default": "http://127.0.0.1:11434"}),
                 "temperature": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 1.5, "step": 0.05}),
                 "timeout": ("INT", {"default": 180, "min": 10, "max": 900}),
-            }
+            },
+            "optional": {
+                "abc": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "Optional ABC: supplies measured BPM/meter/key as style evidence."}),
+            },
         }
 
-    def compose(self, lyrics, abc, instructions, model, endpoint, temperature, timeout):
+    def compose(self, structure, instructions, lyrics, model, endpoint, temperature, timeout, abc=""):
         evidence = _score_evidence(abc)
+        sections = _parse_structure(structure)
         payload = {
             "language_locale": "es-MX",
+            "structure": sections,
             "lyrics": lyrics,
             "instructions": instructions,
-            "score": {k: evidence[k] for k in ("bpm", "meter", "key", "seconds", "sections")},
-            "output_contract": "{\"lyrics\": string, \"style\": string}",
+            "score": {k: evidence[k] for k in ("bpm", "meter", "key", "seconds")},
+            "output_contract": '{"sections": [{"name": string, "lyrics": string, "style": string}]}',
         }
-        result = _interruptible(lambda: _ollama_chat(GENIUS_SYSTEM, payload, model, endpoint, temperature, timeout))
-        style = str(result.get("style", "")).replace("\r\n", "\n").strip()
-        new_lyrics = str(result.get("lyrics", "")).replace("\r\n", "\n").strip()
-        if not style or not new_lyrics:
-            raise RuntimeError("MixMash Genius returned an incomplete answer (need style and lyrics).")
+        result = _interruptible(lambda: _ollama_chat(GENIUS_SYSTEM, payload, model, endpoint,
+                                                    temperature, timeout))
+        result_sections = result.get("sections")
+        if not isinstance(result_sections, list) or not result_sections:
+            raise RuntimeError("MixMash Genius did not return a 'sections' list.")
+
+        styles = []
+        lyrics_blocks = []
+        for index, sec in enumerate(sections):
+            item = result_sections[index] if index < len(result_sections) and isinstance(result_sections[index], dict) else {}
+            style = str(item.get("style", "") or "").strip().replace("\n", " ")
+            block_lyrics = str(item.get("lyrics", "") or "").strip()
+            styles.append(style if style else f"[{sec['name']}] (style not provided)")
+            lyrics_blocks.append(f"[{sec['name']}]" + (f"\n{block_lyrics}" if block_lyrics else ""))
+        new_lyrics = "\n\n".join(lyrics_blocks)
+
         report = json.dumps(result, ensure_ascii=False, indent=2)
-        visible = ("SECTIONED LYRICS:\n" + new_lyrics +
-                   "\n\nSECTIONED STYLE:\n" + style)
-        if evidence.get("note"):
-            visible += "\n\n" + evidence["note"]
-        return {"ui": {"text": [visible]},
-                "result": (style, new_lyrics, abc, report)}
+        visible = ("PER-SECTION STYLE (output: style[0..N-1]):\n" +
+                   "\n\n".join(f"{sections[i]['name']}:\n{styles[i]}" for i in range(len(sections))) +
+                   "\n\nSECTIONED LYRICS:\n" + new_lyrics)
+        return {"ui": {"text": [visible]}, "result": (styles, new_lyrics, abc, report)}
 
 
 NODE_CLASS_MAPPINGS = {

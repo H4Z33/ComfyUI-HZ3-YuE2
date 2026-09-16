@@ -91,47 +91,50 @@ def _insert_prepend(lines, header_end, block):
     return out
 
 
+def _section_bars(sec, overlap_seconds):
+    """Whole bars of this section covering ~ the overlap window."""
+    n = max(len(sec["vocal"]), len(sec["ins"]))
+    spb = sec["spb"]
+    if overlap_seconds <= 0 or spb is None or spb <= 0 or n <= 0:
+        return 0
+    return max(1, min(round(overlap_seconds / spb), n))
+
+
 def apply_abc_overlap(segments_abc, overlap_seconds=4.0):
-    """Return (overlapped_segments, added_seconds) applying the two-sided overlap."""
+    """Return (overlapped_segments, added_seconds).
+
+    At every interface ONLY ONE material is used: the LAST bars of the left section
+    (chords-only Vocal + Ins). It is appended to the left section's own END and the
+    SAME block is prepended to the right section's START before its tag. So both sides
+    of a seam are identical (same content, same length), avoiding long endings: the
+    end-append equals the start-prepend. section i's own tail is used for the boundary
+    i-(i+1); first section has no prepend, last has no append from its own boundary.
+    """
     parsed = [_parse_section(abc) for abc in segments_abc]
     overlapped = list(segments_abc)
     added = [0.0] * len(segments_abc)
     n = len(parsed)
 
     for index in range(n - 1):
-        prev = parsed[index]
-        nxt = parsed[index + 1]
-        if prev["spb"] is None or nxt["spb"] is None:
+        left = parsed[index]
+        k = _section_bars(left, overlap_seconds)
+        if k <= 0:
             continue
+        block = _voice_block(left["vocal"][-k:], left["ins"][-k:])
+        added_sec = round(k * left["spb"], 3)
 
-        def section_bars(sec, overlap):
-            n = max(len(sec["vocal"]), len(sec["ins"]))
-            if overlap <= 0 or sec["spb"] is None or sec["spb"] <= 0 or n <= 0:
-                return 0
-            return max(1, min(round(overlap / sec["spb"]), n))
+        # Left section's OWN end gains its own last bars (boundary material).
+        left_lines = _insert_append(left["lines"], block)
+        overlapped[index] = "\n".join(left_lines) + "\n"
+        parsed[index] = _parse_section(overlapped[index])
+        added[index] += added_sec
 
-        k_prev = section_bars(prev, overlap_seconds)
-        k_next = section_bars(nxt, overlap_seconds)
-        if k_prev <= 0 and k_next <= 0:
-            continue
-
-        # Previous gains the NEXT's first bars appended at its end.
-        if k_next > 0:
-            nv = nxt["vocal"][:k_next]
-            ni = nxt["ins"][:k_next]
-            prev_lines = _insert_append(parsed[index]["lines"], _voice_block(nv, ni))
-            overlapped[index] = "\n".join(prev_lines) + "\n"
-            parsed[index] = _parse_section(overlapped[index])
-            added[index] += round(k_next * nxt["spb"], 3)
-
-        # Next gains the PREVIOUS's last bars prepended before its tag.
-        if k_prev > 0:
-            pv = prev["vocal"][-k_prev:]
-            pi = prev["ins"][-k_prev:]
-            nxt_lines = _insert_prepend(parsed[index + 1]["lines"], parsed[index + 1]["header_end"], _voice_block(pv, pi))
-            overlapped[index + 1] = "\n".join(nxt_lines) + "\n"
-            parsed[index + 1] = _parse_section(overlapped[index + 1])
-            added[index + 1] += round(k_prev * prev["spb"], 3)
+        # The RIGHT section's start gains the SAME block (before its tag).
+        right = parsed[index + 1]
+        right_lines = _insert_prepend(right["lines"], right["header_end"], block)
+        overlapped[index + 1] = "\n".join(right_lines) + "\n"
+        parsed[index + 1] = _parse_section(overlapped[index + 1])
+        added[index + 1] += added_sec
 
     added = [round(v, 3) for v in added]
     return overlapped, added

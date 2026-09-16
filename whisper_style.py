@@ -305,6 +305,52 @@ def _split_at_phrases(atoms, phrase_times):
     return lines
 
 
+def _silence_spans(mono, min_gap=0.45):
+    """Silent spans (start_s, end_s) of the 16k mono audio, based on RMS energy.
+    These locate the sung regions vs the quiet/instrumental parts."""
+    import numpy as np
+    sr = 16000
+    win = int(sr * 0.03)
+    hop = int(sr * 0.01)
+    n = len(mono)
+    if n < win:
+        return []
+    rms = np.array([float(np.sqrt(np.mean(mono[s:s + win] ** 2))) for s in range(0, n - win + 1, hop)], dtype=np.float64)
+    thr = max(float(np.median(rms)) * 0.4, 10 ** (-60 / 20))
+    silent = rms < thr
+    times = np.arange(len(rms)) * hop / float(sr)
+    spans = []
+    start = None
+    for i in range(len(silent)):
+        if silent[i] and start is None:
+            start = i
+        elif (not silent[i]) and start is not None:
+            if times[i] - times[start] >= min_gap:
+                spans.append((float(times[start]), float(times[i])))
+            start = None
+    if start is not None and times[-1] - times[start] >= min_gap:
+        spans.append((float(times[start]), float(times[-1])))
+    return spans
+
+
+def _drop_silent(atoms, spans, margin=0.06):
+    """Keep only transcript atoms that overlap actual vocal (non-silent) audio;
+    drop atoms fully inside a silence gap."""
+    if not spans:
+        return atoms
+    kept = []
+    for start, end, text in atoms:
+        if not (text or "").strip():
+            continue
+        if start is None or end is None:
+            kept.append((start, end, text))
+            continue
+        inside = any((start - margin) >= a and (end + margin) <= b for (a, b) in spans)
+        if not inside:
+            kept.append((start, end, text))
+    return kept
+
+
 def _audio_cuts(mono, min_gap=0.45):
     """Detect silence gaps in the (16k mono) audio and return the midpoint
     second of each gap >= min_gap. These are the phrase/paragraph boundaries
@@ -402,41 +448,35 @@ class HZ3_YuE2_Transcribe:
             },
             "optional": {
                 "abc": ("STRING", {"forceInput": True, "multiline": True,
-                                   "tooltip": "Connect the SheetSage ABC to align line starts to real vocal onsets and drop instrumental filler."}),
+                                   "tooltip": "Optional SheetSage ABC (kept for compatibility; the ABCC has no reliable timing, so segmentation uses the audio's silence gaps instead)."}),
             },
         }
 
     def transcribe(self, audio, backend, language, task, device, abc=""):
+        _ = abc  # ABC has no reliable timing for this; segmentation reads audio silences
         mono = _to_mono_16k(audio)
         text, chunks = _transcribe(backend, mono, language, task, device)
 
-        onsets, bpm = _vocal_onsets(abc) if (abc or "").strip() else ([], None)
+        # Read the audio's silences: drop transcript content that falls inside
+        # non-vocal gaps so only actually-sung content is extracted.
+        spans = _silence_spans(mono)
+        chunks = _drop_silent(chunks, spans)
+        cuts = [(a + b) / 2.0 for a, b in spans]  # phrase boundaries = silence midpoints
+
         if backend == "fast":
             # faster-whisper already returns per-phrase segments: keep them.
             lines = [(s, e, t) for s, e, t in chunks if (t or "").strip()]
         else:
-            # transformers returns word atoms: split at the audio's real
-            # silence gaps (seconds), falling back to ABC phrases.
-            cuts = _audio_cuts(mono)
-            boundaries = cuts or (_phrase_times(onsets, bpm) if onsets and bpm else [])
-            lines = _split_at_phrases(chunks, boundaries) if boundaries else []
+            lines = _split_at_phrases(chunks, cuts) if cuts else []
             if not lines:
                 lines = _build_lines(chunks, text)
         if not lines:
             lines = [(None, None, text)]
 
-        # Drop clear instrumental-filler hallucinations when ABC locates vocals.
-        if onsets:
-            lines = [ln for ln in lines
-                     if not (_snap_to_onset(ln[0], onsets, window=3.0) is None
-                             and _FILLER_RE.fullmatch(ln[2] or ""))]
-
         lyrics = "\n".join(t for _, _, t in lines)
         segments = [{"start": _rounded(s), "end": _rounded(e), "text": t} for s, e, t in lines]
         report = (f"Transcribe · {backend} · {task} · {language or 'auto'} · "
-                  f"{len(lines)} lines"
-                  + (f" · cuts: {len(_audio_cuts(mono))}" if backend != "fast" else "")
-                  + (f" · abc: {bool(onsets)}"))
+                  f"{len(lines)} lines · silence_gaps: {len(spans)}")
         visible = "LYRICS (RAW)\n" + lyrics
         return {"ui": {"text": [visible]},
                 "result": (lyrics, json.dumps(segments, ensure_ascii=False), report)}

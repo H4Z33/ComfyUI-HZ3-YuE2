@@ -168,8 +168,8 @@ class HZ3_YuE2_SplitAudioSegments:
         "Slice one audio into musical-section clips from REAL whisper timings, emitted "
         "as a LIST of AUDIO with each clip at its TRUE length (no padding). Lead-in "
         "becomes an intro clip, vocal lines group into runs, gaps >= min_gap become "
-        "instrumental clips. Optional abc labels and subdivides the vocal runs by "
-        "section (verse/chorus/...). Use Get Batch Item to pull one clip by index."
+        "instrumental clips. The optional abc LABELS each clip by section name (and can "
+        "subdivide runs if subdivide is on). Use Get Batch Item to pull one clip by index."
     )
 
     @classmethod
@@ -194,8 +194,8 @@ class HZ3_YuE2_SplitAudioSegments:
                     "tooltip": "Whisper gap (s) between lines that closes a vocal run and emits an instrumental clip.",
                 }),
                 "subdivide": ("BOOLEAN", {
-                    "default": True,
-                    "tooltip": "When abc is provided, subdivide each vocal run into the ABC's section bands (verse/chorus/...).",
+                    "default": False,
+                    "tooltip": "Off (default): the ABC only LABELS each clip by section name; clip boundaries stay from whisper gaps. On: subdivide each vocal run into the ABC's section bands (verse/chorus/...), which can cut a contiguous sequence.",
                 }),
             },
             "optional": {
@@ -207,7 +207,7 @@ class HZ3_YuE2_SplitAudioSegments:
             },
         }
 
-    def split(self, audio, segments, separate_intro=True, min_gap=4.0, subdivide=True, abc=""):
+    def split(self, audio, segments, separate_intro=True, min_gap=4.0, subdivide=False, abc=""):
         waveform = audio["waveform"]          # [batch, channels, samples]
         sample_rate = int(audio["sample_rate"])
         if waveform.shape[0] != 1:

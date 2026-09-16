@@ -1,12 +1,9 @@
-"""General audio list -> batch / concatenation helper for YuE2 pipelines.
+"""Collapse a batched AUDIO into one continuous audio clip.
 
-Takes up to 8 AUDIO inputs (each may itself already be a batch) and combines them
-either by stacking along the batch dimension ("batch", padding to the longest
-sample count) or by joining along the time axis into a single clip
-("concatenate"). The result is always exposed on the first output slot.
-
-This lets you bundle several source clips into one batched AUDIO so a single
-downstream node (e.g. SheetSage2 audio-to-ABC) processes them in one run.
+The Split Audio by Segments node emits its segments as a single batched AUDIO
+(waveform [N, C, samples]). This node reverses that: it joins all N segments
+back together along the time axis into one clip (batch=1), preserving the
+sample rate. The result is exposed on the first output slot.
 """
 
 from __future__ import annotations
@@ -14,82 +11,62 @@ from __future__ import annotations
 import torch
 
 
-class HZ3_YuE2_ConcatAudio:
+class HZ3_YuE2_ConcatAudioSegments:
     CATEGORY = "HZ3 YuE2/Audio"
     FUNCTION = "concat"
-    RETURN_TYPES = ("AUDIO", "INT", "STRING")
-    RETURN_NAMES = ("audio", "count", "report")
+    RETURN_TYPES = ("AUDIO", "FLOAT", "STRING")
+    RETURN_NAMES = ("audio", "seconds", "report")
     DESCRIPTION = (
-        "Concatenate up to 8 AUDIO inputs (each may already be a batch). Modo 'batch' "
-        "stack them into one batched AUDIO (padded to the longest sample count) so a "
-        "downstream SheetSage2 node processes them in a single run; modo 'concatenate' "
-        "joins them along the time axis into one clip. Result is output [0]."
+        "Convert a batched AUDIO (e.g. segments_audio from Split Audio by Segments) "
+        "into a single continuous audio clip (batch=1), joining the segments along the "
+        "time axis and preserving the sample rate."
     )
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "mode": (["batch", "concatenate"], {
-                    "default": "batch",
-                    "tooltip": "batch: apila en la dimensión de lote (pad al más largo). concatenate: une en el tiempo en un solo clip.",
-                }),
-            },
-            "optional": {
-                **{f"audio_{index}": ("AUDIO",) for index in range(1, 9)},
+                "audio": ("AUDIO",),
             },
         }
 
-    def concat(self, mode, **kwargs):
-        audios = [kwargs[f"audio_{index}"] for index in range(1, 9)
-                  if kwargs.get(f"audio_{index}") is not None]
-        if not audios:
-            raise ValueError("Connect at least one audio input to concatenate.")
+    def concat(self, audio):
+        waveform = audio["waveform"]                 # [N, C, samples]
+        sample_rate = int(audio["sample_rate"])
+        if waveform.shape[0] < 1:
+            raise ValueError("Connect a non-empty AUDIO to concatenate.")
+        count = waveform.shape[0]
+        if count == 1:
+            result = dict(audio)
+            seconds = waveform.shape[-1] / float(sample_rate)
+            report = f"Single segment already · {seconds:.2f} s (no concatenation needed)"
+            return {"ui": {"text": [report]}, "result": (result, seconds, report)}
 
-        sample_rate = int(audios[0]["sample_rate"])
-        for index, audio in enumerate(audios, 1):
-            if int(audio["sample_rate"]) != sample_rate:
-                raise ValueError(f"All audio inputs must share the same sample_rate (input {index} does not).")
+        channels = waveform.shape[1]
+        total = sum(waveform[index].shape[-1] for index in range(count))
+        output = torch.zeros(
+            (1, channels, total), dtype=waveform.dtype, device=waveform.device
+        )
+        cursor = 0
+        for index in range(count):
+            clip = waveform[index]
+            length = clip.shape[-1]
+            output[0, :, cursor:cursor + length].copy_(clip)
+            cursor += length
 
-        clips = []
-        channels = None
-        for audio in audios:
-            waveform = audio["waveform"]                 # [batch, C, samples]
-            if channels is None:
-                channels = waveform.shape[1]
-            elif waveform.shape[1] != channels:
-                raise ValueError("All audio inputs must have the same channel count.")
-            for index in range(waveform.shape[0]):
-                clips.append(waveform[index])            # [C, samples]
-        if not clips:
-            raise ValueError("No audio clips were produced from the connected inputs.")
-        device, dtype = clips[0].device, clips[0].dtype
-        count = len(clips)
-
-        if mode == "concatenate":
-            total = sum(clip.shape[-1] for clip in clips)
-            output = torch.zeros((1, channels, total), device=device, dtype=dtype)
-            cursor = 0
-            for clip in clips:
-                length = clip.shape[-1]
-                output[0, :, cursor:cursor + length].copy_(clip)
-                cursor += length
-            report = f"Concatenated {count} clip(s) along time -> 1 audio · {total / sample_rate:.2f} s"
-        else:  # batch (stack/pad)
-            longest = max(clip.shape[-1] for clip in clips)
-            output = torch.zeros((count, channels, longest), device=device, dtype=dtype)
-            for index, clip in enumerate(clips):
-                output[index, :, : clip.shape[-1]].copy_(clip)
-            report = f"Stacked {count} clip(s) into 1 batched AUDIO ({count} segments, padded to {longest / sample_rate:.2f} s)"
-
+        seconds = total / float(sample_rate)
         result_audio = {"waveform": output, "sample_rate": sample_rate}
-        return {"ui": {"text": [report]}, "result": (result_audio, count, report)}
+        report = (
+            f"Joined {count} segment(s) ({count - 1} join(s)) into 1 continuous "
+            f"audio · {seconds:.2f} s"
+        )
+        return {"ui": {"text": [report]}, "result": (result_audio, seconds, report)}
 
 
 NODE_CLASS_MAPPINGS = {
-    "HZ3_YuE2_ConcatAudio": HZ3_YuE2_ConcatAudio,
+    "HZ3_YuE2_ConcatAudioSegments": HZ3_YuE2_ConcatAudioSegments,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "HZ3_YuE2_ConcatAudio": "HZ3 YuE2 · Concat Audio List",
+    "HZ3_YuE2_ConcatAudioSegments": "HZ3 YuE2 · Concat Audio Segments",
 }

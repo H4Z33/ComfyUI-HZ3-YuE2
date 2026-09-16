@@ -20,7 +20,7 @@ import torch
 
 from comfy.text_encoders.yue2 import FRAMES_PER_SECOND
 
-from .conditioning_edit import _entry
+from .conditioning_edit import _entry, cut_conditioning
 from .score_analysis import inspect_score
 
 
@@ -334,14 +334,82 @@ class HZ3_YuE2_ConcatConditionings:
         return {"ui": {"text": [report]}, "result": (conditioning, seconds, report)}
 
 
+class HZ3_YuE2_ConditioningOverlap:
+    CATEGORY = "HZ3 YuE2/Conditioning"
+    FUNCTION = "overlap"
+    RETURN_TYPES = ("CONDITIONING", "FLOAT", "STRING")
+    RETURN_NAMES = ("conditionings", "durations", "report")
+    OUTPUT_IS_LIST = (True, True, False)
+    INPUT_IS_LIST = (True, False)
+    OUTPUT_NODE = True
+    DESCRIPTION = (
+        "Take the per-section YuE2 conditionings (LIST) and an overlap (seconds). At every "
+        "internal boundary it PREPENDS the last `overlap` seconds of the previous section's "
+        "conditioning to the start of the next one, so consecutive sections share acoustic "
+        "context across the seam (like the instrumental ABC overlap). Returns the overlapped "
+        "conditionings list (index-aligned, first unchanged) and their corrected durations."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "conditionings": ("CONDITIONING", {
+                "tooltip": "Connect each per-section conditioning (from YuE2 Generate Music) to this list input; order = connection order.",
+            }),
+            "overlap": ("FLOAT", {"default": 4.0, "min": 0.0, "max": 120.0, "step": 0.5,
+                                  "tooltip": "Overlap (s) duplicated from the previous section's conditioning tail into the start of the next."}),
+        }}
+
+    def overlap(self, conditionings, overlap):
+        conds = [c for c in (conditionings or []) if c is not None]
+        if not conds:
+            raise ValueError("Connect at least one per-section conditioning to overlap.")
+        try:
+            overlap = float(overlap[0]) if isinstance(overlap, (list, tuple)) else float(overlap)
+        except (TypeError, ValueError, IndexError):
+            overlap = 4.0
+        if overlap <= 0:
+            # no overlap -> passthrough with unchanged durations
+            durations = [round(_entry(c, "conditioning")[3] / FRAMES_PER_SECOND, 3) for c in conds]
+            return {"ui": {"text": ["overlap ignored (<=0)"]},
+                    "result": (conds, durations, "overlap <= 0: no change")}
+
+        out = [conds[0]]
+        added = [0] * len(conds)
+        for index in range(len(conds) - 1):
+            left = conds[index]
+            right = conds[index + 1]
+            _ctx, _meta, _chunks, left_frames = _entry(left, f"section {index}")
+            over_frames = max(1, min(left_frames, round(overlap * FRAMES_PER_SECOND)))
+            tail, _s, _e = cut_conditioning(
+                left,
+                start_seconds=(left_frames - over_frames) / FRAMES_PER_SECOND,
+                duration=over_frames / FRAMES_PER_SECOND,
+            )
+            merged, _total = assemble_conditionings([tail, right], [0, over_frames])
+            out.append(merged)
+            added[index + 1] = over_frames
+            conds[index + 1] = merged  # chain so the next boundary reads the updated tail
+
+        durations = [round(_entry(c, "conditioning")[3] / FRAMES_PER_SECOND, 3) for c in out]
+        report = (
+            f"Overlapped {len(out)} per-section conditionings "
+            f"(+{[a / FRAMES_PER_SECOND for a in added]} s added at each start).\n"
+            f"Durations: {durations}"
+        )
+        return {"ui": {"text": [report]}, "result": (out, durations, report)}
+
+
 NODE_CLASS_MAPPINGS = {
     "HZ3_YuE2_SectionPlan": HZ3_YuE2_SectionPlan,
     "HZ3_YuE2_AssembleSections": HZ3_YuE2_AssembleSections,
     "HZ3_YuE2_ConcatConditionings": HZ3_YuE2_ConcatConditionings,
+    "HZ3_YuE2_ConditioningOverlap": HZ3_YuE2_ConditioningOverlap,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "HZ3_YuE2_SectionPlan": "HZ3 YuE2 · Section Plan",
     "HZ3_YuE2_AssembleSections": "HZ3 YuE2 · Assemble Sections",
     "HZ3_YuE2_ConcatConditionings": "HZ3 YuE2 · Concat Conditionings (list)",
+    "HZ3_YuE2_ConditioningOverlap": "HZ3 YuE2 · Conditioning Overlap",
 }

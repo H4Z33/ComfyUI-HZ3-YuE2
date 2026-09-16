@@ -20,6 +20,10 @@ Independent ComfyUI node pack for YuE2 workflow preparation.
 - HZ3 YuE2 · Conditioning Timeline
 - HZ3 YuE2 · Section Plan
 - HZ3 YuE2 · Assemble Sections
+- HZ3 YuE2 · Whisper
+- HZ3 YuE2 · MixMash Genius (Ollama)
+- HZ3 YuE2 · Section Plan
+- HZ3 YuE2 · Assemble Sections
 
 The audio classifier expects `discogs-effnet-bsdynamic-1.onnx` and its matching
 JSON metadata under `models/audio_classifiers/discogs_effnet`. The Ollama nodes

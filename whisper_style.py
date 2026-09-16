@@ -140,7 +140,7 @@ def _rounded(value):
     return round(value, 2) if value is not None else None
 
 
-BACKENDS = ["whisper small", "whisper medium", "fast", "x"]
+BACKENDS = ["whisper small", "whisper medium", "fast"]
 
 
 def _backend_model(backend):
@@ -148,7 +148,6 @@ def _backend_model(backend):
         "whisper small": "openai/whisper-small",
         "whisper medium": "openai/whisper-medium",
         "fast": "small",
-        "x": "small",
     }[backend]
 
 
@@ -192,22 +191,6 @@ def _transcribe(backend, mono, language, task, device):
                 pieces.append(text)
         return "\n".join(pieces), chunks
 
-    if backend == "x":
-        try:
-            import whisperx
-        except ImportError:
-            raise RuntimeError("'x' (WhisperX) is not installed. Run: pip install whisperx")
-        _pipe = whisperx.load_model(model, device, compute_type=_compute_type(device))
-        result = _pipe.transcribe(mono, batch_size=16, language=lang, task=task)
-        chunks = []
-        pieces = []
-        for segment in result.get("segments") or []:
-            text = (segment.get("text") or "").strip()
-            if text:
-                chunks.append((segment.get("start"), segment.get("end"), text))
-                pieces.append(text)
-        return "\n".join(pieces), chunks
-
     raise ValueError(f"Unknown backend: {backend!r}")
 
 
@@ -236,7 +219,7 @@ class HZ3_YuE2_Transcribe:
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("lyrics", "segments", "report")
     OUTPUT_NODE = True
-    DESCRIPTION = "Transcribe the input audio to lyrics. Backends: transformers Whisper (small/medium), faster-whisper (fast) or WhisperX (x). SheetSage keeps producing the ABC separately."
+    DESCRIPTION = "Transcribe the input audio to lyrics. Backends: transformers Whisper (small/medium) or faster-whisper (fast). SheetSage keeps producing the ABC separately."
 
     @classmethod
     def INPUT_TYPES(cls):

@@ -18,6 +18,8 @@ Independent ComfyUI node pack for YuE2 workflow preparation.
 - HZ3 YuE2 · Save Conditioning
 - HZ3 YuE2 · Load Conditioning
 - HZ3 YuE2 · Conditioning Timeline
+- HZ3 YuE2 · Section Plan
+- HZ3 YuE2 · Assemble Sections
 
 The audio classifier expects `discogs-effnet-bsdynamic-1.onnx` and its matching
 JSON metadata under `models/audio_classifiers/discogs_effnet`. The Ollama nodes
@@ -52,7 +54,15 @@ Native YuE2 conditioning stores a repeated text/ABC prefix plus one semantic KV 
 
 `Save Conditioning` writes the tensor losslessly to a `.safetensors` sidecar under the ComfyUI output directory. The tensor is intentionally not embedded in MP3/FLAC tags because a YuE2 KV conditioning can occupy hundreds of MiB. Connect its `asset_file` to the optional `conditioning_asset` input on `Save Audio`; the audio metadata then carries the sidecar reference. `Load Generation.conditioning_asset` connects directly to `Load Conditioning.asset_file`.
 
+For normal use, connect the original `YuE2 Generate Music.conditioning` directly to the optional `conditioning` input on `HZ3 YuE2 · Save Audio`. Save Audio automatically writes a lossless sidecar, stores its relative path, SHA-256, and frame count in the song metadata, and returns the sidecar path as `conditioning_asset`. The separate Save Conditioning node remains useful when no audio is being saved.
+
+`HZ3 YuE2 · Load Generation` has a `load_conditioning` switch. When enabled and the audio metadata references a sidecar, it returns the restored `conditioning` and `conditioning_seconds` directly for KSampler experiments. Disable it when inspecting metadata only, to avoid reading a potentially large tensor. Older audio without a sidecar returns an empty conditioning and zero seconds.
+
 `Conditioning Timeline` accepts up to six loaded or live takes. Each non-comment line uses `baseStart-baseEnd: take@takeStart`; for example `12-18: 2@12` replaces seconds 12–18 of take 1 with seconds 12–18 from take 2. Omit `@takeStart` to use the same source and destination time. Unspecified regions remain from take 1. Connect the timeline's `conditioning` to KSampler and its `seconds` to `Empty YuE2 Latent Audio`.
+
+## Section-by-section covers
+
+`Section Plan` parses the native ABC into an ordered, timed section list (bars, seconds, and semantic frames per section). It merges optional per-section `style_overrides` lines (`Section: text`) into the plan and `sections` JSON. `Assemble Sections` is the complement: it concatenates one conditioning take per section into a single contiguous YuE2 conditioning, rebasing each chunk's KV offset and frame timestamps so the result feeds directly to KSampler with `seconds` for `Empty YuE2 Latent Audio`. Connect `Section Plan.sections` to label each take in the assembly report. Generate each section (optionally via `Conditioning Cut` on a single take) and tile the takes in order; sections must tile exactly.
 ABC -> Lyrics Prosody.score_abc
 ```
 

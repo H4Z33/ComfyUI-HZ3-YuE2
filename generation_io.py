@@ -6,6 +6,8 @@ import folder_paths
 from comfy_api.latest import IO, UI
 from comfy_extras.nodes_audio import load as load_audio
 
+from .conditioning_assets import load_conditioning_asset, save_conditioning_asset
+
 
 _AUDIO_EXTENSIONS = {".flac", ".mp3", ".opus", ".wav", ".m4a", ".ogg"}
 _EMPTY_CHOICE = "(no generated audio found)"
@@ -95,8 +97,8 @@ def _load_bundle(path):
 class HZ3_YuE2_SaveAudio:
     CATEGORY = "HZ3 YuE2/Generation"
     FUNCTION = "save"
-    RETURN_TYPES = ("AUDIO", "STRING")
-    RETURN_NAMES = ("audio", "saved_file")
+    RETURN_TYPES = ("AUDIO", "STRING", "STRING")
+    RETURN_NAMES = ("audio", "saved_file", "conditioning_asset")
     OUTPUT_NODE = True
     DESCRIPTION = "Save audio with its exact YuE2 ABC, style, and lyrics embedded directly in the audio file."
 
@@ -123,11 +125,20 @@ class HZ3_YuE2_SaveAudio:
                     "forceInput": True,
                     "tooltip": "Connect HZ3 YuE2 · Save Conditioning.asset_file to associate its sidecar with this audio."
                 }),
+                "conditioning": ("CONDITIONING", {
+                    "tooltip": "Connect the original YuE2 conditioning to archive it automatically as a lossless sidecar."
+                }),
             },
         }
 
     def save(self, audio, abc, style, lyrics, filename_prefix, file_format, prompt=None, extra_pnginfo=None,
-             token_stream=None, conditioning_asset=""):
+             token_stream=None, conditioning_asset="", conditioning=None):
+        archived_conditioning = conditioning_asset.strip() if isinstance(conditioning_asset, str) else ""
+        conditioning_manifest = None
+        if conditioning is not None:
+            archived_conditioning, conditioning_manifest, _size = save_conditioning_asset(
+                conditioning, f"{filename_prefix}-conditioning"
+            )
         bundle = {
             "schema": "hz3-yue2-generation/2",
             "abc": abc,
@@ -136,8 +147,11 @@ class HZ3_YuE2_SaveAudio:
         }
         if isinstance(token_stream, dict) and token_stream.get("schema") == "hz3-yue2-token-stream/1":
             bundle["token_stream"] = token_stream
-        if isinstance(conditioning_asset, str) and conditioning_asset.strip():
-            bundle["conditioning_asset"] = conditioning_asset.strip()
+        if archived_conditioning:
+            bundle["conditioning_asset"] = archived_conditioning
+        if conditioning_manifest is not None:
+            bundle["conditioning_sha256"] = conditioning_manifest["sha256"]
+            bundle["conditioning_frames"] = conditioning_manifest["yue2_frames"]
         metadata = dict(extra_pnginfo or {})
         metadata["hz3_yue2"] = bundle
 
@@ -170,24 +184,36 @@ class HZ3_YuE2_SaveAudio:
             for result in results
         ]
 
+        text = list(saved)
+        if archived_conditioning:
+            text.append(f"conditioning: {archived_conditioning}")
+
         return {
-            "ui": {"audio": results, "text": saved},
-            "result": (audio, "\n".join(saved)),
+            "ui": {"audio": results, "text": text},
+            "result": (audio, "\n".join(saved), archived_conditioning),
         }
 
 
 class HZ3_YuE2_LoadGeneration:
     CATEGORY = "HZ3 YuE2/Generation"
     FUNCTION = "load"
-    RETURN_TYPES = ("AUDIO", "STRING", "STRING", "STRING", "STRING", "HZ3_YUE2_TOKEN_STREAM", "STRING")
-    RETURN_NAMES = ("audio", "abc", "style", "lyrics", "report", "token_stream", "conditioning_asset")
+    RETURN_TYPES = ("AUDIO", "STRING", "STRING", "STRING", "STRING", "HZ3_YUE2_TOKEN_STREAM", "STRING",
+                    "CONDITIONING", "FLOAT")
+    RETURN_NAMES = ("audio", "abc", "style", "lyrics", "report", "token_stream", "conditioning_asset",
+                    "conditioning", "conditioning_seconds")
     OUTPUT_NODE = True
     DESCRIPTION = "Load generated audio and recover the ABC, style, and lyrics saved with it."
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
-            "required": {"audio_file": (_audio_choices(),)},
+            "required": {
+                "audio_file": (_audio_choices(),),
+                "load_conditioning": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Load the potentially large conditioning sidecar referenced by the audio metadata."
+                }),
+            },
             "optional": {
                 "saved_file": ("STRING", {
                     "forceInput": True,
@@ -197,7 +223,7 @@ class HZ3_YuE2_LoadGeneration:
         }
 
     @classmethod
-    def VALIDATE_INPUTS(cls, audio_file, saved_file=""):
+    def VALIDATE_INPUTS(cls, audio_file, load_conditioning=True, saved_file=""):
         # Linked values may not be available during graph validation. Runtime still
         # resolves and validates the exact path inside the output directory.
         if saved_file is not None and not isinstance(saved_file, str):
@@ -209,15 +235,15 @@ class HZ3_YuE2_LoadGeneration:
         return True
 
     @classmethod
-    def IS_CHANGED(cls, audio_file, saved_file=""):
+    def IS_CHANGED(cls, audio_file, load_conditioning=True, saved_file=""):
         try:
             path = _resolve_output_audio(_selected_audio_file(audio_file, saved_file))
         except (FileNotFoundError, ValueError):
             return float("nan")
         stat = path.stat()
-        return f"{stat.st_mtime_ns}:{stat.st_size}"
+        return f"{stat.st_mtime_ns}:{stat.st_size}:{load_conditioning}"
 
-    def load(self, audio_file, saved_file=""):
+    def load(self, audio_file, load_conditioning=True, saved_file=""):
         selected = _selected_audio_file(audio_file, saved_file)
         path = _resolve_output_audio(selected)
         bundle, source, missing = _load_bundle(path)
@@ -231,6 +257,23 @@ class HZ3_YuE2_LoadGeneration:
         if not has_stream:
             token_stream = {"schema": "hz3-yue2-token-stream/1", "ids": [], "missing": True}
         conditioning_asset = str(bundle.get("conditioning_asset", ""))
+        conditioning = []
+        conditioning_seconds = 0.0
+        conditioning_status = ""
+        if conditioning_asset and load_conditioning:
+            try:
+                conditioning, conditioning_manifest, conditioning_path = load_conditioning_asset(conditioning_asset)
+                conditioning_seconds = conditioning_manifest["yue2_frames"] / 25.0
+                expected_hash = str(bundle.get("conditioning_sha256", ""))
+                conditioning_status = (
+                    f" Loaded conditioning sidecar {conditioning_path.name} ({conditioning_seconds:.2f} s)."
+                )
+                if expected_hash:
+                    conditioning_status += f" Expected SHA-256: {expected_hash}."
+            except (FileNotFoundError, ValueError, KeyError, json.JSONDecodeError) as error:
+                conditioning_status = f" Conditioning sidecar could not be loaded: {error}"
+        elif conditioning_asset:
+            conditioning_status = " Conditioning sidecar loading is disabled."
         if missing:
             report = (
                 f"Loaded {selected}. Found {source}, but runtime values were not saved: "
@@ -240,12 +283,14 @@ class HZ3_YuE2_LoadGeneration:
             report = f"Loaded {selected} with ABC, style, and lyrics from {source}."
         report += " Semantic token stream available." if has_stream else " No semantic token stream was stored."
         report += f" Conditioning sidecar: {conditioning_asset}." if conditioning_asset else " No conditioning sidecar is associated."
+        report += conditioning_status
         return {
             "ui": {
                 "audio": [{"filename": path.name, "subfolder": path.parent.relative_to(_output_root()).as_posix(), "type": "output"}],
                 "text": [report],
             },
-            "result": (audio, abc, style, lyrics, report, token_stream, conditioning_asset),
+            "result": (audio, abc, style, lyrics, report, token_stream, conditioning_asset,
+                       conditioning, conditioning_seconds),
         }
 
 

@@ -103,42 +103,26 @@ def _section_bars(sec, overlap_seconds):
 def apply_abc_overlap(segments_abc, overlap_seconds=4.0):
     """Return (overlapped_segments, added_seconds).
 
-    At every interface ONLY ONE material is used: the LAST bars of the left section
-    (chords-only Vocal + Ins). It is appended to the left section's own END and the
-    SAME block is prepended to the right section's START before its tag. So both sides
-    of a seam are identical (same content, same length), avoiding long endings: the
-    end-append equals the start-prepend. section i's own tail is used for the boundary
-    i-(i+1); first section has no prepend, last has no append from its own boundary.
-    """
+    Overlap is applied ONLY at the START of each section (except the first): the LAST
+    chords-only Vocal + Ins bars of the previous section are prepended before the next
+    section's '% [tag]'. Nothing is appended to the END of any section.
+    added_seconds[i] = time added at section i's start (0 for the first)."""
     parsed = [_parse_section(abc) for abc in segments_abc]
     overlapped = list(segments_abc)
     added = [0.0] * len(segments_abc)
     n = len(parsed)
 
-    for index in range(n - 1):
-        left = parsed[index]
+    for index in range(1, n):                    # each section that HAS a previous
+        left = parsed[index - 1]
         k = _section_bars(left, overlap_seconds)
         if k <= 0:
             continue
         block = _voice_block(left["vocal"][-k:], left["ins"][-k:])
-        added_sec = round(k * left["spb"], 3)
-
-        # Left section's OWN end gains its own last bars (boundary material).
-        left_lines = _insert_append(left["lines"], block)
-        overlapped[index] = "\n".join(left_lines) + "\n"
-        parsed[index] = _parse_section(overlapped[index])
-        added[index] += added_sec
-
-        # The RIGHT section's start gains the SAME block (before its tag).
-        right = parsed[index + 1]
+        right = parsed[index]
         right_lines = _insert_prepend(right["lines"], right["header_end"], block)
-        overlapped[index + 1] = "\n".join(right_lines) + "\n"
-        parsed[index + 1] = _parse_section(overlapped[index + 1])
-        added[index + 1] += added_sec
+        overlapped[index] = "\n".join(right_lines) + "\n"
+        parsed[index] = _parse_section(overlapped[index])
+        added[index] += round(k * left["spb"], 3)
 
     added = [round(v, 3) for v in added]
     return overlapped, added
-
-
-def _insert_append(lines, block):
-    return list(lines) + block

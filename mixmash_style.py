@@ -6,25 +6,108 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-SYSTEM_PROMPT = """You write three alternative [Tags] style prompts for YuE2 music generation.
+SYSTEM_PROMPT = """You are an expert music producer and prompt engineer writing prompts for YuE2 music generation.
+You adhere strictly to the YuE2 prompt engineering rules (dav.one/how-to-generate-music-with-yue2/):
 
-Evidence and priority:
-1. Follow mix_instructions and section_cues exactly.
-2. Treat BPM, meter, key, note ranges and chord density measured from a connected score as stronger evidence
-   than uncertain classifier labels.
-3. Use classifier probabilities comparatively; discard weak, contradictory or redundant labels. Never dump
-   the classifier list into the answer and never average every detected genre together.
+INPUT DATA:
+- structure: Ordered list of song sections (e.g. [{"name": "intro", "start": 0.0, "end": 29.0}, ...]).
+- analysis: Measured audio classification profile (genres, instruments, mood, voice, BPM, key from Audio to Style).
+- lyrics: The lyrics for the song (raw unsegmented text, or loosely labeled).
+- instructions: Creative user direction (tempo, style changes, instrumentation, mood, genre, voice). If empty, infer a creative style fitting the lyrics and structure.
+- section_cues: ABC score excerpts or arrangement cues for the sections.
+- sources: Any additional audio analysis profiles.
 
-Compose one intentional mashup and express it at three detail levels. Prefer common musical vocabulary and do
-not dump every classifier label. The lyrics are supplied separately and must never be copied or rewritten.
-Section cues are soft arrangement guidance rather than exact timestamp control.
+PRIORITY AND MUSICAL HIERARCHY:
+1. AUDIO ANALYSIS PRIORITY (when provided):
+   If audio analysis (from Audio to Style / Discogs-EffNet) is present, it TAKES ABSOLUTE PRECEDENCE OVER INSTRUCTIONS.
+   Extract and strictly follow the measured musical evidence: detected genres, instrumentation, acoustic vs electronic timbre, vocal gender/presence, danceability, and mood.
+   Do not override the detected genre or real audio characteristics with conflicting instructions.
 
+2. INSTRUCTIONS ROLE:
+   - If audio analysis is present: use instructions only to guide section arrangement, progression, transitions, energy curves, or subtle performance nuances that complement the audio analysis. If instructions contradict the audio analysis, the audio analysis wins.
+   - If audio analysis is NOT present: follow the instructions directly for genre, tempo, instrumentation, and mood.
+   - If instructions are empty/omitted: creatively invent a rich, fitting arrangement and style based on the lyrics and musical cues.
+
+3. SECTION-BY-SECTION STYLE PROMPT (style_detailed):
+   - When a section structure is provided, write ONE unified YuE2 style prompt where EVERY section in the structure is represented in order with its exact bracketed tag:
+     [Intro] instrumentation, tempo/BPM, key, room acoustics, no vocals.
+     [Verse 1] voice timbre, instrumentation, bassline, groove.
+     [Chorus] dynamic lift, energy, drum beat, layered vocal delivery, synths/guitars.
+     ... representing all sections from the structure in exact order.
+   - Cover the 5 essential ingredients: Genre, Instruments, Mood, Vocal gender, and Vocal tone/delivery.
+   - Ensure the vocal description language matches the lyrics' language (e.g. Spanish male lead vocal for Spanish lyrics).
+   - Extract any tempo/BPM, key, and meter from section_cues / ABC notation when available.
+   - Conclude the style prompt with a concise line of global tags: BPM, meter, key, genres, and production characteristics.
+   - If no section structure is provided, compose a rich, detailed YuE2 style prompt (70-130 words).
+
+4. CORRECTED AND SEGMENTED LYRICS RULES (dav.one guide + non-sung cues):
+   - Every section must have a [Label] in square brackets (e.g. [Verse], [Verse 2], [Chorus], [Bridge], [Chorus 2]).
+   - Leave exactly ONE blank line between sections.
+   - STRICT FIDELITY TO USER'S INTENT - DO NOT INVENT SPOKEN/ACAPELLA CUES CREATIVELY:
+     * Regular lyrics must ALWAYS remain standard sung lines (without parentheses) by default.
+     * Spoken / read / recited lyrics: put lyrics inside parentheses, e.g. (texto de la letra hablada), ONLY if the user explicitly provided them in parentheses in the input lyrics or explicitly instructed that the section be spoken/recited in `instructions`. NEVER convert normal sung lyrics into spoken parentheses on your own.
+     * Acapella sections: use (acapella) ONLY if explicitly requested in `instructions` or indicated in the input lyrics.
+     * Instrumental sections ([Intro], [Interlude], [Solo], instrumental [Outro]): when a section from the structure has no lyrics assigned from the input, use (instrumental) or leave the section empty underneath.
+   - DO NOT open the song with singing lyrics under [Intro]: use an empty [Intro], [Intro] with (instrumental), or begin directly with [Verse]/[Chorus].
+   - Keep each section short: roughly a handful of lines (singable in ~30 seconds).
+   - Write repeated sections (like choruses) OUT IN FULL: never use [Chorus x2] or (repeat chorus).
+   - Prohibited stage directions: do NOT include musical/production directions like (drums build), (pause), (key change), or (whisper). Only valid section cues like (instrumental), (acapella), or explicit spoken lyrics inside parentheses (texto hablado) are permitted.
+   - If no structure is provided, clean and format the lyrics into standard [Verse], [Chorus], etc. blocks following the rules above.
+
+5. BALANCED STYLE (style_balanced):
+   - A concise 35-65 word version highlighting the core genre, main instruments, key contrast, and vocal character.
+
+6. COMPACT STYLE (style_compact):
+   - A quick 15-30 word summary of genre, principal instruments, mood, vocal gender/tone, and BPM/groove.
+
+RETURN FORMAT:
 Return valid JSON only with exactly these keys:
-- style_detailed: 70-130 words. Include vocal delivery, BPM/meter/key when reliable, genre fusion, specific drum
-  groove, bass behavior, harmony, lead instruments, matching [Section] changes, dynamics, timbre and production.
-- style_balanced: 35-65 words. Preserve the important source roles and only the strongest section contrasts.
-- style_compact: 12-30 words. Genre, principal instruments, mood, vocal gender/tone and the most important groove.
-Do not include Markdown, commentary, confidence scores or source numbers in any style."""
+{
+  "style_detailed": "<the complete multi-section style prompt with [Section] blocks>",
+  "corrected_lyrics": "<the cleanly formatted lyrics with [Section] headers, blank lines, and (instrumental) or (spoken text) if applicable>",
+  "style_balanced": "<35-65 words summary>",
+  "style_compact": "<15-30 words summary>"
+}
+No markdown formatting around the JSON, no extra keys, no explanatory text."""
+
+
+def _parse_structure(data):
+    """Parse section structure if data is a JSON string or dict/list of sections."""
+    if not data:
+        return []
+    if isinstance(data, (list, tuple)):
+        payload = data
+    elif isinstance(data, str):
+        text = data.strip()
+        if not (text.startswith("[") or text.startswith("{")):
+            return []
+        try:
+            payload = json.loads(text)
+        except Exception:
+            return []
+    elif isinstance(data, dict):
+        payload = data
+    else:
+        return []
+
+    if isinstance(payload, dict):
+        payload = payload.get("sections") or payload.get("structure") or payload.get("clips") or []
+    if not isinstance(payload, list):
+        return []
+    sections = []
+    for item in payload:
+        if isinstance(item, dict):
+            name = str(item.get("name") or item.get("kind") or "section")
+            start = item.get("start")
+            end = item.get("end")
+            sections.append({
+                "name": name,
+                "start": round(float(start), 3) if start is not None else 0.0,
+                "end": round(float(end), 3) if end is not None else 0.0,
+            })
+        elif isinstance(item, str) and item.strip():
+            sections.append({"name": item.strip(), "start": 0.0, "end": 0.0})
+    return sections
 
 
 def lyrics_warnings(lyrics):
@@ -37,27 +120,56 @@ def lyrics_warnings(lyrics):
     if any(not re.match(r"^\[[^\]\n]+\](?:\n|$)", block) for block in blocks):
         warnings.append("Every lyrics block should begin with a [Section] label and one blank line should separate blocks.")
     first = blocks[0].splitlines()
-    if first and first[0].strip().lower() == "[intro]" and any(line.strip() for line in first[1:]):
-        warnings.append("A lyric-filled opening [Intro] is unstable; use an empty [Intro] or begin with [Verse]/[Chorus].")
-    if re.search(r"\((?:repeat|drums?|pause|instrumental|key change|whisper)[^)]*\)", text, re.I):
+    if first and first[0].strip().lower() == "[intro]":
+        content_lines = [l.strip() for l in first[1:] if l.strip()]
+        if content_lines and not all(l.lower() in ("(instrumental)", "[instrumental]") for l in content_lines):
+            warnings.append("A lyric-filled opening [Intro] is unstable; use an empty [Intro], (instrumental), or begin with [Verse]/[Chorus].")
+    # Prohibit stage/repetition directions; allow (instrumental), (acapella), and spoken lyrics in parentheses
+    if re.search(r"\((?:repeat|drums?|pause|key change|solo|guitar solo)[^)]*\)", text, re.I):
         warnings.append("Lyrics contain a production/repeat direction in parentheses; YuE2 may try to sing it.")
     if re.search(r"\[(?:chorus|verse)\s*x\d+\]", text, re.I):
         warnings.append("Write repeated sections out in full instead of using [Section xN].")
     return warnings
 
 
-def ollama_mixmash(context_1, mix_instructions, lyrics="", context_2="", context_3="", section_cues="",
+def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", context_3="", section_cues="",
                    model="deepseek-v4.1-flash:cloud", endpoint="http://127.0.0.1:11434", temperature=0.35,
-                   timeout=180):
+                   timeout=180, instructions="", structure="", analysis=""):
+    instructions_text = (instructions or mix_instructions or "").strip()
+
+    # Resolve structure: explicit structure argument, or parsed from context_1
+    parsed_struct = _parse_structure(structure)
+    if not parsed_struct and context_1:
+        parsed_struct = _parse_structure(context_1)
+        if parsed_struct:
+            context_1 = ""  # Consumed as structure
+
+    # Resolve audio analysis: explicit analysis argument, or non-JSON context
+    analysis_text = (analysis or "").strip()
     contexts = [text.strip() for text in (context_1, context_2, context_3) if (text or "").strip()]
-    if not contexts:
-        raise ValueError("Connect at least context_1 to an Audio to Style analysis output.")
-    user_prompt = json.dumps({
+    if not analysis_text and contexts:
+        analysis_text = "\n\n".join(contexts)
+        contexts = []
+
+    # Section cues (handle list of ABC strings from SheetSage2 segments_abc or string)
+    if isinstance(section_cues, (list, tuple)):
+        cues_text = "\n\n".join(str(s) for s in section_cues if (s or "").strip())
+    else:
+        cues_text = str(section_cues or "").strip()
+
+    lyrics_text = (lyrics or "").strip()
+
+    if not parsed_struct and not analysis_text and not instructions_text and not lyrics_text and not cues_text and not contexts:
+        raise ValueError("Provide at least one input (structure, analysis, instructions, lyrics, or section_cues) for MixMash Style.")
+
+    user_payload = {
+        "structure": parsed_struct,
+        "analysis": analysis_text,
+        "instructions": instructions_text,
+        "section_cues": cues_text,
+        "lyrics": lyrics_text,
         "sources": [{"source": index, "analysis": text} for index, text in enumerate(contexts, 1)],
-        "mix_instructions": mix_instructions,
-        "section_cues": section_cues,
-        "lyrics": lyrics,
-    }, ensure_ascii=False)
+    }
     body = {
         "model": model,
         "stream": False,
@@ -66,7 +178,7 @@ def ollama_mixmash(context_1, mix_instructions, lyrics="", context_2="", context
         "options": {"temperature": temperature},
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
         ],
     }
     request = urllib.request.Request(endpoint.rstrip("/") + "/api/chat",
@@ -85,13 +197,15 @@ def ollama_mixmash(context_1, mix_instructions, lyrics="", context_2="", context
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Ollama returned invalid JSON: {content[:500]}") from exc
     legacy = result.get("style", "")
-    detailed = result.get("style_detailed", legacy).strip().replace("\n", " ")
+    detailed = result.get("style_detailed", legacy).strip()
+    detailed = re.sub(r"\n{3,}", "\n\n", detailed)
     balanced = result.get("style_balanced", detailed).strip().replace("\n", " ")
     compact = result.get("style_compact", balanced).strip().replace("\n", " ")
+    corrected_lyrics = result.get("corrected_lyrics", result.get("lyrics", lyrics_text)).strip()
     if not detailed:
         raise RuntimeError("Ollama returned an empty YuE2 style.")
     report = json.dumps(result, ensure_ascii=False, indent=2)
-    return detailed, balanced, compact, report
+    return detailed, balanced, compact, report, corrected_lyrics
 
 
 class HZ3_YuE2_MixMashStyle:
@@ -100,39 +214,68 @@ class HZ3_YuE2_MixMashStyle:
     RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
     RETURN_NAMES = ("style", "lyrics", "style_compact", "style_balanced")
     OUTPUT_NODE = True
-    DESCRIPTION = "Ask an Ollama model to turn multiple measured audio/score profiles into one coherent YuE2 style prompt."
+    DESCRIPTION = "Ask an Ollama model to turn audio analysis, structure and lyrics into a coherent multi-section YuE2 style prompt and formatted lyrics."
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "context_1": ("STRING", {"forceInput": True, "tooltip": "Connect the analysis output of the first Audio to Style node."}),
-                "lyrics": ("STRING", {"multiline": True, "default": "", "tooltip": "Passed unchanged to YuE2 Generate Music; section headers also guide the mashup style."}),
-                "mix_instructions": ("STRING", {"multiline": True, "default": "Use source 1 as the foundation and source 2 for instrumentation and groove."}),
-                "section_cues": ("STRING", {"multiline": True, "default": "", "tooltip": "Example: verses from source 1; choruses from source 2. Semantic guidance, not exact timing."}),
                 "model": ("STRING", {"default": "deepseek-v4.1-flash:cloud"}),
                 "endpoint": ("STRING", {"default": "http://127.0.0.1:11434"}),
                 "temperature": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 1.5, "step": 0.05}),
                 "timeout": ("INT", {"default": 180, "min": 10, "max": 900}),
             },
             "optional": {
-                "context_2": ("STRING", {"forceInput": True}),
-                "context_3": ("STRING", {"forceInput": True}),
+                "structure": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'structure' or 'report' JSON from SheetSage2 Audio to ABC + Sections."}),
+                "analysis": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'analysis' from Audio to Style (Discogs-EffNet). When present, takes priority over instructions."}),
+                "section_cues": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'segments_abc' from SheetSage2 Sections or ABC score text."}),
+                "instructions": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: speed, changes, style, instruments, mood. If empty, LLM creates a fitting style for the lyrics."}),
+                "lyrics": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: song lyrics (raw or with section labels). Will be formatted to match the sections."}),
+                "context": ("STRING", {"forceInput": True, "tooltip": "Optional: single context input (if multiple profiles are needed, join them with String Concatenate)."}),
             },
         }
 
-    def compose(self, context_1, lyrics, mix_instructions, section_cues,
-                model, endpoint, temperature, timeout, context_2="", context_3=""):
-        style, balanced, compact, report = ollama_mixmash(context_1, mix_instructions, lyrics, context_2, context_3,
-                                                          section_cues, model, endpoint, temperature, timeout)
-        warnings = lyrics_warnings(lyrics)
+    def compose(self, model="deepseek-v4.1-flash:cloud", endpoint="http://127.0.0.1:11434",
+                temperature=0.35, timeout=180,
+                structure="", analysis="", section_cues="", instructions="", lyrics="",
+                context="", **kwargs):
+        struct = structure or kwargs.get("report", "")
+        analys = analysis or kwargs.get("audio_analysis", "")
+        mix_inst = (instructions or kwargs.get("mix_instructions", "") or "").strip()
+
+        # Support single context and legacy context_1/2/3/contexto
+        ctx = context or kwargs.get("context_1", "") or kwargs.get("contexto", "") or ""
+        c2 = kwargs.get("context_2", "") or kwargs.get("contexto_2", "") or ""
+        c3 = kwargs.get("context_3", "") or kwargs.get("contexto_3", "") or ""
+
+        lyr = (lyrics or kwargs.get("letra", "") or "").strip()
+        cues = section_cues if section_cues is not None else kwargs.get("abc", "")
+
+        style, balanced, compact, report, corrected_lyrics = ollama_mixmash(
+            context_1=ctx,
+            mix_instructions=mix_inst,
+            lyrics=lyr,
+            context_2=c2,
+            context_3=c3,
+            section_cues=cues,
+            model=model,
+            endpoint=endpoint,
+            temperature=temperature,
+            timeout=timeout,
+            instructions=mix_inst,
+            structure=struct,
+            analysis=analys,
+        )
+        final_lyrics = corrected_lyrics if corrected_lyrics else lyr
+        warnings = lyrics_warnings(final_lyrics)
         visible = ("DETAILED STYLE (output: style):\n" + style +
+                   "\n\nCORRECTED LYRICS (output: lyrics):\n" + final_lyrics +
                    "\n\nBALANCED STYLE:\n" + balanced +
                    "\n\nCOMPACT STYLE:\n" + compact)
         if warnings:
             visible += "\n\nLYRICS CHECK:\n- " + "\n- ".join(warnings)
         return {"ui": {"text": [visible]},
-                "result": (style, lyrics, compact, balanced)}
+                "result": (style, final_lyrics, compact, balanced)}
 
 
 LYRICS_EDIT_MODES = {"punctuation_only", "light_rewrite", "fit_to_score"}

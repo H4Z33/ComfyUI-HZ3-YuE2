@@ -6,6 +6,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+try:
+    from .score_align import align_and_repair_abc
+except (ImportError, ValueError):
+    from score_align import align_and_repair_abc
+
 SYSTEM_PROMPT = """You are an expert music producer and prompt engineer writing style prompts and formatting lyrics for YuE2 music generation.
 
 You receive JSON with:
@@ -343,10 +348,10 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
 class HZ3_YuE2_MixMashStyle:
     CATEGORY = "HZ3 YuE2"
     FUNCTION = "compose"
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("style", "lyrics", "style_compact", "style_balanced")
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("style", "lyrics", "abc_repaired", "style_compact", "style_balanced")
     OUTPUT_NODE = True
-    DESCRIPTION = "Ask an Ollama model to turn audio analysis, structure and lyrics into a coherent multi-section YuE2 style prompt and formatted lyrics."
+    DESCRIPTION = "Ask an Ollama model to turn audio analysis, structure and lyrics into a coherent multi-section YuE2 style prompt and formatted lyrics, with procedural ABC repair."
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -360,7 +365,8 @@ class HZ3_YuE2_MixMashStyle:
             "optional": {
                 "structure": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'structure' or 'report' JSON from SheetSage2 Audio to ABC + Sections."}),
                 "analysis": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'analysis' from Audio to Style (Discogs-EffNet). When present, takes priority over instructions."}),
-                "section_cues": ("STRING", {"forceInput": True, "tooltip": "Optional: connect full ABC score ('abc') from SheetSage2 (recommended) or score text. (Connecting segments_abc causes ComfyUI to execute the node once per segment in a loop)."}),
+                "abc": ("STRING", {"forceInput": True, "tooltip": "Optional: connect full ABC score ('abc') from SheetSage2 to procedurally repair and align it."}),
+                "section_cues": ("STRING", {"forceInput": True, "tooltip": "Optional: connect full ABC score ('abc') from SheetSage2 (recommended) or score text."}),
                 "instructions": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: speed, changes, style, instruments, mood. If empty, LLM creates a fitting style for the lyrics."}),
                 "lyrics": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: song lyrics (raw or with section labels). Will be formatted to match the sections."}),
                 "context": ("STRING", {"forceInput": True, "tooltip": "Optional: single context input (if multiple profiles are needed, join them with String Concatenate)."}),
@@ -370,10 +376,11 @@ class HZ3_YuE2_MixMashStyle:
     def compose(self, model="deepseek-v4.1-flash:cloud", endpoint="http://127.0.0.1:11434",
                 temperature=0.35, timeout=180,
                 structure="", analysis="", section_cues="", instructions="", lyrics="",
-                context="", **kwargs):
+                context="", abc="", **kwargs):
         struct = structure or kwargs.get("report", "")
         analys = analysis or kwargs.get("audio_analysis", "")
         mix_inst = (instructions or kwargs.get("mix_instructions", "") or "").strip()
+        score_input = (abc or section_cues or kwargs.get("abc", "") or "").strip()
 
         # Support single context and legacy context_1/2/3/contexto
         ctx = context or kwargs.get("context_1", "") or kwargs.get("contexto", "") or ""
@@ -381,7 +388,17 @@ class HZ3_YuE2_MixMashStyle:
         c3 = kwargs.get("context_3", "") or kwargs.get("contexto_3", "") or ""
 
         lyr = (lyrics or kwargs.get("letra", "") or "").strip()
-        cues = section_cues if section_cues is not None else kwargs.get("abc", "")
+
+        # Procedurally align and repair score if ABC is provided:
+        abc_repaired = score_input
+        if score_input:
+            repaired_text, healed_struct = align_and_repair_abc(score_input, ctx, lyr)
+            if repaired_text:
+                abc_repaired = repaired_text
+            if healed_struct and (not struct or (isinstance(struct, (list, tuple)) and len(struct) < len(healed_struct)) or (isinstance(struct, str) and struct.count('"name"') < len(healed_struct))):
+                struct = json.dumps(healed_struct, ensure_ascii=False)
+
+        cues = abc_repaired if abc_repaired else score_input
 
         style, balanced, compact, report, corrected_lyrics = ollama_mixmash(
             context_1=ctx,
@@ -403,12 +420,13 @@ class HZ3_YuE2_MixMashStyle:
         warnings = lyrics_warnings(final_lyrics)
         visible = ("DETAILED STYLE (output: style):\n" + style +
                    "\n\nCORRECTED LYRICS (output: lyrics):\n" + final_lyrics +
+                   "\n\nREPAIRED ABC (output: abc_repaired):\n" + (abc_repaired[:300] + "..." if len(abc_repaired) > 300 else abc_repaired) +
                    "\n\nBALANCED STYLE:\n" + balanced +
                    "\n\nCOMPACT STYLE:\n" + compact)
         if warnings:
             visible += "\n\nLYRICS CHECK:\n- " + "\n- ".join(warnings)
         return {"ui": {"text": [visible]},
-                "result": (style, final_lyrics, compact, balanced)}
+                "result": (style, final_lyrics, abc_repaired, compact, balanced)}
 
 
 LYRICS_EDIT_MODES = {"punctuation_only", "light_rewrite", "fit_to_score"}

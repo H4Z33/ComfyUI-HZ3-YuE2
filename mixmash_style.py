@@ -339,7 +339,7 @@ class HZ3_YuE2_MixMashStyle:
             "optional": {
                 "structure": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'structure' or 'report' JSON from SheetSage2 Audio to ABC + Sections."}),
                 "analysis": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'analysis' from Audio to Style (Discogs-EffNet). When present, takes priority over instructions."}),
-                "section_cues": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'segments_abc' from SheetSage2 Sections or ABC score text."}),
+                "section_cues": ("STRING", {"forceInput": True, "tooltip": "Optional: connect full ABC score ('abc') from SheetSage2 (recommended) or score text. (Connecting segments_abc causes ComfyUI to execute the node once per segment in a loop)."}),
                 "instructions": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: speed, changes, style, instruments, mood. If empty, LLM creates a fitting style for the lyrics."}),
                 "lyrics": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: song lyrics (raw or with section labels). Will be formatted to match the sections."}),
                 "context": ("STRING", {"forceInput": True, "tooltip": "Optional: single context input (if multiple profiles are needed, join them with String Concatenate)."}),

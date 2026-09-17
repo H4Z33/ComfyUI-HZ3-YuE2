@@ -118,6 +118,12 @@ class HZ3_YuE2_CrossfadeConditioning:
             fallback_overlap = 4.0
 
         n = len(conds)
+        if n == 1:
+            _ctx, _meta, _chunks, frames_count = _entry(conds[0], "conditioning")
+            seconds = frames_count / float(FRAMES_PER_SECOND)
+            report = f"Single conditioning · {frames_count} frames · {seconds:.2f} s (no seams to crossfade)"
+            return {"ui": {"text": [report]}, "result": (conds[0], seconds, report)}
+
         overlap_frames_list = _overlap_frames(mixmash_report, fallback_overlap, n)
 
         sems = []
@@ -138,53 +144,103 @@ class HZ3_YuE2_CrossfadeConditioning:
         device, dtype, feat = sems[0].device, sems[0].dtype, sems[0].shape[2]
 
         o_used = [0] * n
-        offsets = [0] * n
         for i in range(1, n):
             max_prev = frames[i - 1] // 2 if (i - 1 > 0) else frames[i - 1]
             max_curr = frames[i] // 2 if (i < n - 1) else frames[i]
             o_used[i] = max(0, min(overlap_frames_list[i], max_prev, max_curr))
-            offsets[i] = offsets[i - 1] + frames[i - 1] - o_used[i]
 
-        final_frames = offsets[-1] + frames[-1]
+        # Build blended transitions across each internal seam
+        blends_left = [None] * n
+        blends_right = [None] * n
+        for i in range(1, n):
+            o = o_used[i]
+            if o > 0:
+                tail = sems[i - 1][:, -o:, :].to(device=device, dtype=dtype)
+                head = sems[i][:, :o, :].to(device=device, dtype=dtype)
+                w = torch.linspace(1.0, 0.0, o, device=device, dtype=dtype).view(1, o, 1)
+                blend = w * tail + (1.0 - w) * head
+                o_left = o // 2
+                o_right = o - o_left
+                blends_left[i] = blend[:, :o_left, :]
+                blends_right[i] = blend[:, o_left:, :]
+            else:
+                blends_left[i] = torch.empty((1, 0, feat), device=device, dtype=dtype)
+                blends_right[i] = torch.empty((1, 0, feat), device=device, dtype=dtype)
 
-        acc = torch.zeros(1, final_frames, feat, device=device, dtype=dtype)
-        gains = torch.zeros(1, final_frames, 1, device=device, dtype=dtype)
-        for i, sem in enumerate(sems):
-            s_tensor = sem.to(device=device, dtype=dtype)
-            g = torch.ones(1, frames[i], 1, device=device, dtype=dtype)
-            if i > 0 and o_used[i] > 0:
-                g[:, :o_used[i], :] = torch.linspace(
-                    0.0, 1.0, o_used[i], device=device, dtype=dtype
-                ).view(1, o_used[i], 1)
-            if i < n - 1 and o_used[i + 1] > 0:
-                g[:, frames[i] - o_used[i + 1]:, :] = torch.linspace(
-                    1.0, 0.0, o_used[i + 1], device=device, dtype=dtype
-                ).view(1, o_used[i + 1], 1)
-            off = offsets[i]
-            acc[:, off:off + frames[i], :] += g * s_tensor
-            gains[:, off:off + frames[i], :] += g
+        # Assemble crossfaded acoustic semantic frames for each section
+        s_primes = []
+        for i in range(n):
+            parts = []
+            if i > 0:
+                parts.append(blends_right[i])
+                mid_start = o_used[i]
+            else:
+                mid_start = 0
 
-        out = (acc / gains.clamp(min=1e-8)) * (gains > 0)
+            if i < n - 1:
+                mid_end = frames[i] - o_used[i + 1]
+            else:
+                mid_end = frames[i]
 
-        prefix = prefixes[0].to(device=device, dtype=dtype)
-        end_token = end_tokens[-1].to(device=device, dtype=dtype)
-        context = torch.cat([prefix, out, end_token], dim=1)
+            parts.append(sems[i][:, mid_start:mid_end, :].to(device=device, dtype=dtype))
+
+            if i < n - 1:
+                parts.append(blends_left[i + 1])
+
+            s_primes.append(torch.cat(parts, dim=1))
+
+        # Build multi-chunk conditioning preserving each section's prompt prefix and end token
+        pieces = []
+        chunks = []
+        start_frame = 0
+        kv_cursor = 0
+
+        for i in range(n):
+            pref = prefixes[i].to(device=device, dtype=dtype)
+            sem = s_primes[i]
+            end = end_tokens[i].to(device=device, dtype=dtype)
+
+            piece = torch.cat([pref, sem, end], dim=1)
+            pieces.append(piece)
+
+            chunk_start = start_frame
+            chunk_end = start_frame + sem.shape[1]
+            kv_start = kv_cursor
+            kv_end = kv_cursor + piece.shape[1]
+
+            chunks.append((chunk_start, chunk_end, kv_start, kv_end))
+            start_frame = chunk_end
+            kv_cursor = kv_end
+
+        assembled_context = torch.cat(pieces, dim=1)
+        total_frames = chunks[-1][1]
 
         metadata = dict(base_meta)
-        metadata["yue2_chunks"] = ((0, final_frames, 0, context.shape[1]),)
-        metadata["yue2_frames"] = final_frames
-        metadata["yue2_abc_ids"] = base_meta.get("yue2_abc_ids", [])
+        metadata["yue2_chunks"] = tuple(chunks)
+        metadata["yue2_frames"] = total_frames
+        metadata["yue2_truncated"] = False
         metadata["hz3_crossfade"] = {
-            "overlap_frames_per_section": o_used,
             "sections": n,
+            "overlap_frames_per_section": o_used,
+            "section_frames": [s.shape[1] for s in s_primes],
         }
 
-        conditioning = [[context, metadata]]
-        seconds = final_frames / float(FRAMES_PER_SECOND)
+        conditioning = [[assembled_context, metadata]]
+        seconds = total_frames / float(FRAMES_PER_SECOND)
+
+        # Build detailed timeline report
+        timeline = []
+        for i, ch in enumerate(chunks, 1):
+            s_sec = ch[0] / float(FRAMES_PER_SECOND)
+            e_sec = ch[1] / float(FRAMES_PER_SECOND)
+            ov_info = f"overlap in={o_used[i-1]/float(FRAMES_PER_SECOND):.2f}s" if i > 1 else "no overlap (start)"
+            timeline.append(f"  Section {i}: {s_sec:.2f}s - {e_sec:.2f}s ({ch[1]-ch[0]} frames) [{ov_info}]")
+
         report = (
-            f"Crossfaded {n} conditioning(s) · {final_frames} frames · {seconds:.2f} s\n"
-            f"overlap frames per section: {o_used}\n"
-            f"(linear crossfade on acoustic frames; single wrapped chunk)"
+            f"Crossfaded {n} section conditioning(s) into multi-chunk YuE2 conditioning · "
+            f"{total_frames} frames · {seconds:.2f} s\n"
+            f"Overlap frames per section: {o_used}\n"
+            f"Timeline:\n" + "\n".join(timeline)
         )
         return {"ui": {"text": [report]}, "result": (conditioning, seconds, report)}
 

@@ -37,12 +37,12 @@ You receive JSON with:
      * Otherwise, keep the original section label for the last section.
 
 4. CONCISE 5-INGREDIENT SECTION STYLE DESCRIPTIONS:
-   - For every section in the structure, write a single concise line in style_detailed with its bracketed tag:
+   - START style_detailed with a single concise global summary line for the entire track:
+     BPM: <number>, Meter: <meter>, Key: <key>, <core genre and production tags>, <vocal language and type>.
+   - Then, for every section in the structure, write a single concise line with its bracketed tag:
      [Section] genre, principal instruments, mood, vocal type, vocal delivery.
    - Do NOT write long paragraphs or verbose essays. Keep each section description punchy, comma-separated or short natural phrases.
    - Instrumental sections must specify "no vocals" or "instrumental" (e.g. [Interlude] jazz drums solo, big band brass, walking bass, swinging energetic, instrumental).
-   - End style_detailed with a single concise summary line:
-     BPM: <number>, Meter: <meter>, Key: <key>, <core genre tags>.
    - If no structure is provided, write a rich, concise YuE2 style prompt (40-70 words in English).
 
 5. LYRICS FORMATTING RULES:
@@ -219,6 +219,18 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
     legacy = result.get("style", "")
     detailed = result.get("style_detailed", legacy).strip()
     detailed = re.sub(r"\n{3,}", "\n\n", detailed)
+    # Ensure global info line (BPM, Meter, Key, Genre...) is at the beginning of style_detailed
+    lines = [l.strip() for l in detailed.splitlines() if l.strip()]
+    if lines:
+        bpm_idx = None
+        for i, line in enumerate(lines):
+            if re.match(r"^BPM\s*:\s*\d+", line, re.I):
+                bpm_idx = i
+                break
+        if bpm_idx is not None and bpm_idx > 0:
+            bpm_line = lines.pop(bpm_idx)
+            lines.insert(0, bpm_line)
+            detailed = "\n".join(lines)
     balanced = result.get("style_balanced", detailed).strip().replace("\n", " ")
     compact = result.get("style_compact", balanced).strip().replace("\n", " ")
     corrected_lyrics = result.get("corrected_lyrics", result.get("lyrics", lyrics_text)).strip()

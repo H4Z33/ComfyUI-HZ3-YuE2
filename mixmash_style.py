@@ -34,10 +34,14 @@ You receive JSON with:
      * When analysis OR instructions are provided, DO NOT invent unrelated styles, genres, or unrequested elements. Follow the specified analysis and instructions strictly.
 
 3. SECTION STRUCTURE AND 1:1 MAPPING:
-   - Follow the exact sequence and count of sections from the structure.
+   - CRITICAL: USER-CURATED SECTIONS ARE THE ABSOLUTE TRUTH:
+     * If the user provides lyrics that already contain bracketed section tags (e.g. [Verse 1], [Verse 2], [Chorus], [Interlude], [Verse 3], [Chorus 2], [Outro]):
+       The user's section breakdown, order, and count are the ABSOLUTE TRUTH and take priority over SheetSage2 labels.
+       Model style_detailed 1-to-1 around the user's sections so every section in the lyrics has an exact matching [Section] in style_detailed in the exact same sequence.
+   - Otherwise, follow the exact sequence and count of sections from the structure.
    - STRICT FIDELITY - NO FABRICATED SECTIONS:
-     * Never add an [Intro] if the structure does not begin with an intro. If structure begins with "verse", start directly with [Verse] or [Verse 1].
-     * Never append extra sections that do not exist in the structure.
+     * Never add an [Intro] if the structure or lyrics do not begin with an intro. If structure begins with "verse", start directly with [Verse] or [Verse 1].
+     * Never append extra sections that do not exist in the structure/lyrics.
    - FINAL / OUTRO DIRECTIVE:
      * If the user's instructions mention a finale or ending (e.g. "final", "outro", "ending", "cierre"), label the LAST section in the structure as [Outro] and apply the requested finale elements there.
      * Otherwise, keep the original section label for the last section.
@@ -60,6 +64,10 @@ You receive JSON with:
 5. CONTRASTING AND RECONCILING LYRICS (corrected_lyrics):
    - Every section must have a bracketed label matching the structure: [Verse], [Verse 2], [Chorus], [Bridge], [Outro], etc.
    - Leave exactly ONE blank line between sections.
+   - SACRED WORDS & ABSOLUTE TEXTUAL FIDELITY:
+     * NEVER alter, substitute, modify, or modernize words or verb tenses in the lyrics.
+     * Keep the user's exact vocabulary and grammar intact (e.g. if the user wrote "le correspondias", keep "le correspondias" EXACTLY; do NOT change to "le correspondiste").
+     * PRESERVE intentional vocal elongations (e.g. "extraaño", "taanto", "tiii") to guide YuE2's note sustains and melismas. Do NOT autocorrect them to standard spelling.
    - CONTRAST INPUTS AND PREVENT DUPLICATION:
      * When section_vocal_evidence is provided from audio, use it to determine WHICH lyrics belong to WHICH section. Match the clean user lyrics to the corresponding audio section.
      * When distributing user lyrics across multiple verses, each distinct stanza from the input must go to its own section (e.g. Stanza 1 -> [Verse], Stanza 2 -> [Verse 2], Stanza 4 -> [Verse 3]).
@@ -69,9 +77,20 @@ You receive JSON with:
      * Spoken/read lyrics: use parentheses (texto de la letra) ONLY if explicitly provided in parentheses in the input or requested as spoken in instructions.
      * Repeated sections (like choruses) must be written out in full; never use [Chorus x2].
      * Prohibited: no stage directions like (drums build), (pause), or (key change).
-   - SINGABILITY, PUNCTUATION & SYLLABLE PROSODY:
+   - SINGABILITY, PUNCTUATION & MANDATORY 4-8 SYLLABLE LINE BREAKS:
+     * Line breaks: You MUST actively split long lyric lines into short breath phrases (~4-8 syllables per line) by inserting newlines (\n). NEVER leave long run-on lines (>8-10 syllables) in a single line. Keep the exact words unchanged, only insert line breaks and punctuation.
+     * Example of required short line breaks in a Chorus:
+       Y te vi con él,
+       y de la mano un beso te dio,
+       y le correspondías,
+       después te perdiste en sus brazos,
+       bailando aquella canción
+       que era mi preferida,
+       y desde aquel rincón
+       pude verte feliz,
+       y comprendí que tu amor,
+       mi amor, para siempre perdí.
      * Punctuation marks breath and cadence: use commas (,) for breathing micro-pauses within a line, and periods (.) for full musical phrase cadences.
-     * Line breaks: divide lines into natural singing breath phrases (~4-8 syllables per line) so the singer does not rush or drag.
      * Syllables, contractions, and extensions: where words blend smoothly into one musical beat (sinalefa / elision), allow natural locale contractions or underscore joining (e.g. "volvió_ala", "de_este"); where a phrase cadence holds a sustained musical note, support natural held syllables if appropriate.
 
 6. BALANCED AND COMPACT STYLE PROMPTS:
@@ -256,12 +275,14 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
         cues_text = str(section_cues or "").strip()
 
     lyrics_text = (lyrics or "").strip()
+    user_curated_sections = re.findall(r"^\s*\[([a-zA-Z0-9_ ]+)\]", lyrics_text, re.M)
 
     if not parsed_struct and not analysis_text and not instructions_text and not lyrics_text and not cues_text and not contexts and not section_vocal_evidence:
         raise ValueError("Provide at least one input (structure, analysis, instructions, lyrics, or section_cues) for MixMash Style.")
 
     user_payload = {
         "structure": parsed_struct,
+        "user_curated_sections": [s.strip() for s in user_curated_sections] if user_curated_sections else [],
         "section_vocal_evidence": section_vocal_evidence,
         "analysis": analysis_text,
         "instructions": instructions_text,

@@ -23,9 +23,15 @@ You receive JSON with:
    - Never write style descriptions in Spanish or other languages, even if lyrics or instructions are in Spanish. YuE2 requires English style conditioning.
    - Lyrics keep their original language (Spanish, English, etc.).
 
-2. MUSICAL HIERARCHY AND PRIORITY:
-   - Audio analysis (when provided) takes absolute precedence over instructions for genre, core instrumentation, acoustic vs electronic timbre, vocal gender, and mood.
-   - Instructions guide arrangement progression, transitions, energy curves, and user-specified instruments. If instructions contradict the audio analysis genre/timbre, the audio analysis wins.
+2. MUSICAL HIERARCHY AND ABSOLUTE PRIORITY (analysis > instructions > inference):
+   - PRIORITY 1 (KING): AUDIO ANALYSIS (when provided from audio analysis / Discogs-EffNet):
+     Takes absolute top priority over everything else. Follow the measured musical evidence strictly: detected genres, instrumentation, acoustic vs electronic timbre, vocal gender/presence, tempo, and mood. Never override the detected genre or real audio characteristics with instructions or creative ideas.
+   - PRIORITY 2: USER INSTRUCTIONS:
+     * If audio analysis is present: instructions guide arrangement progression, transitions, energy curves, and specific requested instruments/sections (e.g. big band al final, solo de batería) that complement the audio analysis. If instructions contradict the audio analysis, the audio analysis wins.
+     * If audio analysis is NOT present: user instructions are KING and must be followed directly and strictly for genre, style, tempo, instrumentation, mood, and vocal delivery.
+   - PRIORITY 3: AGENT INFERENCE (ONLY WHEN NEITHER ANALYSIS NOR INSTRUCTIONS EXIST):
+     * Inferring or creatively inventing a style is permitted ONLY and EXCLUSIVELY when BOTH analysis AND instructions are completely empty/absent.
+     * When analysis OR instructions are provided, DO NOT invent unrelated styles, genres, or unrequested elements. Follow the specified analysis and instructions strictly.
 
 3. SECTION STRUCTURE AND 1:1 MAPPING:
    - Follow the exact sequence and count of sections from the structure.

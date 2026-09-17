@@ -9,26 +9,26 @@ from pathlib import Path
 SYSTEM_PROMPT = """You are an expert music producer and prompt engineer writing style prompts and formatting lyrics for YuE2 music generation.
 
 You receive JSON with:
-- structure: An ordered list of song sections (e.g. [{"name": "verse", "start": 0.0, "end": 26.0}, ...]).
-- analysis: Measured audio classification profile (genres, instruments, mood, voice, BPM, key from audio analysis).
+- structure: Ordered list of song sections with start/end times and names.
+- section_vocal_evidence: Optional alignment of transcribed vocals detected in the audio for each section time window.
+- analysis: Measured audio classification profile (genres, instruments, mood, voice, BPM, key).
 - instructions: Creative direction (style, tempo, instruments, mood, arrangement changes).
-- section_cues: Score notation or arrangement cues for sections.
-- lyrics: Song lyrics (raw or segmented text).
+- section_cues: Score notation (ABC) or arrangement cues for sections.
+- lyrics: Song lyrics provided by the user.
 - sources: Additional reference audio profiles.
 
 1. LANGUAGE RULES:
    - ALL STYLE PROMPTS MUST BE WRITTEN EXCLUSIVELY IN ENGLISH.
-   - All genres, instruments, mood adjectives, and vocal descriptors must be in English (e.g. "Spanish male vocal", "passionate delivery", "punchy drums", "walking bass", "electric piano", "brass section").
-   - Never write style descriptions in Spanish or other languages, even if lyrics or instructions are in Spanish. YuE2 requires English style tags.
+   - All instruments, moods, arrangement actions, and vocal descriptors must be in English (e.g. "Spanish male vocal", "intimate delivery", "punchy drums", "walking bass", "electric piano", "brass section arrives").
+   - Never write style descriptions in Spanish or other languages, even if lyrics or instructions are in Spanish. YuE2 requires English style conditioning.
    - Lyrics keep their original language (Spanish, English, etc.).
 
 2. MUSICAL HIERARCHY AND PRIORITY:
-   - Audio analysis (when provided) takes absolute precedence over instructions for genre, instrumentation, acoustic vs electronic timbre, vocal gender, and mood.
-   - Instructions guide arrangement, dynamic build, transitions, and user-specified instruments. If instructions contradict the audio analysis genre/timbre, the audio analysis wins.
-   - If instructions are empty, infer a fitting style from lyrics and musical cues.
+   - Audio analysis (when provided) takes absolute precedence over instructions for genre, core instrumentation, acoustic vs electronic timbre, vocal gender, and mood.
+   - Instructions guide arrangement progression, transitions, energy curves, and user-specified instruments. If instructions contradict the audio analysis genre/timbre, the audio analysis wins.
 
-3. SECTION STRUCTURE AND 1:1 MAPPING RULES:
-   - When a structure is provided, the generated style prompt and lyrics MUST follow the exact sequence and count of sections from the structure.
+3. SECTION STRUCTURE AND 1:1 MAPPING:
+   - Follow the exact sequence and count of sections from the structure.
    - STRICT FIDELITY - NO FABRICATED SECTIONS:
      * Never add an [Intro] if the structure does not begin with an intro. If structure begins with "verse", start directly with [Verse] or [Verse 1].
      * Never append extra sections that do not exist in the structure.
@@ -36,24 +36,37 @@ You receive JSON with:
      * If the user's instructions mention a finale or ending (e.g. "final", "outro", "ending", "cierre"), label the LAST section in the structure as [Outro] and apply the requested finale elements there.
      * Otherwise, keep the original section label for the last section.
 
-4. CONCISE 5-INGREDIENT SECTION STYLE DESCRIPTIONS:
-   - START style_detailed with a single concise global summary line for the entire track:
+4. HYBRID SECTION STYLE PROMPT (style_detailed):
+   - START style_detailed with a single concise global summary line for the track:
      BPM: <number>, Meter: <meter>, Key: <key>, <core genre and production tags>, <vocal language and type>.
-   - Then, for every section in the structure, write a single concise line with its bracketed tag:
-     [Section] genre, principal instruments, mood, vocal type, vocal delivery.
-   - Do NOT write long paragraphs or verbose essays. Keep each section description punchy, comma-separated or short natural phrases.
-   - Instrumental sections must specify "no vocals" or "instrumental" (e.g. [Interlude] jazz drums solo, big band brass, walking bass, swinging energetic, instrumental).
-   - If no structure is provided, write a rich, concise YuE2 style prompt (40-70 words in English).
+   - Then, for every section in the structure, write an evocative, musical, and precise 1-2 sentence description with its bracketed tag:
+     [Section] Describe what enters, develops, or changes: instrumentation, groove, dynamic texture, and vocal character.
+   - DO NOT mindlessly repeat the genre name in every section bracket if the genre does not change. Focus on arrangement progression, dynamic builds, and textural contrast.
+   - Examples of desired section phrasing:
+     * [Verse 1] Intimate Spanish male lead enters over electric piano, melodic walking bass and subtle tambourine, restrained groove.
+     * [Verse 2] Add warm tremolo guitar and subtle string swells, vocal delivery building in emotional intensity.
+     * [Chorus] Big band brass section arrives with punchy drums, driving bass and soaring passionate vocal harmonies.
+     * [Interlude] Jazz drum solo with energetic brass stabs and walking bass, swinging dynamic break, instrumental no vocals.
+     * [Outro] Dynamic jazz drums and full big band brass in crescendo, passionate vocal ad-libs ending on an energetic flourish.
+   - Instrumental sections must explicitly specify "instrumental, no vocals".
+   - If no structure is provided, write a rich, cohesive YuE2 style prompt (50-80 words in English).
 
-5. LYRICS FORMATTING RULES:
+5. CONTRASTING AND RECONCILING LYRICS (corrected_lyrics):
    - Every section must have a bracketed label matching the structure: [Verse], [Verse 2], [Chorus], [Bridge], [Outro], etc.
    - Leave exactly ONE blank line between sections.
-   - Regular lyrics must ALWAYS remain standard sung lines without parentheses.
-   - DO NOT invent spoken lyrics: put text inside parentheses, e.g. (spoken text), ONLY if the user explicitly provided it inside parentheses in lyrics or explicitly requested spoken/recited delivery in instructions.
-   - Instrumental sections ([Interlude], [Solo], wordless [Intro] or [Outro]) must have (instrumental) or be empty underneath.
-   - Acapella sections: use (acapella) ONLY if explicitly requested in instructions.
-   - Write repeated sections (like choruses) OUT IN FULL; never use [Chorus x2] or (repeat chorus).
-   - Never include stage directions like (drums build), (pause), or (key change).
+   - CONTRAST INPUTS AND PREVENT DUPLICATION:
+     * When section_vocal_evidence is provided from audio, use it to determine WHICH lyrics belong to WHICH section. Match the clean user lyrics to the corresponding audio section.
+     * When distributing user lyrics across multiple verses, each distinct stanza from the input must go to its own section (e.g. Stanza 1 -> [Verse], Stanza 2 -> [Verse 2], Stanza 4 -> [Verse 3]).
+     * NEVER duplicate or repeat Stanza 1 across different verses! Each verse must contain its own unique lyric lines.
+     * Instrumental sections ([Interlude], [Solo], wordless [Intro] or [Outro]) MUST contain (instrumental) or be empty. NEVER force vocal lyrics into an instrumental section.
+     * Acapella sections: use (acapella) ONLY if explicitly requested in instructions.
+     * Spoken/read lyrics: use parentheses (texto de la letra) ONLY if explicitly provided in parentheses in the input or requested as spoken in instructions.
+     * Repeated sections (like choruses) must be written out in full; never use [Chorus x2].
+     * Prohibited: no stage directions like (drums build), (pause), or (key change).
+   - SINGABILITY, PUNCTUATION & SYLLABLE PROSODY:
+     * Punctuation marks breath and cadence: use commas (,) for breathing micro-pauses within a line, and periods (.) for full musical phrase cadences.
+     * Line breaks: divide lines into natural singing breath phrases (~4-8 syllables per line) so the singer does not rush or drag.
+     * Syllables, contractions, and extensions: where words blend smoothly into one musical beat (sinalefa / elision), allow natural locale contractions or underscore joining (e.g. "volvió_ala", "de_este"); where a phrase cadence holds a sustained musical note, support natural held syllables if appropriate.
 
 6. BALANCED AND COMPACT STYLE PROMPTS:
    - style_balanced: 25-45 words in English summarizing genre, key instruments, mood, and vocal character.
@@ -68,6 +81,47 @@ Return valid JSON only with exactly these keys:
   "style_compact": "<12-25 words in English>"
 }
 No markdown formatting around the JSON, no extra keys, no explanatory text."""
+
+
+def _detect_transcript_segments(data):
+    """Detect if data is a list of Whisper transcribed segments with timestamps."""
+    if not data:
+        return None
+    if isinstance(data, str):
+        text = data.strip()
+        if not text.startswith("["):
+            return None
+        try:
+            data = json.loads(text)
+        except Exception:
+            return None
+    if isinstance(data, (list, tuple)) and data and isinstance(data[0], dict):
+        if "text" in data[0] and ("start" in data[0] or "end" in data[0]):
+            return list(data)
+    return None
+
+
+def _align_segments_to_structure(structure, segments):
+    """Correlate timestamped Whisper segments to song sections."""
+    section_vocals = []
+    for s in structure:
+        s_start = s.get("start", 0.0)
+        s_end = s.get("end", 0.0)
+        matched_texts = []
+        for seg in segments:
+            seg_start = seg.get("start", 0.0)
+            seg_end = seg.get("end", seg_start)
+            mid = (seg_start + seg_end) / 2.0
+            if s_start <= mid < s_end:
+                t = (seg.get("text") or "").strip()
+                if t:
+                    matched_texts.append(t)
+        section_vocals.append({
+            "section": s.get("name", "section"),
+            "time": f"{s_start:.2f}-{s_end:.2f}s",
+            "transcribed_audio": " ".join(matched_texts) if matched_texts else "(no vocals detected in audio)",
+        })
+    return section_vocals
 
 
 def _parse_structure(data):
@@ -164,6 +218,24 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
         if parsed_struct[-1]["name"].lower() != "outro":
             parsed_struct[-1]["name"] = "outro"
 
+    # Detect if context, analysis, or legacy context_1 has timestamped Whisper transcribed segments
+    transcript_segs = _detect_transcript_segments(context) or _detect_transcript_segments(analysis)
+    if not transcript_segs:
+        for c in (context_1, context_2, context_3):
+            transcript_segs = _detect_transcript_segments(c)
+            if transcript_segs:
+                break
+
+    section_vocal_evidence = []
+    if transcript_segs and parsed_struct:
+        section_vocal_evidence = _align_segments_to_structure(parsed_struct, transcript_segs)
+        if _detect_transcript_segments(context):
+            context = ""
+        if _detect_transcript_segments(analysis):
+            analysis = ""
+        if _detect_transcript_segments(context_1):
+            context_1 = ""
+
     # Resolve audio analysis: explicit analysis argument, or non-JSON context
     analysis_text = (analysis or "").strip()
     contexts = [text.strip() for text in (context, context_1, context_2, context_3) if (text or "").strip()]
@@ -179,11 +251,12 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
 
     lyrics_text = (lyrics or "").strip()
 
-    if not parsed_struct and not analysis_text and not instructions_text and not lyrics_text and not cues_text and not contexts:
+    if not parsed_struct and not analysis_text and not instructions_text and not lyrics_text and not cues_text and not contexts and not section_vocal_evidence:
         raise ValueError("Provide at least one input (structure, analysis, instructions, lyrics, or section_cues) for MixMash Style.")
 
     user_payload = {
         "structure": parsed_struct,
+        "section_vocal_evidence": section_vocal_evidence,
         "analysis": analysis_text,
         "instructions": instructions_text,
         "section_cues": cues_text,

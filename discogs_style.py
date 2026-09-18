@@ -7,7 +7,10 @@ import torchaudio
 
 import folder_paths
 
-from .score_analysis import inspect_score
+try:
+    from .score_analysis import inspect_score
+except (ImportError, ValueError):
+    from score_analysis import inspect_score
 
 
 def _model_dirs():

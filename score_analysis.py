@@ -1,6 +1,9 @@
 import re
 
-from .abc_score import AbcError, KEYS, QUALITIES, parse
+try:
+    from .abc_score import AbcError, KEYS, QUALITIES, parse
+except (ImportError, ValueError):
+    from abc_score import AbcError, KEYS, QUALITIES, parse
 
 
 def lyric_syllables(lyrics):

@@ -18,7 +18,7 @@ You receive JSON with:
 - section_vocal_evidence: Optional alignment of transcribed vocals detected in the audio for each section time window.
 - analysis: Measured audio classification profile (genres, instruments, mood, voice, BPM, key).
 - instructions: Creative direction (style, tempo, instruments, mood, arrangement changes).
-- section_cues: Score notation (ABC) or arrangement cues for sections.
+- abc: Full ABC score notation (tempo, meter, key, vocal melody, chords, and instrumental rests).
 - lyrics: Song lyrics provided by the user.
 - sources: Additional reference audio profiles.
 
@@ -229,7 +229,7 @@ def lyrics_warnings(lyrics):
 
 def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", context_3="", section_cues="",
                    model="deepseek-v4.1-flash:cloud", endpoint="http://127.0.0.1:11434", temperature=0.35,
-                   timeout=180, instructions="", structure="", analysis="", context=""):
+                   timeout=180, instructions="", structure="", analysis="", context="", abc=""):
     instructions_text = (instructions or mix_instructions or "").strip()
 
     # Resolve structure: explicit structure argument, or parsed from context / context_1
@@ -273,17 +273,18 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
         analysis_text = "\n\n".join(contexts)
         contexts = []
 
-    # Section cues (handle list of ABC strings from SheetSage2 segments_abc or string)
-    if isinstance(section_cues, (list, tuple)):
-        cues_text = "\n\n".join(str(s) for s in section_cues if (s or "").strip())
+    # ABC Score notation (handle ABC string or legacy section_cues list/tuple)
+    score_val = abc or section_cues or ""
+    if isinstance(score_val, (list, tuple)):
+        score_text = "\n\n".join(str(s) for s in score_val if (s or "").strip())
     else:
-        cues_text = str(section_cues or "").strip()
+        score_text = str(score_val).strip()
 
     lyrics_text = (lyrics or "").strip()
     user_curated_sections = re.findall(r"^\s*\[([a-zA-Z0-9_ ]+)\]", lyrics_text, re.M)
 
-    if not parsed_struct and not analysis_text and not instructions_text and not lyrics_text and not cues_text and not contexts and not section_vocal_evidence:
-        raise ValueError("Provide at least one input (structure, analysis, instructions, lyrics, or section_cues) for MixMash Style.")
+    if not parsed_struct and not analysis_text and not instructions_text and not lyrics_text and not score_text and not contexts and not section_vocal_evidence:
+        raise ValueError("Provide at least one input (abc, structure, analysis, instructions, or lyrics) for MixMash Style.")
 
     user_payload = {
         "structure": parsed_struct,
@@ -291,7 +292,7 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
         "section_vocal_evidence": section_vocal_evidence,
         "analysis": analysis_text,
         "instructions": instructions_text,
-        "section_cues": cues_text,
+        "abc": score_text,
         "lyrics": lyrics_text,
         "sources": [{"source": index, "analysis": text} for index, text in enumerate(contexts, 1)],
     }
@@ -363,10 +364,9 @@ class HZ3_YuE2_MixMashStyle:
                 "timeout": ("INT", {"default": 180, "min": 10, "max": 900}),
             },
             "optional": {
-                "structure": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'structure' or 'report' JSON from SheetSage2 Audio to ABC + Sections."}),
+                "structure": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'structure' or 'report' from SheetSage2 Audio to ABC + Sections."}),
                 "analysis": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'analysis' from Audio to Style (Discogs-EffNet). When present, takes priority over instructions."}),
                 "abc": ("STRING", {"forceInput": True, "tooltip": "Optional: connect full ABC score ('abc') from SheetSage2 to procedurally repair and align it."}),
-                "section_cues": ("STRING", {"forceInput": True, "tooltip": "Optional: connect full ABC score ('abc') from SheetSage2 (recommended) or score text."}),
                 "instructions": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: speed, changes, style, instruments, mood. If empty, LLM creates a fitting style for the lyrics."}),
                 "lyrics": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: song lyrics (raw or with section labels). Will be formatted to match the sections."}),
                 "context": ("STRING", {"forceInput": True, "tooltip": "Optional: single context input (if multiple profiles are needed, join them with String Concatenate)."}),
@@ -375,12 +375,12 @@ class HZ3_YuE2_MixMashStyle:
 
     def compose(self, model="deepseek-v4.1-flash:cloud", endpoint="http://127.0.0.1:11434",
                 temperature=0.35, timeout=180,
-                structure="", analysis="", section_cues="", instructions="", lyrics="",
-                context="", abc="", **kwargs):
-        struct = structure or kwargs.get("report", "")
+                structure="", analysis="", instructions="", lyrics="",
+                context="", abc="", report="", section_cues="", **kwargs):
+        struct = structure or report or kwargs.get("report", "")
         analys = analysis or kwargs.get("audio_analysis", "")
         mix_inst = (instructions or kwargs.get("mix_instructions", "") or "").strip()
-        score_input = (abc or section_cues or kwargs.get("abc", "") or "").strip()
+        score_input = (abc or section_cues or kwargs.get("abc", "") or kwargs.get("section_cues", "") or "").strip()
 
         # Support single context and legacy context_1/2/3/contexto
         ctx = context or kwargs.get("context_1", "") or kwargs.get("contexto", "") or ""
@@ -400,13 +400,14 @@ class HZ3_YuE2_MixMashStyle:
 
         cues = abc_repaired if abc_repaired else score_input
 
-        style, balanced, compact, report, corrected_lyrics = ollama_mixmash(
+        style, balanced, compact, rep_json, corrected_lyrics = ollama_mixmash(
             context_1=ctx,
             mix_instructions=mix_inst,
             lyrics=lyr,
             context_2=c2,
             context_3=c3,
             section_cues=cues,
+            abc=cues,
             model=model,
             endpoint=endpoint,
             temperature=temperature,

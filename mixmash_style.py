@@ -230,32 +230,40 @@ def lyrics_warnings(lyrics):
 def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
     """Experimental: extend ABC score so every section in lyrics has a matching ABC part.
 
+    Preserves all sections identified and repaired from SheetSage (intro, verse, chorus,
+    interlude, etc.) in their original order, and extends only for lyrics sections that
+    lack corresponding parts in the repaired ABC.
+
     Returns:
         (extended_abc: str, structure: list[dict])
     """
     if not abc_text or not str(abc_text).strip():
         return abc_text, []
     if not lyrics_text or not str(lyrics_text).strip():
-        return abc_text, []
+        return align_and_repair_abc(abc_text)
 
     lyrics_tags = re.findall(r"^\s*\[([a-zA-Z0-9_ ]+)\]", lyrics_text, re.M)
     if not lyrics_tags:
+        return align_and_repair_abc(abc_text, lyrics_text=lyrics_text)
+
+    # Step 1: Repair original SheetSage ABC first
+    repaired_abc, orig_struct = align_and_repair_abc(abc_text, lyrics_text=lyrics_text)
+    if not repaired_abc:
         return abc_text, []
 
-    clean_abc = str(abc_text).replace("\r\n", "\n").strip()
-    lines = clean_abc.splitlines()
+    lines = repaired_abc.replace("\r\n", "\n").splitlines()
     k_idx = -1
     for i, l in enumerate(lines):
         if l.startswith("K:"):
             k_idx = i
             break
     if k_idx == -1:
-        return abc_text, []
+        return repaired_abc, orig_struct
 
     header = lines[:k_idx + 1]
     body_lines = lines[k_idx + 1:]
 
-    existing_sections = []
+    sections = []
     current = None
     for line in body_lines:
         stripped = line.strip()
@@ -266,7 +274,7 @@ def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
                 "kind": normalize_section_label(name),
                 "lines": [line],
             }
-            existing_sections.append(current)
+            sections.append(current)
         elif current is not None:
             current["lines"].append(line)
         else:
@@ -276,59 +284,85 @@ def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
                     "kind": "section",
                     "lines": [line],
                 }
-                existing_sections.append(current)
+                sections.append(current)
 
-    if not existing_sections:
-        return abc_text, []
+    if not sections:
+        return repaired_abc, orig_struct
 
+    # Step 2: Identify what parts exist vs what lyrics has
     templates = {}
-    for s in existing_sections:
+    for s in sections:
         templates.setdefault(s["kind"], []).append(s)
 
-    target_sections = []
-    kind_counts = {}
+    lyrics_counts = {}
     for t in lyrics_tags:
         k = normalize_section_label(t)
-        kind_counts[k] = kind_counts.get(k, 0) + 1
-        target_sections.append({"raw": t, "kind": k})
+        lyrics_counts[k] = lyrics_counts.get(k, 0) + 1
 
-    existing_kinds = set(s["kind"] for s in existing_sections)
-    target_kinds = set(ts["kind"] for ts in target_sections)
+    abc_counts = {}
+    for s in sections:
+        k = s["kind"]
+        abc_counts[k] = abc_counts.get(k, 0) + 1
 
-    if len(target_sections) <= len(existing_sections) and target_kinds.issubset(existing_kinds):
-        return align_and_repair_abc(abc_text, lyrics_text=lyrics_text)
+    # Detect which sections in the lyrics do NOT have corresponding info in the repaired ABC
+    extra_sequence = []
+    seen_counts = {}
+    for t in lyrics_tags:
+        k = normalize_section_label(t)
+        seen_counts[k] = seen_counts.get(k, 0) + 1
+        if seen_counts[k] > abc_counts.get(k, 0):
+            extra_sequence.append(k)
 
-    used_indices = {k: 0 for k in templates}
-    kind_running = {}
-    new_body_lines = []
+    if not extra_sequence:
+        # All lyrics sections already have corresponding ABC parts from SheetSage
+        return repaired_abc, orig_struct
 
-    for ts in target_sections:
-        k = ts["kind"]
-        kind_running[k] = kind_running.get(k, 0) + 1
-        num = kind_running[k]
-        disp = f"{k} {num}" if kind_counts[k] > 1 and k in ("verse", "chorus") else k
+    # Step 3: Extend ONLY for parts of lyrics that do not have info in ABC
+    # Locate outro if present at the end of sections
+    outro_idx = None
+    for idx in range(len(sections) - 1, -1, -1):
+        if sections[idx]["kind"] == "outro":
+            outro_idx = idx
+            break
 
-        if k in templates and used_indices[k] < len(templates[k]):
-            sec = templates[k][used_indices[k]]
-            used_indices[k] += 1
-        elif k in templates and len(templates[k]) > 0:
-            sec = templates[k][-1]
+    insert_pos = outro_idx if outro_idx is not None else len(sections)
+
+    for k in extra_sequence:
+        if k == "intro":
+            sec = templates.get("intro", templates.get("verse", sections))[0]
+            sections.insert(0, {"name": "intro", "kind": "intro", "lines": list(sec["lines"])})
+            if outro_idx is not None:
+                outro_idx += 1
+                insert_pos += 1
         elif k == "outro":
-            sec = templates.get("chorus", templates.get("verse", existing_sections))[-1]
-        elif k in ("interlude", "solo"):
-            sec = templates.get("interlude", templates.get("verse", templates.get("chorus", existing_sections)))[-1]
-        elif k == "bridge":
-            sec = templates.get("bridge", templates.get("chorus", templates.get("verse", existing_sections)))[-1]
-        elif k == "intro":
-            sec = templates.get("intro", templates.get("verse", existing_sections))[0]
+            if outro_idx is None:
+                sec = templates.get("chorus", templates.get("verse", sections))[-1]
+                sections.append({"name": "outro", "kind": "outro", "lines": list(sec["lines"])})
+                outro_idx = len(sections) - 1
         else:
-            sec = templates.get("verse", templates.get("chorus", existing_sections))[0]
+            # Middle sections (verse, chorus, bridge, solo): synthesize from closest template
+            sec = templates.get(k, templates.get("verse", templates.get("chorus", sections)))[-1]
+            sections.insert(insert_pos, {"name": k, "kind": k, "lines": list(sec["lines"])})
+            insert_pos += 1
+            if outro_idx is not None:
+                outro_idx += 1
 
-        sec_lines = list(sec["lines"])
-        sec_lines[0] = f"% {disp}"
-        new_body_lines.extend(sec_lines)
+    # Step 4: Renumber sections cleanly (e.g. verse 1, verse 2, verse 3...)
+    final_counts = {}
+    for s in sections:
+        k = s["kind"]
+        final_counts[k] = final_counts.get(k, 0) + 1
 
-    extended_raw = "\n".join(header + new_body_lines) + "\n"
+    final_running = {}
+    for s in sections:
+        k = s["kind"]
+        final_running[k] = final_running.get(k, 0) + 1
+        num = final_running[k]
+        disp = f"{k} {num}" if final_counts[k] > 1 and k in ("verse", "chorus") else k
+        s["name"] = disp
+        s["lines"][0] = f"% {disp}"
+
+    extended_raw = "\n".join(header + [l for s in sections for l in s["lines"]]) + "\n"
     return align_and_repair_abc(extended_raw, lyrics_text=lyrics_text)
 
 

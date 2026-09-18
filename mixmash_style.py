@@ -364,9 +364,9 @@ class HZ3_YuE2_MixMashStyle:
                 "timeout": ("INT", {"default": 180, "min": 10, "max": 900}),
             },
             "optional": {
-                "structure": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'structure' or 'report' from SheetSage2 Audio to ABC + Sections."}),
-                "analysis": ("STRING", {"forceInput": True, "tooltip": "Optional: connect 'analysis' from Audio to Style (Discogs-EffNet). When present, takes priority over instructions."}),
-                "abc": ("STRING", {"forceInput": True, "tooltip": "Optional: connect full ABC score ('abc') from SheetSage2 to procedurally repair and align it."}),
+                "abc_report": ("STRING", {"forceInput": True, "tooltip": "Connect 'report' (or 'structure') from SheetSage2 Audio to ABC + Sections."}),
+                "audio2style_analysis": ("STRING", {"forceInput": True, "tooltip": "Connect 'analysis' from Audio to Style (Discogs-EffNet). When present, takes priority over instructions."}),
+                "abc": ("STRING", {"forceInput": True, "tooltip": "Connect full ABC score ('abc') from SheetSage2 to procedurally repair and align it."}),
                 "instructions": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: speed, changes, style, instruments, mood. If empty, LLM creates a fitting style for the lyrics."}),
                 "lyrics": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: song lyrics (raw or with section labels). Will be formatted to match the sections."}),
                 "context": ("STRING", {"forceInput": True, "tooltip": "Optional: single context input (if multiple profiles are needed, join them with String Concatenate)."}),
@@ -375,10 +375,11 @@ class HZ3_YuE2_MixMashStyle:
 
     def compose(self, model="deepseek-v4.1-flash:cloud", endpoint="http://127.0.0.1:11434",
                 temperature=0.35, timeout=180,
-                structure="", analysis="", instructions="", lyrics="",
-                context="", abc="", report="", section_cues="", **kwargs):
-        struct = structure or report or kwargs.get("report", "")
-        analys = analysis or kwargs.get("audio_analysis", "")
+                abc_report="", audio2style_analysis="", abc="",
+                structure="", analysis="", report="", section_cues="",
+                instructions="", lyrics="", context="", **kwargs):
+        struct = abc_report or structure or report or kwargs.get("abc_report", "") or kwargs.get("structure", "") or kwargs.get("report", "")
+        analys = audio2style_analysis or analysis or kwargs.get("audio2style_analysis", "") or kwargs.get("analysis", "") or kwargs.get("audio_analysis", "")
         mix_inst = (instructions or kwargs.get("mix_instructions", "") or "").strip()
         score_input = (abc or section_cues or kwargs.get("abc", "") or kwargs.get("section_cues", "") or "").strip()
 

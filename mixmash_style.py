@@ -7,9 +7,9 @@ import urllib.request
 from pathlib import Path
 
 try:
-    from .score_align import align_and_repair_abc
+    from .score_align import align_and_repair_abc, normalize_section_label
 except (ImportError, ValueError):
-    from score_align import align_and_repair_abc
+    from score_align import align_and_repair_abc, normalize_section_label
 
 SYSTEM_PROMPT = """You are an expert music producer and prompt engineer writing style prompts and formatting lyrics for YuE2 music generation.
 
@@ -227,6 +227,111 @@ def lyrics_warnings(lyrics):
     return warnings
 
 
+def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
+    """Experimental: extend ABC score so every section in lyrics has a matching ABC part.
+
+    Returns:
+        (extended_abc: str, structure: list[dict])
+    """
+    if not abc_text or not str(abc_text).strip():
+        return abc_text, []
+    if not lyrics_text or not str(lyrics_text).strip():
+        return abc_text, []
+
+    lyrics_tags = re.findall(r"^\s*\[([a-zA-Z0-9_ ]+)\]", lyrics_text, re.M)
+    if not lyrics_tags:
+        return abc_text, []
+
+    clean_abc = str(abc_text).replace("\r\n", "\n").strip()
+    lines = clean_abc.splitlines()
+    k_idx = -1
+    for i, l in enumerate(lines):
+        if l.startswith("K:"):
+            k_idx = i
+            break
+    if k_idx == -1:
+        return abc_text, []
+
+    header = lines[:k_idx + 1]
+    body_lines = lines[k_idx + 1:]
+
+    existing_sections = []
+    current = None
+    for line in body_lines:
+        stripped = line.strip()
+        if stripped.startswith("% "):
+            name = stripped[2:].strip()
+            current = {
+                "name": name,
+                "kind": normalize_section_label(name),
+                "lines": [line],
+            }
+            existing_sections.append(current)
+        elif current is not None:
+            current["lines"].append(line)
+        else:
+            if stripped:
+                current = {
+                    "name": "section",
+                    "kind": "section",
+                    "lines": [line],
+                }
+                existing_sections.append(current)
+
+    if not existing_sections:
+        return abc_text, []
+
+    templates = {}
+    for s in existing_sections:
+        templates.setdefault(s["kind"], []).append(s)
+
+    target_sections = []
+    kind_counts = {}
+    for t in lyrics_tags:
+        k = normalize_section_label(t)
+        kind_counts[k] = kind_counts.get(k, 0) + 1
+        target_sections.append({"raw": t, "kind": k})
+
+    existing_kinds = set(s["kind"] for s in existing_sections)
+    target_kinds = set(ts["kind"] for ts in target_sections)
+
+    if len(target_sections) <= len(existing_sections) and target_kinds.issubset(existing_kinds):
+        return align_and_repair_abc(abc_text, lyrics_text=lyrics_text)
+
+    used_indices = {k: 0 for k in templates}
+    kind_running = {}
+    new_body_lines = []
+
+    for ts in target_sections:
+        k = ts["kind"]
+        kind_running[k] = kind_running.get(k, 0) + 1
+        num = kind_running[k]
+        disp = f"{k} {num}" if kind_counts[k] > 1 and k in ("verse", "chorus") else k
+
+        if k in templates and used_indices[k] < len(templates[k]):
+            sec = templates[k][used_indices[k]]
+            used_indices[k] += 1
+        elif k in templates and len(templates[k]) > 0:
+            sec = templates[k][-1]
+        elif k == "outro":
+            sec = templates.get("chorus", templates.get("verse", existing_sections))[-1]
+        elif k in ("interlude", "solo"):
+            sec = templates.get("interlude", templates.get("verse", templates.get("chorus", existing_sections)))[-1]
+        elif k == "bridge":
+            sec = templates.get("bridge", templates.get("chorus", templates.get("verse", existing_sections)))[-1]
+        elif k == "intro":
+            sec = templates.get("intro", templates.get("verse", existing_sections))[0]
+        else:
+            sec = templates.get("verse", templates.get("chorus", existing_sections))[0]
+
+        sec_lines = list(sec["lines"])
+        sec_lines[0] = f"% {disp}"
+        new_body_lines.extend(sec_lines)
+
+    extended_raw = "\n".join(header + new_body_lines) + "\n"
+    return align_and_repair_abc(extended_raw, lyrics_text=lyrics_text)
+
+
 def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", context_3="", section_cues="",
                    model="deepseek-v4.1-flash:cloud", endpoint="http://127.0.0.1:11434", temperature=0.35,
                    timeout=180, instructions="", structure="", analysis="", context="", abc=""):
@@ -370,6 +475,10 @@ class HZ3_YuE2_MixMashStyle:
                 "instructions": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: speed, changes, style, instruments, mood. If empty, LLM creates a fitting style for the lyrics."}),
                 "lyrics": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional: song lyrics (raw or with section labels). Will be formatted to match the sections."}),
                 "context": ("STRING", {"forceInput": True, "tooltip": "Optional: single context input (if multiple profiles are needed, join them with String Concatenate)."}),
+                "extend_abc": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Experimental: When enabled, extends ABC_repaired to complete all sections present in the input lyrics by synthesizing missing musical parts from existing ABC sections."
+                }),
             },
         }
 
@@ -377,11 +486,12 @@ class HZ3_YuE2_MixMashStyle:
                 temperature=0.35, timeout=180,
                 abc_report="", audio2style_analysis="", abc="",
                 structure="", analysis="", report="", section_cues="",
-                instructions="", lyrics="", context="", **kwargs):
+                instructions="", lyrics="", context="", extend_abc=False, **kwargs):
         struct = abc_report or structure or report or kwargs.get("abc_report", "") or kwargs.get("structure", "") or kwargs.get("report", "")
         analys = audio2style_analysis or analysis or kwargs.get("audio2style_analysis", "") or kwargs.get("analysis", "") or kwargs.get("audio_analysis", "")
         mix_inst = (instructions or kwargs.get("mix_instructions", "") or "").strip()
         score_input = (abc or section_cues or kwargs.get("abc", "") or kwargs.get("section_cues", "") or "").strip()
+        do_extend = bool(extend_abc or kwargs.get("extend_abc", False) or kwargs.get("extend_abc_to_lyrics", False))
 
         # Support single context and legacy context_1/2/3/contexto
         ctx = context or kwargs.get("context_1", "") or kwargs.get("contexto", "") or ""
@@ -396,6 +506,14 @@ class HZ3_YuE2_MixMashStyle:
             repaired_text, healed_struct = align_and_repair_abc(score_input, ctx, lyr)
             if repaired_text:
                 abc_repaired = repaired_text
+
+            if do_extend:
+                extended_abc, extended_struct = extend_abc_to_lyrics(abc_repaired, lyr)
+                if extended_abc:
+                    abc_repaired = extended_abc
+                    if extended_struct:
+                        healed_struct = extended_struct
+
             if healed_struct and (not struct or (isinstance(struct, (list, tuple)) and len(struct) < len(healed_struct)) or (isinstance(struct, str) and struct.count('"name"') < len(healed_struct))):
                 struct = json.dumps(healed_struct, ensure_ascii=False)
 
@@ -420,9 +538,12 @@ class HZ3_YuE2_MixMashStyle:
         )
         final_lyrics = corrected_lyrics if corrected_lyrics else lyr
         warnings = lyrics_warnings(final_lyrics)
+        ext_note = ""
+        if do_extend and score_input and healed_struct:
+            ext_note = f" (extended to {len(healed_struct)} sections)"
         visible = ("DETAILED STYLE (output: style):\n" + style +
                    "\n\nCORRECTED LYRICS (output: lyrics):\n" + final_lyrics +
-                   "\n\nREPAIRED ABC (output: abc_repaired):\n" + (abc_repaired[:300] + "..." if len(abc_repaired) > 300 else abc_repaired) +
+                   "\n\nREPAIRED ABC (output: abc_repaired" + ext_note + "):\n" + (abc_repaired[:300] + "..." if len(abc_repaired) > 300 else abc_repaired) +
                    "\n\nBALANCED STYLE:\n" + balanced +
                    "\n\nCOMPACT STYLE:\n" + compact)
         if warnings:

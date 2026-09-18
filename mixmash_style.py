@@ -4,6 +4,7 @@ import json
 import re
 import urllib.error
 import urllib.request
+from collections import Counter
 from pathlib import Path
 
 try:
@@ -227,6 +228,112 @@ def lyrics_warnings(lyrics):
     return warnings
 
 
+def split_merged_verses(raw_abc: str, lyrics_text: str = "") -> str:
+    """If lyrics has 2 consecutive verses before chorus, and SheetSage has 1 merged verse >= 14 bars, split it."""
+    lyrics_tags = re.findall(r"^\s*\[([a-zA-Z0-9_ ]+)\]", lyrics_text or "", re.M)
+    norm_tags = [normalize_section_label(t) for t in lyrics_tags]
+
+    if norm_tags.count("verse") < 2:
+        return raw_abc
+
+    lines = raw_abc.replace("\r\n", "\n").splitlines()
+    k_idx = -1
+    for i, l in enumerate(lines):
+        if l.startswith("K:"):
+            k_idx = i
+            break
+    if k_idx == -1:
+        return raw_abc
+
+    header = lines[:k_idx + 1]
+    body = lines[k_idx + 1:]
+
+    sections = []
+    cur = None
+    for line in body:
+        stripped = line.strip()
+        if stripped.startswith("% "):
+            name = stripped[2:].strip()
+            cur = {"name": name, "kind": normalize_section_label(name), "lines": [line]}
+            sections.append(cur)
+        elif cur is not None:
+            cur["lines"].append(line)
+        else:
+            if stripped:
+                cur = {"name": "section", "kind": "section", "lines": [line]}
+                sections.append(cur)
+
+    new_sections = []
+    for sec in sections:
+        if sec["kind"] == "verse":
+            sec_lines = sec["lines"][1:]
+            groups = []
+            cur_grp = []
+            target = None
+            for l in sec_lines:
+                cur_grp.append(l)
+                if l.startswith("V: Ins"):
+                    target = "ins"
+                elif target == "ins" and "|" in l:
+                    groups.append(list(cur_grp))
+                    cur_grp = []
+                    target = None
+            if cur_grp:
+                groups.append(list(cur_grp))
+
+            grp_bars = []
+            for g in groups:
+                vocal_music = [l for l in g if "|" in l and not l.startswith("V:") and not l.startswith("M:")]
+                bars_in_g = len(vocal_music[0][:-1].split("|")) if vocal_music else 1
+                grp_bars.append(bars_in_g)
+
+            total_bars = sum(grp_bars)
+            if total_bars >= 14 and len(groups) >= 3:
+                cum = 0
+                split_grp_idx = -1
+                for gi, bcnt in enumerate(grp_bars):
+                    cum += bcnt
+                    if cum >= 8:
+                        split_grp_idx = gi + 1
+                        break
+
+                if 0 < split_grp_idx < len(groups):
+                    grp_v1 = groups[:split_grp_idx]
+                    grp_v2 = groups[split_grp_idx:]
+                    v1_lines = ["% verse 1"] + [l for g in grp_v1 for l in g]
+                    v2_lines = ["% verse 2"] + [l for g in grp_v2 for l in g]
+                    new_sections.append({"name": "verse 1", "kind": "verse", "lines": v1_lines})
+                    new_sections.append({"name": "verse 2", "kind": "verse", "lines": v2_lines})
+                    continue
+
+        new_sections.append(sec)
+
+    return "\n".join(header + [l for s in new_sections for l in s["lines"]]) + "\n"
+
+
+def ensure_meter_reset(lines: list[str], default_meter: str = "4/4") -> list[str]:
+    """Ensure that the first voice group in a section explicitly resets meter if needed."""
+    out = []
+    i = 0
+    vocal_reset = False
+    ins_reset = False
+    while i < len(lines):
+        l = lines[i]
+        out.append(l)
+        if l.startswith("V: Vocal") and not vocal_reset:
+            has_m = any(lines[j].strip().startswith("M:") for j in range(i + 1, min(i + 3, len(lines))))
+            if not has_m:
+                out.append(f"M:{default_meter}")
+            vocal_reset = True
+        elif l.startswith("V: Ins") and not ins_reset:
+            has_m = any(lines[j].strip().startswith("M:") for j in range(i + 1, min(i + 3, len(lines))))
+            if not has_m:
+                out.append(f"M:{default_meter}")
+            ins_reset = True
+        i += 1
+    return out
+
+
 def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
     """Experimental: extend ABC score so every section in lyrics has a matching ABC part.
 
@@ -246,8 +353,11 @@ def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
     if not lyrics_tags:
         return align_and_repair_abc(abc_text, lyrics_text=lyrics_text)
 
-    # Step 1: Repair original SheetSage ABC first
-    repaired_abc, orig_struct = align_and_repair_abc(abc_text, lyrics_text=lyrics_text)
+    # Step 1: Split merged verses if lyrics has multiple verses and SheetSage merged them
+    st_split_abc = split_merged_verses(abc_text, lyrics_text=lyrics_text)
+
+    # Step 2: Repair SheetSage ABC
+    repaired_abc, orig_struct = align_and_repair_abc(st_split_abc, lyrics_text=lyrics_text)
     if not repaired_abc:
         return abc_text, []
 
@@ -262,6 +372,14 @@ def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
 
     header = lines[:k_idx + 1]
     body_lines = lines[k_idx + 1:]
+
+    # Detect global score meter from header (e.g. M:4/4)
+    default_meter = "4/4"
+    for hl in header:
+        m = re.match(r"^M:([1-9][0-9]*/[1-9][0-9]*)", hl)
+        if m:
+            default_meter = m.group(1)
+            break
 
     sections = []
     current = None
@@ -289,27 +407,20 @@ def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
     if not sections:
         return repaired_abc, orig_struct
 
-    # Step 2: Identify what parts exist vs what lyrics has
+    # Step 3: Identify what parts exist vs what lyrics has
     templates = {}
     for s in sections:
         templates.setdefault(s["kind"], []).append(s)
 
-    lyrics_counts = {}
-    for t in lyrics_tags:
-        k = normalize_section_label(t)
-        lyrics_counts[k] = lyrics_counts.get(k, 0) + 1
-
-    abc_counts = {}
-    for s in sections:
-        k = s["kind"]
-        abc_counts[k] = abc_counts.get(k, 0) + 1
+    lyrics_counts = Counter(normalize_section_label(t) for t in lyrics_tags)
+    abc_counts = Counter(s["kind"] for s in sections)
 
     # Detect which sections in the lyrics do NOT have corresponding info in the repaired ABC
     extra_sequence = []
-    seen_counts = {}
+    seen_counts = Counter()
     for t in lyrics_tags:
         k = normalize_section_label(t)
-        seen_counts[k] = seen_counts.get(k, 0) + 1
+        seen_counts[k] += 1
         if seen_counts[k] > abc_counts.get(k, 0):
             extra_sequence.append(k)
 
@@ -317,7 +428,7 @@ def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
         # All lyrics sections already have corresponding ABC parts from SheetSage
         return repaired_abc, orig_struct
 
-    # Step 3: Extend ONLY for parts of lyrics that do not have info in ABC
+    # Step 4: Extend ONLY for parts of lyrics that do not have info in ABC
     # Locate outro if present at the end of sections
     outro_idx = None
     for idx in range(len(sections) - 1, -1, -1):
@@ -330,35 +441,34 @@ def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
     for k in extra_sequence:
         if k == "intro":
             sec = templates.get("intro", templates.get("verse", sections))[0]
-            sections.insert(0, {"name": "intro", "kind": "intro", "lines": list(sec["lines"])})
+            sec_lines = ensure_meter_reset(sec["lines"], default_meter)
+            sections.insert(0, {"name": "intro", "kind": "intro", "lines": sec_lines})
             if outro_idx is not None:
                 outro_idx += 1
                 insert_pos += 1
         elif k == "outro":
             if outro_idx is None:
                 sec = templates.get("chorus", templates.get("verse", sections))[-1]
-                sections.append({"name": "outro", "kind": "outro", "lines": list(sec["lines"])})
+                sec_lines = ensure_meter_reset(sec["lines"], default_meter)
+                sections.append({"name": "outro", "kind": "outro", "lines": sec_lines})
                 outro_idx = len(sections) - 1
         else:
             # Middle sections (verse, chorus, bridge, solo): synthesize from closest template
             sec = templates.get(k, templates.get("verse", templates.get("chorus", sections)))[-1]
-            sections.insert(insert_pos, {"name": k, "kind": k, "lines": list(sec["lines"])})
+            sec_lines = ensure_meter_reset(sec["lines"], default_meter)
+            sections.insert(insert_pos, {"name": k, "kind": k, "lines": sec_lines})
             insert_pos += 1
             if outro_idx is not None:
                 outro_idx += 1
 
-    # Step 4: Renumber sections cleanly (e.g. verse 1, verse 2, verse 3...)
-    final_counts = {}
+    # Step 5: Renumber sections cleanly (e.g. verse 1, verse 2, verse 3...)
+    final_counts = Counter(s["kind"] for s in sections)
+    final_running = Counter()
     for s in sections:
         k = s["kind"]
-        final_counts[k] = final_counts.get(k, 0) + 1
-
-    final_running = {}
-    for s in sections:
-        k = s["kind"]
-        final_running[k] = final_running.get(k, 0) + 1
+        final_running[k] += 1
         num = final_running[k]
-        disp = f"{k} {num}" if final_counts[k] > 1 and k in ("verse", "chorus") else k
+        disp = f"{k} {num}" if final_counts[k] > 1 and k in ("verse", "chorus", "bridge", "interlude", "solo") else k
         s["name"] = disp
         s["lines"][0] = f"% {disp}"
 

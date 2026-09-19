@@ -225,15 +225,27 @@ def _prepare_model_for_training(model: torch.nn.Module, target_device: torch.dev
                 mod.comfy_cast_weights = False
 
             for name, param in list(mod.named_parameters(recurse=False)):
-                if param is not None and param.is_inference():
-                    cloned = param.to(target_device).clone()
-                    new_param = torch.nn.Parameter(cloned, requires_grad=param.requires_grad)
-                    setattr(mod, name, new_param)
+                if param is not None:
+                    needs_fix = False
+                    try:
+                        _ = param._version
+                    except RuntimeError:
+                        needs_fix = True
+                    if needs_fix or param.is_inference():
+                        cloned = param.data.to(target_device).clone()
+                        new_param = torch.nn.Parameter(cloned, requires_grad=param.requires_grad)
+                        setattr(mod, name, new_param)
 
             for name, buf in list(mod.named_buffers(recurse=False)):
-                if buf is not None and buf.is_inference():
-                    cloned_buf = buf.to(target_device).clone()
-                    mod.register_buffer(name, cloned_buf, persistent=getattr(buf, "persistent", True))
+                if buf is not None:
+                    needs_fix = False
+                    try:
+                        _ = buf._version
+                    except RuntimeError:
+                        needs_fix = True
+                    if needs_fix or buf.is_inference():
+                        cloned_buf = buf.data.to(target_device).clone()
+                        mod.register_buffer(name, cloned_buf, persistent=getattr(buf, "persistent", True))
 
     def restore():
         for mod, prev_cast in saved_comfy_cast.items():
@@ -692,12 +704,13 @@ class HZ3_YuE2_AudioToLoRA:
             if loaded_vae is None:
                 loaded_vae = checkpoint_bundle[2]
 
-        # Ensure models are loaded onto GPU if managed by ComfyUI
+        # Ensure training models are loaded onto GPU if managed by ComfyUI
+        # VAE is purely an inference model and manages its own GPU memory inside VAE.encode() under inference_mode
         if hasattr(comfy.model_management, "load_models_gpu"):
             try:
                 with torch.inference_mode(False):
                     patchers = []
-                    for m in (loaded_model, loaded_clip, loaded_vae):
+                    for m in (loaded_model, loaded_clip):
                         if m is not None:
                             patchers.append(getattr(m, "patcher", m))
                     to_load = [p for p in patchers if hasattr(p, "model_patches_models") or hasattr(p, "load")]

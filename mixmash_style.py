@@ -27,6 +27,10 @@ You receive JSON with:
    - ALL STYLE PROMPTS MUST BE WRITTEN EXCLUSIVELY IN ENGLISH.
    - All instruments, moods, arrangement actions, and vocal descriptors must be in English (e.g. "Spanish male vocal", "intimate delivery", "punchy drums", "walking bass", "electric piano", "brass section arrives").
    - Never write style descriptions in Spanish or other languages, even if lyrics or instructions are in Spanish. YuE2 requires English style conditioning.
+   - SACRED LORA TRIGGERS & ARTIST IDENTIFIERS:
+     * When a LoRA trigger keyword or artist handle (e.g. "que_hablen_de_mi", "in the style of que_hablen_de_mi", or any lora_trigger in the input) is provided:
+       It is a SACRED IDENTIFIER. NEVER translate, replace, omit, or delete it, even if it contains Spanish words, accents, or underscores.
+       ALWAYS preserve "in the style of <trigger>" in the first global summary line of style_detailed, style_balanced, and style_compact.
    - Lyrics keep their original language (Spanish, English, etc.).
 
 2. MUSICAL HIERARCHY AND ABSOLUTE PRIORITY (analysis > instructions > inference):
@@ -54,7 +58,7 @@ You receive JSON with:
 
 4. HYBRID SECTION STYLE PROMPT (style_detailed):
    - START style_detailed with a single concise global summary line for the track:
-     BPM: <number>, Meter: <meter>, Key: <key>, <core genre and production tags>, <vocal language and type>.
+     BPM: <number>, Meter: <meter>, Key: <key>, <core genre and production tags>, <vocal language and type>[, in the style of <trigger>].
    - Then, for every section in the structure, write an evocative, musical, and precise 1-2 sentence description with its bracketed tag:
      [Section] Describe what enters, develops, or changes: instrumentation, groove, dynamic texture, and vocal character.
    - DO NOT mindlessly repeat the genre name in every section bracket if the genre does not change. Focus on arrangement progression, dynamic builds, and textural contrast.
@@ -476,10 +480,54 @@ def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
     return align_and_repair_abc(extended_raw, lyrics_text=lyrics_text)
 
 
+def _clean_lora_trigger(val: str) -> str:
+    """Extract clean trigger keyword/handle (e.g. 'que_hablen_de_mi' from 'in the style of que_hablen_de_mi')."""
+    if not val:
+        return ""
+    t = str(val).strip()
+    m = re.search(r"\b(?:in\s+the\s+style\s+of|style\s+of)\s+([a-zA-Z0-9_\-]+)", t, re.I)
+    if m:
+        return m.group(1).strip()
+    t = re.sub(r"^(?:critical\s*:\s*)?", "", t, flags=re.I).strip()
+    t = re.sub(r"^(?:in\s+the\s+style\s+of|style\s+of)\s*", "", t, flags=re.I).strip(" ,:.")
+    # Stop at trailing commas, dots, or common instructions
+    t = re.split(r"[,;.\n]|(?:\s+do\s+not\s+)", t, flags=re.I)[0].strip()
+    return t
+
+
+def _ensure_trigger_in_style(style_text: str, trigger: str) -> str:
+    """Procedurally verify and inject 'in the style of <trigger>' into style prompt."""
+    if not trigger or not style_text:
+        return style_text
+    trigger_clean = _clean_lora_trigger(trigger)
+    if not trigger_clean:
+        return style_text
+    trigger_phrase = f"in the style of {trigger_clean}"
+    if re.search(rf"\b{re.escape(trigger_clean)}\b", style_text, re.I):
+        return style_text
+    lines = style_text.splitlines()
+    if not lines:
+        return f"{trigger_phrase}. {style_text}"
+    first = lines[0].strip()
+    if first.endswith("."):
+        first = first[:-1].rstrip() + f", {trigger_phrase}."
+    else:
+        first = first + f", {trigger_phrase}."
+    lines[0] = first
+    return "\n".join(lines)
+
+
 def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", context_3="", section_cues="",
                    model="deepseek-v4.1-flash:cloud", endpoint="http://127.0.0.1:11434", temperature=0.35,
-                   timeout=180, instructions="", structure="", analysis="", context="", abc=""):
+                   timeout=180, instructions="", structure="", analysis="", context="", abc="", lora_trigger=""):
     instructions_text = (instructions or mix_instructions or "").strip()
+
+    # Detect trigger from explicit lora_trigger, or extract from instructions
+    clean_trig = _clean_lora_trigger(lora_trigger)
+    if not clean_trig:
+        m = re.search(r"\b(?:in\s+the\s+style\s+of|style\s+of)\s+([a-zA-Z0-9_\-]+)", instructions_text, re.I)
+        if m:
+            clean_trig = _clean_lora_trigger(m.group(1))
 
     # Resolve structure: explicit structure argument, or parsed from context / context_1
     parsed_struct = _parse_structure(structure)
@@ -541,6 +589,7 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
         "section_vocal_evidence": section_vocal_evidence,
         "analysis": analysis_text,
         "instructions": instructions_text,
+        "lora_trigger": clean_trig,
         "abc": score_text,
         "lyrics": lyrics_text,
         "sources": [{"source": index, "analysis": text} for index, text in enumerate(contexts, 1)],
@@ -586,8 +635,17 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
             bpm_line = lines.pop(bpm_idx)
             lines.insert(0, bpm_line)
             detailed = "\n".join(lines)
+
+    # Procedural trigger injection guarantee
+    if clean_trig:
+        detailed = _ensure_trigger_in_style(detailed, clean_trig)
+
     balanced = result.get("style_balanced", detailed).strip().replace("\n", " ")
     compact = result.get("style_compact", balanced).strip().replace("\n", " ")
+    if clean_trig:
+        balanced = _ensure_trigger_in_style(balanced, clean_trig)
+        compact = _ensure_trigger_in_style(compact, clean_trig)
+
     corrected_lyrics = result.get("corrected_lyrics", result.get("lyrics", lyrics_text)).strip()
     if not detailed:
         raise RuntimeError("Ollama returned an empty YuE2 style.")
@@ -613,6 +671,7 @@ class HZ3_YuE2_MixMashStyle:
                 "timeout": ("INT", {"default": 180, "min": 10, "max": 900}),
             },
             "optional": {
+                "lora_trigger": ("STRING", {"default": "", "tooltip": "Optional LoRA trigger keyword or handle (e.g. que_hablen_de_mi). Strictly preserved and procedurally injected."}),
                 "abc_report": ("STRING", {"forceInput": True, "tooltip": "Connect 'report' (or 'structure') from SheetSage2 Audio to ABC + Sections."}),
                 "audio2style_analysis": ("STRING", {"forceInput": True, "tooltip": "Connect 'analysis' from Audio to Style (Discogs-EffNet). When present, takes priority over instructions."}),
                 "abc": ("STRING", {"forceInput": True, "tooltip": "Connect full ABC score ('abc') from SheetSage2 to procedurally repair and align it."}),
@@ -630,12 +689,14 @@ class HZ3_YuE2_MixMashStyle:
                 temperature=0.35, timeout=180,
                 abc_report="", audio2style_analysis="", abc="",
                 structure="", analysis="", report="", section_cues="",
-                instructions="", lyrics="", context="", extend_abc=False, **kwargs):
+                instructions="", lyrics="", context="", extend_abc=False,
+                lora_trigger="", **kwargs):
         struct = abc_report or structure or report or kwargs.get("abc_report", "") or kwargs.get("structure", "") or kwargs.get("report", "")
         analys = audio2style_analysis or analysis or kwargs.get("audio2style_analysis", "") or kwargs.get("analysis", "") or kwargs.get("audio_analysis", "")
         mix_inst = (instructions or kwargs.get("mix_instructions", "") or "").strip()
         score_input = (abc or section_cues or kwargs.get("abc", "") or kwargs.get("section_cues", "") or "").strip()
         do_extend = bool(extend_abc or kwargs.get("extend_abc", False) or kwargs.get("extend_abc_to_lyrics", False))
+        trigger_val = (lora_trigger or kwargs.get("trigger", "") or kwargs.get("lora_trigger", "") or "").strip()
 
         # Support single context and legacy context_1/2/3/contexto
         ctx = context or kwargs.get("context_1", "") or kwargs.get("contexto", "") or ""
@@ -679,6 +740,7 @@ class HZ3_YuE2_MixMashStyle:
             structure=struct,
             analysis=analys,
             context=ctx,
+            lora_trigger=trigger_val,
         )
         final_lyrics = corrected_lyrics if corrected_lyrics else lyr
         warnings = lyrics_warnings(final_lyrics)

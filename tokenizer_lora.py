@@ -209,12 +209,46 @@ def _make_training_forward(layer):
     return types.MethodType(training_forward, layer)
 
 
+def _prepare_model_for_training(model: torch.nn.Module, target_device: torch.device):
+    """
+    Prepare a model loaded under ComfyUI's inference_mode for autograd training.
+    Re-creates any nn.Parameter or buffer whose underlying C++ TensorImpl was created
+    inside InferenceMode (which prevents version counter tracking during autograd backward).
+    Also temporarily disables comfy_cast_weights during training so ComfyUI doesn't invoke VBAR offloading.
+    Returns a cleanup callable to restore original module states.
+    """
+    saved_comfy_cast = {}
+    with torch.inference_mode(False):
+        for mod in model.modules():
+            if hasattr(mod, "comfy_cast_weights"):
+                saved_comfy_cast[mod] = mod.comfy_cast_weights
+                mod.comfy_cast_weights = False
+
+            for name, param in list(mod.named_parameters(recurse=False)):
+                if param is not None and param.is_inference():
+                    cloned = param.to(target_device).clone()
+                    new_param = torch.nn.Parameter(cloned, requires_grad=param.requires_grad)
+                    setattr(mod, name, new_param)
+
+            for name, buf in list(mod.named_buffers(recurse=False)):
+                if buf is not None and buf.is_inference():
+                    cloned_buf = buf.to(target_device).clone()
+                    mod.register_buffer(name, cloned_buf, persistent=getattr(buf, "persistent", True))
+
+    def restore():
+        for mod, prev_cast in saved_comfy_cast.items():
+            mod.comfy_cast_weights = prev_cast
+
+    return restore
+
+
 def _train_voice_lora(audio_latents, diffusion_model, clip_model=None, trigger="hz3_artist", style_caption="", steps=100, rank=32, alpha=None, lr=5e-4, device="cuda"):
     """Train a LoRA adapter on YuE2's acoustic diffusion transformer (NAR branch)."""
     with torch.inference_mode(False), torch.enable_grad():
         torch_device = torch.device(device if torch.cuda.is_available() else "cpu")
         diffusion_model.to(torch_device)
         audio_latents = audio_latents.detach().clone()
+        restore_model = _prepare_model_for_training(diffusion_model, torch_device)
         
         lora_alpha = float(alpha if alpha is not None else (rank * 2.0))
         
@@ -272,7 +306,8 @@ def _train_voice_lora(audio_latents, diffusion_model, clip_model=None, trigger="
                 with torch.inference_mode():
                     cond, c_chunks = clip_te._acoustic_conditioning(p, dummy_tokens, dtype)
                 if cond is not None and len(c_chunks) > 0:
-                    ctx = cond.to(torch_device, dtype=dtype)
+                    with torch.inference_mode(False):
+                        ctx = cond.to(torch_device, dtype=dtype).clone()
                     chunks = list(c_chunks)
             except Exception:
                 ctx = None
@@ -312,6 +347,7 @@ def _train_voice_lora(audio_latents, diffusion_model, clip_model=None, trigger="
                 
                 losses.append(loss.item())
         finally:
+            restore_model()
             comfy.model_management.in_training = prev_training_state
             llama.apply_rope = orig_apply_rope
             for layer_idx, orig_fwd in original_forwards.items():
@@ -346,6 +382,7 @@ def _train_style_lora(audio_input, clip_model, trigger="hz3_artist", style_capti
         clip_te = clip_model.cond_stage_model
         clip_te.to(torch_device)
         ar_model = clip_te.model
+        restore_model = _prepare_model_for_training(ar_model, torch_device)
         lora_alpha = float(alpha if alpha is not None else (rank * 2.0))
         
         import comfy.text_encoders.llama as llama
@@ -452,6 +489,7 @@ def _train_style_lora(audio_input, clip_model, trigger="hz3_artist", style_capti
                 
                 losses.append(loss.item())
         finally:
+            restore_model()
             comfy.model_management.in_training = prev_training_state
             llama.apply_rope = orig_apply_rope
             for layer_idx, orig_fwd in original_forwards.items():
@@ -657,13 +695,14 @@ class HZ3_YuE2_AudioToLoRA:
         # Ensure models are loaded onto GPU if managed by ComfyUI
         if hasattr(comfy.model_management, "load_models_gpu"):
             try:
-                patchers = []
-                for m in (loaded_model, loaded_clip, loaded_vae):
-                    if m is not None:
-                        patchers.append(getattr(m, "patcher", m))
-                to_load = [p for p in patchers if hasattr(p, "model_patches_models") or hasattr(p, "load")]
-                if to_load:
-                    comfy.model_management.load_models_gpu(to_load)
+                with torch.inference_mode(False):
+                    patchers = []
+                    for m in (loaded_model, loaded_clip, loaded_vae):
+                        if m is not None:
+                            patchers.append(getattr(m, "patcher", m))
+                    to_load = [p for p in patchers if hasattr(p, "model_patches_models") or hasattr(p, "load")]
+                    if to_load:
+                        comfy.model_management.load_models_gpu(to_load, force_full_load=True)
             except Exception:
                 pass
 

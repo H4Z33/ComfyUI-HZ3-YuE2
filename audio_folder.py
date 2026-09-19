@@ -261,6 +261,21 @@ class HZ3_YuE2_AudioFolder:
         }
 
 
+_AUDIO_MIME_TYPES: dict[str, str] = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".flac": "audio/flac",
+    ".opus": "audio/opus",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".webm": "audio/webm",
+    ".wma": "audio/x-ms-wma",
+    ".aiff": "audio/x-aiff",
+    ".alac": "audio/mp4",
+}
+
+
 # Register HTTP API endpoint for dynamic ComfyUI frontend updates
 try:
     from server import PromptServer
@@ -290,6 +305,40 @@ try:
                 "files": [_NO_AUDIO_CHOICE],
                 "count": 0,
             })
+
+    @PromptServer.instance.routes.get("/hz3/yue2/audio_folder/audio")
+    async def _api_get_audio_folder_audio(request: web.Request) -> web.StreamResponse:
+        folder = request.rel_url.query.get("folder", "[input]")
+        custom_folder = request.rel_url.query.get("custom_folder", "")
+        audio_file = request.rel_url.query.get("audio_file", "")
+        subfolders = request.rel_url.query.get("subfolders", "true").lower() in ("true", "1")
+
+        if not audio_file or audio_file == _NO_AUDIO_CHOICE:
+            return web.Response(status=404, text="No audio file selected.")
+
+        try:
+            folder_path = HZ3_YuE2_AudioFolder._resolve_folder_path(folder, custom_folder)
+            file_path = HZ3_YuE2_AudioFolder._resolve_audio_file(folder_path, audio_file, subfolders=subfolders)
+
+            if not file_path.exists() or not file_path.is_file():
+                return web.Response(status=404, text=f"File not found: {file_path}")
+
+            ext = file_path.suffix.lower()
+            if ext not in _AUDIO_EXTENSIONS:
+                return web.Response(status=403, text="Selected file is not an allowed audio format.")
+
+            content_type = _AUDIO_MIME_TYPES.get(ext, "application/octet-stream")
+
+            return web.FileResponse(
+                file_path,
+                headers={
+                    "Content-Type": content_type,
+                    "Accept-Ranges": "bytes",
+                    "Cache-Control": "no-cache",
+                },
+            )
+        except Exception as err:
+            return web.Response(status=400, text=str(err))
 except Exception:
     pass
 

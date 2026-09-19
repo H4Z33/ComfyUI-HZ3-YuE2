@@ -76,13 +76,22 @@ app.registerExtension({
                 return `${m}:${s}`;
             };
 
+            let previewDebounceTimer = null;
+            const debouncedUpdateAudioPreview = (delay = 150) => {
+                if (previewDebounceTimer) {
+                    clearTimeout(previewDebounceTimer);
+                }
+                previewDebounceTimer = setTimeout(() => {
+                    updateAudioPreview();
+                }, delay);
+            };
+
             const updateAudioPreview = () => {
                 if (!audioFileWidget || !audioEl) return;
                 const fileVal = (audioFileWidget.value || "").trim();
                 if (!fileVal || fileVal === "(no audio files found)") {
-                    audioEl.pause();
+                    if (!audioEl.paused) audioEl.pause();
                     audioEl.removeAttribute("src");
-                    audioEl.load();
                     audioEl.dataset.currentSrc = "";
                     infoEl.textContent = "No audio file selected";
                     return;
@@ -100,12 +109,16 @@ app.registerExtension({
                 });
 
                 const newSrc = `/hz3/yue2/audio_folder/audio?${params.toString()}`;
-                if (audioEl.dataset.currentSrc !== newSrc) {
-                    audioEl.dataset.currentSrc = newSrc;
-                    audioEl.src = newSrc;
-                    audioEl.load();
-                    infoEl.textContent = `🎵 ${fileVal}`;
+                if (audioEl.dataset.currentSrc === newSrc) {
+                    return;
                 }
+
+                if (!audioEl.paused) {
+                    audioEl.pause();
+                }
+                audioEl.dataset.currentSrc = newSrc;
+                audioEl.src = newSrc;
+                infoEl.textContent = `🎵 ${fileVal}`;
             };
 
             audioEl.onloadedmetadata = () => {
@@ -148,7 +161,7 @@ app.registerExtension({
                         }
                         this.setDirtyCanvas?.(true, true);
                         app.graph?.setDirtyCanvas(true, true);
-                        updateAudioPreview();
+                        debouncedUpdateAudioPreview(100);
                     }
                 } catch (err) {
                     console.warn("[HZ3 AudioFolder] Failed to refresh audio file list:", err);
@@ -183,7 +196,7 @@ app.registerExtension({
                 const origCallback = audioFileWidget.callback;
                 audioFileWidget.callback = function (value) {
                     origCallback?.apply(this, arguments);
-                    updateAudioPreview();
+                    debouncedUpdateAudioPreview(100);
                 };
             }
 
@@ -193,12 +206,11 @@ app.registerExtension({
             });
 
             // Expose updateAudioPreview for external/configure callers
-            this.hz3UpdateAudioPreview = updateAudioPreview;
+            this.hz3UpdateAudioPreview = debouncedUpdateAudioPreview;
 
             // Initial load sync after widgets are configured
             setTimeout(() => {
                 updateAudioFiles(true);
-                updateAudioPreview();
             }, 200);
 
             return result;
@@ -231,7 +243,7 @@ app.registerExtension({
                             if (currentVal && data.files.includes(currentVal)) {
                                 audioFileWidget.value = currentVal;
                             }
-                            this.hz3UpdateAudioPreview?.();
+                            this.hz3UpdateAudioPreview?.(100);
                             app.graph?.setDirtyCanvas(true, true);
                         }
                     })
@@ -243,7 +255,7 @@ app.registerExtension({
         const onExecuted = nodeType.prototype.onExecuted;
         nodeType.prototype.onExecuted = function (message) {
             onExecuted?.apply(this, arguments);
-            this.hz3UpdateAudioPreview?.();
+            this.hz3UpdateAudioPreview?.(100);
             if (message?.text?.[0] && this.hz3AudioInfo) {
                 const firstLine = message.text[0].split("\n")[0];
                 if (firstLine) this.hz3AudioInfo.textContent = firstLine;

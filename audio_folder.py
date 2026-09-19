@@ -276,6 +276,32 @@ _AUDIO_MIME_TYPES: dict[str, str] = {
 }
 
 
+import sys
+
+# Silence benign WinError 10054 when clients (browsers) cancel audio streaming requests on Windows
+if sys.platform == "win32":
+    try:
+        from asyncio.proactor_events import _ProactorBasePipeTransport
+
+        _orig_call_connection_lost = _ProactorBasePipeTransport._call_connection_lost
+
+        def _silenced_call_connection_lost(self, exc):
+            try:
+                _orig_call_connection_lost(self, exc)
+            except (ConnectionResetError, OSError):
+                if hasattr(self, "_sock") and self._sock:
+                    try:
+                        self._sock.close()
+                    except Exception:
+                        pass
+                    self._sock = None
+                self._called_connection_lost = True
+
+        _ProactorBasePipeTransport._call_connection_lost = _silenced_call_connection_lost
+    except Exception:
+        pass
+
+
 # Register HTTP API endpoint for dynamic ComfyUI frontend updates
 try:
     from server import PromptServer
@@ -334,7 +360,7 @@ try:
                 headers={
                     "Content-Type": content_type,
                     "Accept-Ranges": "bytes",
-                    "Cache-Control": "no-cache",
+                    "Cache-Control": "private, max-age=3600",
                 },
             )
         except Exception as err:

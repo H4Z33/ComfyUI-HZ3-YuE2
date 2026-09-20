@@ -523,11 +523,120 @@ def vocal_bar_to_ins_melody(vocal_bar: str) -> str:
     return cleaned if cleaned else "Z"
 
 
-def convert_abc_to_karaoke(abc_text: str) -> str:
+def lyrics_has_intro(lyrics_text: str) -> bool:
+    """Check if lyrics contains an [Intro] section tag."""
+    if not lyrics_text:
+        return False
+    return bool(re.search(r"^\s*\[\s*intro[^\]]*\]", str(lyrics_text), re.I | re.M))
+
+
+def abc_has_intro(abc_text: str) -> bool:
+    """Check if ABC score contains an % intro section comment."""
+    if not abc_text:
+        return False
+    return bool(re.search(r"^\s*%\s*\[?\s*intro\b", str(abc_text), re.I | re.M))
+
+
+def get_abc_intro_params(abc_text: str) -> tuple[str, int]:
+    """Determine chord and measure duration in units of L: from the given ABC."""
+    lines = str(abc_text).replace("\r\n", "\n").splitlines()
+    n, d = 4, 4
+    for line in lines:
+        m = re.match(r"^M:\s*([1-9][0-9]*)/([1-9][0-9]*)", line.strip())
+        if m:
+            n, d = int(m.group(1)), int(m.group(2))
+            break
+
+    den = 32
+    for line in lines:
+        m = re.match(r"^L:\s*1/([1-9][0-9]*)", line.strip())
+        if m:
+            den = int(m.group(1))
+            break
+
+    bar_units = (n * den) // d
+    if bar_units <= 0:
+        bar_units = 32
+
+    # Check first music line for actual bar duration & chord
+    k_idx = -1
+    for i, l in enumerate(lines):
+        if l.startswith("K:"):
+            k_idx = i
+            break
+
+    chord = None
+    if k_idx != -1:
+        for line in lines[k_idx + 1:]:
+            stripped = line.strip()
+            if stripped.startswith(("%", "V:")):
+                continue
+            bars = [b.strip() for b in stripped[:-1].split("|") if b.strip()] if stripped.endswith("|") else [stripped]
+            if bars:
+                first_bar = bars[0]
+                measured = 0
+                for match in TOKEN.finditer(first_bar):
+                    c = match.group("chord")
+                    if c and not chord:
+                        chord = c.strip()
+                    note = match.group("note")
+                    if note:
+                        measured += int(match.group("duration") or "1")
+                if measured in (16, 24, 32, 48):
+                    bar_units = measured
+                break
+
+    if not chord:
+        for line in lines:
+            m = re.match(r"^K:\s*([A-Ga-g][#b]?(?:m|maj|min)?)", line.strip())
+            if m:
+                chord = m.group(1).strip()
+                break
+
+    if not chord:
+        chord = "F"
+
+    return chord, bar_units
+
+
+def insert_karaoke_intro(abc_text: str) -> str:
+    """Insert an intro section with V: Vocal only (no V: Ins) if not already present."""
+    if not abc_text or not str(abc_text).strip():
+        return abc_text
+
+    if abc_has_intro(abc_text):
+        return abc_text
+
+    lines = str(abc_text).replace("\r\n", "\n").splitlines()
+    k_idx = -1
+    for i, l in enumerate(lines):
+        if l.startswith("K:"):
+            k_idx = i
+            break
+    if k_idx == -1:
+        return abc_text
+
+    header = lines[:k_idx + 1]
+    body = lines[k_idx + 1:]
+
+    chord, bar_units = get_abc_intro_params(abc_text)
+    intro_music_line = f'"{chord}"z{bar_units}|' * 4
+
+    intro_lines = [
+        "% intro",
+        "V: Vocal",
+        intro_music_line,
+    ]
+
+    return "\n".join(header + intro_lines + body) + "\n"
+
+
+def convert_abc_to_karaoke(abc_text: str, lyrics_text: str = "") -> str:
     """Convert ABC score from Vocal melody to Instrumental melody (V: Ins).
 
     V: Vocal keeps the chords placed over rests (no sung notes).
     V: Ins receives the melody notes (stripped of chord annotations).
+    If lyrics have [Intro] but ABC does not, adds an intro section with V: Vocal only (no V: Ins).
     """
     if not abc_text or not str(abc_text).strip():
         return abc_text
@@ -567,11 +676,12 @@ def convert_abc_to_karaoke(abc_text: str) -> str:
             vocal_music_line = body[i]
             i += 1
 
-            # Expect V: Ins
+            # Expect V: Ins, stopping if next section or V: Vocal encountered
             i_headers = []
-            while i < len(body) and not body[i].strip().startswith("V: Ins"):
+            while i < len(body) and not body[i].strip().startswith(("V: Ins", "% ", "V: Vocal")):
                 i += 1
-            if i < len(body) and body[i].strip() == "V: Ins":
+            has_ins = (i < len(body) and body[i].strip() == "V: Ins")
+            if has_ins:
                 i_headers.append(body[i])
                 i += 1
                 while i < len(body) and body[i].strip().startswith(("M:", "K:")):
@@ -583,14 +693,13 @@ def convert_abc_to_karaoke(abc_text: str) -> str:
                 else:
                     ins_music_line = "Z|"
             else:
-                i_headers = ["V: Ins"]
-                ins_music_line = "Z|"
+                ins_music_line = None
 
             # Transform bars
             v_bars = [b.strip() for b in vocal_music_line[:-1].split("|") if b.strip()] if vocal_music_line.endswith("|") else [vocal_music_line]
-            has_vocal_notes = any(re.search(r"[A-Ga-g]", b) for b in v_bars)
+            has_vocal_notes = any(re.search(r"[A-Ga-g]", re.sub(r'"[^"]*"', "", b)) for b in v_bars)
 
-            if has_vocal_notes:
+            if has_vocal_notes and ins_music_line is not None:
                 new_v_bars = [vocal_bar_to_chords_only(b) for b in v_bars]
                 new_i_bars = [vocal_bar_to_ins_melody(b) for b in v_bars]
                 new_v_line = "|".join(new_v_bars) + "|"
@@ -601,13 +710,19 @@ def convert_abc_to_karaoke(abc_text: str) -> str:
 
             new_body.extend(v_headers)
             new_body.append(new_v_line)
-            new_body.extend(i_headers)
-            new_body.append(new_i_line)
+            if new_i_line is not None:
+                new_body.extend(i_headers)
+                new_body.append(new_i_line)
         else:
             new_body.append(line)
             i += 1
 
-    return "\n".join(header + new_body) + "\n"
+    converted = "\n".join(header + new_body) + "\n"
+
+    if lyrics_has_intro(lyrics_text) and not abc_has_intro(converted):
+        converted = insert_karaoke_intro(converted)
+
+    return converted
 
 
 def extract_karaoke_sections(lyrics_text: str = "", structure: list[dict] | None = None) -> str:
@@ -878,7 +993,10 @@ class HZ3_YuE2_MixMashStyle:
                         healed_struct = extended_struct
 
             if is_karaoke and abc_repaired:
-                abc_repaired = convert_abc_to_karaoke(abc_repaired)
+                abc_repaired = convert_abc_to_karaoke(abc_repaired, lyr)
+                if lyrics_has_intro(lyr) and healed_struct and isinstance(healed_struct, list):
+                    if not any(s.get("name", "").lower() == "intro" for s in healed_struct):
+                        healed_struct.insert(0, {"name": "intro", "start": 0.0, "end": 0.0})
 
             if healed_struct and (not struct or (isinstance(struct, (list, tuple)) and len(struct) < len(healed_struct)) or (isinstance(struct, str) and struct.count('"name"') < len(healed_struct))):
                 struct = json.dumps(healed_struct, ensure_ascii=False)
@@ -906,6 +1024,8 @@ class HZ3_YuE2_MixMashStyle:
         final_lyrics = corrected_lyrics if corrected_lyrics else lyr
         if is_karaoke:
             final_lyrics = extract_karaoke_sections(final_lyrics or lyr, healed_struct if score_input else None)
+            if abc_repaired and lyrics_has_intro(final_lyrics) and not abc_has_intro(abc_repaired):
+                abc_repaired = insert_karaoke_intro(abc_repaired)
 
         warnings = lyrics_warnings(final_lyrics)
         ext_note = ""

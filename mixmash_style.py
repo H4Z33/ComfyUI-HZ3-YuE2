@@ -626,6 +626,8 @@ def insert_karaoke_intro(abc_text: str) -> str:
         "% intro",
         "V: Vocal",
         intro_music_line,
+        "V: Ins",
+        "Z|" * 4,
     ]
 
     return "\n".join(header + intro_lines + body) + "\n"
@@ -968,7 +970,12 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Ollama returned invalid JSON: {content[:500]}") from exc
     legacy = result.get("style", "")
-    detailed = result.get("style_detailed", legacy).strip()
+    if isinstance(legacy, list):
+        legacy = "\n".join(str(x) for x in legacy)
+    detailed_raw = result.get("style_detailed", legacy)
+    if isinstance(detailed_raw, list):
+        detailed_raw = "\n".join(str(x) for x in detailed_raw)
+    detailed = str(detailed_raw or "").strip()
     detailed = re.sub(r"\n{3,}", "\n\n", detailed)
     # Ensure global info line (BPM, Meter, Key, Genre...) is at the beginning of style_detailed
     lines = [l.strip() for l in detailed.splitlines() if l.strip()]
@@ -987,13 +994,23 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
     if clean_trig:
         detailed = _ensure_trigger_in_style(detailed, clean_trig)
 
-    balanced = result.get("style_balanced", detailed).strip().replace("\n", " ")
-    compact = result.get("style_compact", balanced).strip().replace("\n", " ")
+    balanced_raw = result.get("style_balanced", detailed)
+    if isinstance(balanced_raw, list):
+        balanced_raw = " ".join(str(x) for x in balanced_raw)
+    balanced = str(balanced_raw or "").strip().replace("\n", " ")
+
+    compact_raw = result.get("style_compact", balanced)
+    if isinstance(compact_raw, list):
+        compact_raw = " ".join(str(x) for x in compact_raw)
+    compact = str(compact_raw or "").strip().replace("\n", " ")
     if clean_trig:
         balanced = _ensure_trigger_in_style(balanced, clean_trig)
         compact = _ensure_trigger_in_style(compact, clean_trig)
 
-    corrected_lyrics = result.get("corrected_lyrics", result.get("lyrics", lyrics_text)).strip()
+    corr_raw = result.get("corrected_lyrics", result.get("lyrics", lyrics_text))
+    if isinstance(corr_raw, list):
+        corr_raw = "\n".join(str(x) for x in corr_raw)
+    corrected_lyrics = str(corr_raw or "").strip()
     if not detailed:
         raise RuntimeError("Ollama returned an empty YuE2 style.")
     report = json.dumps(result, ensure_ascii=False, indent=2)

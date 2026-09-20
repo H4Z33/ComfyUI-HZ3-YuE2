@@ -425,44 +425,78 @@ def align_score_and_lyrics(
 
     # Parse and repair score
     repaired_abc, _ = align_and_repair_abc(abc_text, lyrics_text=lyrics_text)
-    info = inspect_score(repaired_abc, lyrics_text)
-    bpm = float(info.get("bpm", 120))
-    meter = info.get("meter", "4/4")
-    key = info.get("key", "C")
-    total_duration = float(info.get("seconds", 0.0)) + intro_silence
+    try:
+        info = inspect_score(repaired_abc, lyrics_text)
+    except Exception as exc:
+        logger.warning(f"inspect_score strict parse fallback: {exc}")
+        info = None
 
-    # Extract vocal and instrumental notes
-    vocal_raw = info.get("roll", {}).get("tracks", {}).get("Vocal", [])
-    ins_raw = info.get("roll", {}).get("tracks", {}).get("Ins", [])
-    seconds_per_tick = 60.0 / (bpm * 256.0)
+    if info:
+        bpm = float(info.get("bpm", 120))
+        meter = info.get("meter", "4/4")
+        key = info.get("key", "C")
+        total_duration = float(info.get("seconds", 0.0)) + intro_silence
 
-    vocal_notes = []
-    for n in vocal_raw:
-        s = n["start"] * seconds_per_tick + intro_silence
-        dur = n["duration"] * seconds_per_tick
-        vocal_notes.append({"start": s, "end": s + dur, "duration": dur, "pitch": n.get("pitch", 60)})
+        # Extract vocal and instrumental notes
+        vocal_raw = info.get("roll", {}).get("tracks", {}).get("Vocal", [])
+        ins_raw = info.get("roll", {}).get("tracks", {}).get("Ins", [])
+        seconds_per_tick = 60.0 / (bpm * 256.0)
 
-    ins_notes = []
-    for n in ins_raw:
-        s = n["start"] * seconds_per_tick + intro_silence
-        dur = n["duration"] * seconds_per_tick
-        ins_notes.append({"start": s, "end": s + dur, "duration": dur, "pitch": n.get("pitch", 48)})
+        vocal_notes = []
+        for n in vocal_raw:
+            s = n["start"] * seconds_per_tick + intro_silence
+            dur = n["duration"] * seconds_per_tick
+            vocal_notes.append({"start": s, "end": s + dur, "duration": dur, "pitch": n.get("pitch", 60)})
 
-    melody_events = vocal_notes if len(vocal_notes) > 0 else ins_notes
+        ins_notes = []
+        for n in ins_raw:
+            s = n["start"] * seconds_per_tick + intro_silence
+            dur = n["duration"] * seconds_per_tick
+            ins_notes.append({"start": s, "end": s + dur, "duration": dur, "pitch": n.get("pitch", 48)})
 
-    # Extract score sections
-    sections_raw = info.get("roll", {}).get("sections", [])
-    bar_ticks = info.get("roll", {}).get("bar_ticks", 1024)
-    sections = []
-    for s in sections_raw:
-        t_start = (s["start"] * bar_ticks / 256.0) * (60.0 / bpm) + intro_silence
-        t_end = t_start + (s["bars"] * bar_ticks / 256.0) * (60.0 / bpm)
-        sections.append({
-            "name": s.get("name", "section").lower().strip(),
-            "norm": normalize_section_label(s.get("name", "")),
-            "start": t_start,
-            "end": t_end,
-        })
+        melody_events = vocal_notes if len(vocal_notes) > 0 else ins_notes
+
+        # Extract score sections
+        sections_raw = info.get("roll", {}).get("sections", [])
+        bar_ticks = info.get("roll", {}).get("bar_ticks", 1024)
+        sections = []
+        for s in sections_raw:
+            t_start = (s["start"] * bar_ticks / 256.0) * (60.0 / bpm) + intro_silence
+            t_end = t_start + (s["bars"] * bar_ticks / 256.0) * (60.0 / bpm)
+            sections.append({
+                "name": s.get("name", "section").lower().strip(),
+                "norm": normalize_section_label(s.get("name", "")),
+                "start": t_start,
+                "end": t_end,
+            })
+    else:
+        # Fallback metadata from raw ABC header lines
+        bpm_m = re.search(r"^Q:1/4=(\d+)", repaired_abc, re.MULTILINE)
+        bpm = float(bpm_m.group(1)) if bpm_m else 120.0
+        meter_m = re.search(r"^M:(\S+)", repaired_abc, re.MULTILINE)
+        meter = meter_m.group(1) if meter_m else "4/4"
+        key_m = re.search(r"^K:(\S+)", repaired_abc, re.MULTILINE)
+        key = key_m.group(1) if key_m else "C"
+
+        vocal_notes = []
+        ins_notes = []
+        melody_events = []
+
+        # Extract sections by comment lines
+        sections = []
+        cur_t = intro_silence
+        sec_re = re.compile(r"^%\s*([a-zA-Z0-9_\s\-]+)", re.MULTILINE)
+        sec_names = sec_re.findall(repaired_abc)
+        approx_sec_dur = 16.0 * (60.0 / bpm)
+        for s_name in sec_names:
+            sections.append({
+                "name": s_name.lower().strip(),
+                "norm": normalize_section_label(s_name),
+                "start": cur_t,
+                "end": cur_t + approx_sec_dur,
+            })
+            cur_t += approx_sec_dur
+        total_duration = cur_t if sections else (intro_silence + 60.0)
     if not sections:
         sections = [{"name": "song", "norm": "song", "start": intro_silence, "end": total_duration}]
 

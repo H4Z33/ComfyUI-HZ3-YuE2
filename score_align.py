@@ -204,6 +204,74 @@ def align_and_repair_abc(raw_abc: str, whisper_segments=None, lyrics_text: str =
                         new_lines.insert(i, "% outro")
                         break
 
+        # Voice Healing Pass: Ensure every section/group has BOTH V: Vocal and V: Ins
+        # with identical measure counts, matching native YuE2 two-voice invariants.
+        healed_lines = []
+        body_start_idx = k_idx + 1
+        healed_lines.extend(new_lines[:body_start_idx])
+
+        b_idx = body_start_idx
+        while b_idx < len(new_lines):
+            line = new_lines[b_idx]
+            if line.startswith("% "):
+                healed_lines.append(line)
+                b_idx += 1
+                continue
+
+            if line.startswith("V: Vocal"):
+                v_headers = [line]
+                b_idx += 1
+                while b_idx < len(new_lines) and new_lines[b_idx].startswith(("M:", "K:")):
+                    v_headers.append(new_lines[b_idx])
+                    b_idx += 1
+                v_music = new_lines[b_idx] if b_idx < len(new_lines) else "Z|"
+                b_idx += 1
+
+                # Calculate bar count from Vocal
+                v_bars = [b.strip() for b in v_music[:-1].split("|") if b.strip()] if v_music.endswith("|") else [v_music]
+                bar_count = len(v_bars) if v_bars else 4
+
+                # Look ahead for V: Ins
+                if b_idx < len(new_lines) and new_lines[b_idx].startswith("V: Ins"):
+                    i_headers = [new_lines[b_idx]]
+                    b_idx += 1
+                    while b_idx < len(new_lines) and new_lines[b_idx].startswith(("M:", "K:")):
+                        i_headers.append(new_lines[b_idx])
+                        b_idx += 1
+                    i_music = new_lines[b_idx] if b_idx < len(new_lines) else ("Z|" * bar_count)
+                    b_idx += 1
+                else:
+                    # Missing V: Ins -> Synthesize silent measures matching Vocal
+                    i_headers = ["V: Ins"]
+                    i_music = "Z|" * bar_count
+
+                healed_lines.extend(v_headers)
+                healed_lines.append(v_music)
+                healed_lines.extend(i_headers)
+                healed_lines.append(i_music)
+            elif line.startswith("V: Ins"):
+                # Group started with V: Ins without V: Vocal
+                i_headers = [line]
+                b_idx += 1
+                while b_idx < len(new_lines) and new_lines[b_idx].startswith(("M:", "K:")):
+                    i_headers.append(new_lines[b_idx])
+                    b_idx += 1
+                i_music = new_lines[b_idx] if b_idx < len(new_lines) else "Z|"
+                b_idx += 1
+                i_bars = [b.strip() for b in i_music[:-1].split("|") if b.strip()] if i_music.endswith("|") else [i_music]
+                bar_count = len(i_bars) if i_bars else 4
+
+                # Insert synthesized Vocal rests before Ins
+                healed_lines.append("V: Vocal")
+                healed_lines.append("Z|" * bar_count)
+                healed_lines.extend(i_headers)
+                healed_lines.append(i_music)
+            else:
+                healed_lines.append(line)
+                b_idx += 1
+
+        new_lines = healed_lines
+
         result_abc = "\n".join(new_lines) + "\n"
 
         # Try strict parse to extract high precision timeline and bar metrics

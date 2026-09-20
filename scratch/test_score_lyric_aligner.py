@@ -219,6 +219,35 @@ def test_frame_render():
     print("PASS: Frame render test.")
 
 
+def test_missing_ins_in_intro():
+    print("\n--- Test: ABC with Intro missing V: Ins ---")
+    broken_intro_abc = """X:1
+T:
+M:4/4
+L:1/8
+Q:1/4=66
+K:Eb
+% intro
+V: Vocal
+"Eb"z32|"Eb"z32|"Eb"z32|"Eb"z32|
+% verse
+V: Vocal
+"Ebmaj7" G2 G2 G2 F2 | "Cm7" E2 E2 D2 C2 | "Abmaj7" C2 D2 E2 F2 | "Bb7" G4 F4 |
+V: Ins
+G8 | C8 | A,8 | B,8 |
+"""
+    node = HZ3_YuE2_ScoreLyricAligner()
+    out = node.align_lyrics(
+        lyrics=CLEAN_LYRICS,
+        abc=broken_intro_abc,
+        whisper_segments=WHISPER_SEGMENTS,
+    )
+    assert out["result"][0]
+    data = json.loads(out["result"][0])
+    assert len(data) > 0
+    print(f"PASS: ABC with Intro missing V: Ins was healed and parsed cleanly ({len(data)} lines)!")
+
+
 if __name__ == "__main__":
     test_similarity()
     test_hybrid_alignment()
@@ -226,4 +255,5 @@ if __name__ == "__main__":
     test_aligner_node()
     test_visualizer_integration()
     test_frame_render()
+    test_missing_ins_in_intro()
     print("\nALL TESTS PASSED SUCCESSFULLY!")

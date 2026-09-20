@@ -198,8 +198,15 @@ class HZ3_YuE2_KaraokeVisualizer:
                 "render_image_batch": (
                     "BOOLEAN",
                     {
-                        "default": True,
-                        "tooltip": "Output IMAGE tensor to ComfyUI. Recommended True for clips (<60s).",
+                        "default": False,
+                        "tooltip": "Output IMAGE tensor batch to ComfyUI. Default False (recommended to save RAM; the MP4 video is saved and previewed directly).",
+                    },
+                ),
+                "encoder": (
+                    ["Auto (NVENC / CPU)", "h264_nvenc (GPU)", "libx264 (CPU)"],
+                    {
+                        "default": "Auto (NVENC / CPU)",
+                        "tooltip": "Video encoder. Auto uses Nvidia GPU hardware NVENC if available (~3x faster), with automatic fallback to CPU libx264.",
                     },
                 ),
                 "max_duration": (
@@ -1004,7 +1011,8 @@ class HZ3_YuE2_KaraokeVisualizer:
         font_size: int = 38,
         filename_prefix: str = "video/HZ3-Karaoke",
         save_video: bool = True,
-        render_image_batch: bool = True,
+        render_image_batch: bool = False,
+        encoder: str = "Auto (NVENC / CPU)",
         max_duration: float = 0.0,
     ):
         t_start = time.time()
@@ -1068,22 +1076,34 @@ class HZ3_YuE2_KaraokeVisualizer:
         # Setup PyAV Container
         container = av.open(video_full_path, mode="w")
 
-        # Video stream: CPU-only libx264 ensures ZERO GPU VRAM usage and zero contention with active CUDA renders
+        # Video stream: Auto/GPU uses h264_nvenc for ~3x faster encoding with negligible VRAM (~50MB)
+        if "nvenc" in encoder.lower():
+            candidate_codecs = ("h264_nvenc",)
+        elif "libx264" in encoder.lower():
+            candidate_codecs = ("libx264", "mpeg4")
+        else:  # "Auto (NVENC / CPU)"
+            candidate_codecs = ("h264_nvenc", "libx264", "mpeg4")
+
         v_stream = None
-        for codec_name in ("libx264", "mpeg4"):
+        chosen_codec = None
+        for codec_name in candidate_codecs:
             try:
                 v_stream = container.add_stream(codec_name, rate=fps)
                 v_stream.width = width
                 v_stream.height = height
                 v_stream.pix_fmt = "yuv420p"
-                if codec_name == "libx264":
+                if codec_name == "h264_nvenc":
+                    v_stream.options = {"preset": "fast", "cq": "22"}
+                elif codec_name == "libx264":
                     v_stream.options = {"preset": "fast", "crf": "21"}
+                chosen_codec = codec_name
                 break
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Could not initialize video codec '{codec_name}': {e}")
                 continue
 
         if v_stream is None:
-            raise RuntimeError("Failed to initialize video encoder with libx264 or mpeg4.")
+            raise RuntimeError(f"Failed to initialize video encoder with any candidate from {candidate_codecs}.")
 
         # Audio stream
         a_stream = None
@@ -1237,7 +1257,7 @@ class HZ3_YuE2_KaraokeVisualizer:
 
         report = (
             f"Rendered Karaoke & Visualizer · {total_frames} frames ({total_duration:.1f}s) @ {fps}fps\n"
-            f"Resolution: {width}x{height} · Speed: {fps_rendered:.1f} fps ({elapsed:.2f}s total)\n"
+            f"Encoder: {chosen_codec} · Resolution: {width}x{height} · Speed: {fps_rendered:.1f} fps ({elapsed:.2f}s total)\n"
             f"Saved MP4: {video_full_path}"
         )
 

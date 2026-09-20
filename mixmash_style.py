@@ -919,10 +919,10 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
 class HZ3_YuE2_MixMashStyle:
     CATEGORY = "HZ3 YuE2"
     FUNCTION = "compose"
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("style", "lyrics", "abc_repaired", "style_compact", "style_balanced")
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("style", "lyrics", "abc_repaired", "style_compact", "style_balanced", "abc_karaoke", "sections_karaoke")
     OUTPUT_NODE = True
-    DESCRIPTION = "Ask an Ollama model to turn audio analysis, structure and lyrics into a coherent multi-section YuE2 style prompt and formatted lyrics, with procedural ABC repair."
+    DESCRIPTION = "Ask an Ollama model to turn audio analysis, structure and lyrics into a coherent multi-section YuE2 style prompt and formatted lyrics, with procedural ABC repair and specialized karaoke outputs."
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -947,7 +947,7 @@ class HZ3_YuE2_MixMashStyle:
                 }),
                 "karaoke_mode": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Karaoke Mode: Converts ABC vocal melody to instrumental (V: Ins) while keeping chords in V: Vocal, and outputs lyrics with only bracketed section tags [Section] separated by a blank line, without lyric words."
+                    "tooltip": "Karaoke Mode: When enabled, activates inserting an % intro section with vocal rests if lyrics has [Intro] and ABC does not. Use the specialized outputs 'abc_karaoke' (melody in Ins, chords in Vocal) and 'sections_karaoke' (sections only, no words) for instrumental/karaoke routing."
                 }),
             },
         }
@@ -965,10 +965,6 @@ class HZ3_YuE2_MixMashStyle:
         do_extend = bool(extend_abc or kwargs.get("extend_abc", False) or kwargs.get("extend_abc_to_lyrics", False))
         is_karaoke = bool(karaoke_mode or kwargs.get("karaoke_mode", False) or kwargs.get("karaoke", False))
         trigger_val = (lora_trigger or kwargs.get("trigger", "") or kwargs.get("lora_trigger", "") or "").strip()
-
-        if is_karaoke:
-            karaoke_directive = "Karaoke Mode enabled: generate an instrumental arrangement with lead instruments playing the vocal melody, instrumental only, no singing vocals."
-            mix_inst = (mix_inst + "\n" + karaoke_directive).strip()
 
         # Support single context and legacy context_1/2/3/contexto
         ctx = context or kwargs.get("context_1", "") or kwargs.get("contexto", "") or ""
@@ -992,11 +988,13 @@ class HZ3_YuE2_MixMashStyle:
                     if extended_struct:
                         healed_struct = extended_struct
 
+            # Karaoke mode switch ONLY activates inserting % intro with vocal rests
             if is_karaoke and abc_repaired:
-                abc_repaired = convert_abc_to_karaoke(abc_repaired, lyr)
-                if lyrics_has_intro(lyr) and healed_struct and isinstance(healed_struct, list):
-                    if not any(s.get("name", "").lower() == "intro" for s in healed_struct):
-                        healed_struct.insert(0, {"name": "intro", "start": 0.0, "end": 0.0})
+                if lyrics_has_intro(lyr) and not abc_has_intro(abc_repaired):
+                    abc_repaired = insert_karaoke_intro(abc_repaired)
+                    if healed_struct and isinstance(healed_struct, list):
+                        if not any(s.get("name", "").lower() == "intro" for s in healed_struct):
+                            healed_struct.insert(0, {"name": "intro", "start": 0.0, "end": 0.0})
 
             if healed_struct and (not struct or (isinstance(struct, (list, tuple)) and len(struct) < len(healed_struct)) or (isinstance(struct, str) and struct.count('"name"') < len(healed_struct))):
                 struct = json.dumps(healed_struct, ensure_ascii=False)
@@ -1022,25 +1020,34 @@ class HZ3_YuE2_MixMashStyle:
             lora_trigger=trigger_val,
         )
         final_lyrics = corrected_lyrics if corrected_lyrics else lyr
-        if is_karaoke:
-            final_lyrics = extract_karaoke_sections(final_lyrics or lyr, healed_struct if score_input else None)
-            if abc_repaired and lyrics_has_intro(final_lyrics) and not abc_has_intro(abc_repaired):
-                abc_repaired = insert_karaoke_intro(abc_repaired)
+
+        # If karaoke_mode is on and Ollama produced [Intro], ensure % intro in abc_repaired
+        if is_karaoke and abc_repaired and lyrics_has_intro(final_lyrics) and not abc_has_intro(abc_repaired):
+            abc_repaired = insert_karaoke_intro(abc_repaired)
+
+        # Specialized outputs:
+        # 1. abc_karaoke: sections without Vocal melody (melody in Ins, chords over rests in Vocal, intro without Ins)
+        abc_karaoke = convert_abc_to_karaoke(abc_repaired, final_lyrics or lyr) if abc_repaired else ""
+
+        # 2. sections_karaoke: section tags without lyric words ([Section]\n\n[Section])
+        sections_karaoke = extract_karaoke_sections(final_lyrics or lyr, healed_struct if score_input else None)
 
         warnings = lyrics_warnings(final_lyrics)
         ext_note = ""
         if do_extend and score_input and healed_struct:
             ext_note = f" (extended to {len(healed_struct)} sections)"
-        karaoke_note = " [Karaoke Mode]" if is_karaoke else ""
-        visible = ("DETAILED STYLE (output: style" + karaoke_note + "):\n" + style +
-                   "\n\nCORRECTED LYRICS (output: lyrics" + karaoke_note + "):\n" + final_lyrics +
-                   "\n\nREPAIRED ABC (output: abc_repaired" + ext_note + karaoke_note + "):\n" + (abc_repaired[:300] + "..." if len(abc_repaired) > 300 else abc_repaired) +
+        intro_note = " [Intro Added]" if (is_karaoke and lyrics_has_intro(final_lyrics)) else ""
+        visible = ("DETAILED STYLE (output: style):\n" + style +
+                   "\n\nCORRECTED LYRICS (output: lyrics):\n" + final_lyrics +
+                   "\n\nREPAIRED ABC (output: abc_repaired" + ext_note + intro_note + "):\n" + (abc_repaired[:300] + "..." if len(abc_repaired) > 300 else abc_repaired) +
+                   "\n\nKARAOKE ABC (output: abc_karaoke):\n" + (abc_karaoke[:300] + "..." if len(abc_karaoke) > 300 else abc_karaoke) +
+                   "\n\nKARAOKE SECTIONS (output: sections_karaoke):\n" + sections_karaoke +
                    "\n\nBALANCED STYLE:\n" + balanced +
                    "\n\nCOMPACT STYLE:\n" + compact)
         if warnings:
             visible += "\n\nLYRICS CHECK:\n- " + "\n- ".join(warnings)
         return {"ui": {"text": [visible]},
-                "result": (style, final_lyrics, abc_repaired, compact, balanced)}
+                "result": (style, final_lyrics, abc_repaired, compact, balanced, abc_karaoke, sections_karaoke)}
 
 
 LYRICS_EDIT_MODES = {"punctuation_only", "light_rewrite", "fit_to_score"}

@@ -9,8 +9,10 @@ from pathlib import Path
 
 try:
     from .score_align import align_and_repair_abc, normalize_section_label
+    from .abc_score import TOKEN
 except (ImportError, ValueError):
     from score_align import align_and_repair_abc, normalize_section_label
+    from abc_score import TOKEN
 
 SYSTEM_PROMPT = """You are an expert music producer and prompt engineer writing style prompts and formatting lyrics for YuE2 music generation.
 
@@ -480,6 +482,152 @@ def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
     return align_and_repair_abc(extended_raw, lyrics_text=lyrics_text)
 
 
+def vocal_bar_to_chords_only(vocal_bar: str) -> str:
+    """Convert vocal bar to rests while preserving chord symbols at their exact offsets."""
+    cursor = 0
+    events = []
+    while cursor < len(vocal_bar):
+        if vocal_bar[cursor].isspace():
+            cursor += 1
+            continue
+        m = TOKEN.match(vocal_bar, cursor)
+        if not m:
+            break
+        cursor = m.end()
+        chord = m.group("chord")
+        note = m.group("note")
+        dur = int(m.group("duration") or "1") if note else 0
+        events.append((chord, note, dur))
+
+    chords_with_dur = []
+    curr_chord = None
+    curr_dur = 0
+    for chord, note, dur in events:
+        if chord is not None:
+            if curr_chord is not None:
+                chords_with_dur.append((curr_chord, curr_dur))
+                curr_dur = 0
+            curr_chord = chord
+        curr_dur += dur
+    if curr_chord is not None:
+        chords_with_dur.append((curr_chord, curr_dur))
+
+    if not chords_with_dur:
+        return "Z"
+    return "".join(f'"{c}"z{d if d > 1 else ""}' for c, d in chords_with_dur)
+
+
+def vocal_bar_to_ins_melody(vocal_bar: str) -> str:
+    """Strip chord annotations from vocal bar so notes become pure instrumental melody."""
+    cleaned = re.sub(r'"[^"]*"', "", vocal_bar).strip()
+    return cleaned if cleaned else "Z"
+
+
+def convert_abc_to_karaoke(abc_text: str) -> str:
+    """Convert ABC score from Vocal melody to Instrumental melody (V: Ins).
+
+    V: Vocal keeps the chords placed over rests (no sung notes).
+    V: Ins receives the melody notes (stripped of chord annotations).
+    """
+    if not abc_text or not str(abc_text).strip():
+        return abc_text
+
+    lines = str(abc_text).replace("\r\n", "\n").splitlines()
+    k_idx = -1
+    for i, l in enumerate(lines):
+        if l.startswith("K:"):
+            k_idx = i
+            break
+    if k_idx == -1:
+        return abc_text
+
+    header = lines[:k_idx + 1]
+    body = lines[k_idx + 1:]
+
+    new_body = []
+    i = 0
+    while i < len(body):
+        line = body[i]
+        stripped = line.strip()
+
+        if stripped.startswith("% "):
+            new_body.append(line)
+            i += 1
+            continue
+
+        if stripped == "V: Vocal":
+            v_headers = [line]
+            i += 1
+            while i < len(body) and body[i].strip().startswith(("M:", "K:")):
+                v_headers.append(body[i])
+                i += 1
+            if i >= len(body):
+                new_body.extend(v_headers)
+                break
+            vocal_music_line = body[i]
+            i += 1
+
+            # Expect V: Ins
+            i_headers = []
+            while i < len(body) and not body[i].strip().startswith("V: Ins"):
+                i += 1
+            if i < len(body) and body[i].strip() == "V: Ins":
+                i_headers.append(body[i])
+                i += 1
+                while i < len(body) and body[i].strip().startswith(("M:", "K:")):
+                    i_headers.append(body[i])
+                    i += 1
+                if i < len(body):
+                    ins_music_line = body[i]
+                    i += 1
+                else:
+                    ins_music_line = "Z|"
+            else:
+                i_headers = ["V: Ins"]
+                ins_music_line = "Z|"
+
+            # Transform bars
+            v_bars = [b.strip() for b in vocal_music_line[:-1].split("|") if b.strip()] if vocal_music_line.endswith("|") else [vocal_music_line]
+            has_vocal_notes = any(re.search(r"[A-Ga-g]", b) for b in v_bars)
+
+            if has_vocal_notes:
+                new_v_bars = [vocal_bar_to_chords_only(b) for b in v_bars]
+                new_i_bars = [vocal_bar_to_ins_melody(b) for b in v_bars]
+                new_v_line = "|".join(new_v_bars) + "|"
+                new_i_line = "|".join(new_i_bars) + "|"
+            else:
+                new_v_line = vocal_music_line
+                new_i_line = ins_music_line
+
+            new_body.extend(v_headers)
+            new_body.append(new_v_line)
+            new_body.extend(i_headers)
+            new_body.append(new_i_line)
+        else:
+            new_body.append(line)
+            i += 1
+
+    return "\n".join(header + new_body) + "\n"
+
+
+def extract_karaoke_sections(lyrics_text: str = "", structure: list[dict] | None = None) -> str:
+    """Extract only section tags [Section] separated by a single blank line, without lyric words."""
+    found_tags = []
+    if lyrics_text:
+        matches = re.findall(r"^\s*(\[[a-zA-Z0-9_ \-]+\])", str(lyrics_text).strip(), re.M)
+        if matches:
+            found_tags = [m.strip() for m in matches]
+    if not found_tags and structure:
+        for s in structure:
+            if isinstance(s, dict):
+                name = s.get("name", "section").strip()
+                found_tags.append(f"[{name}]")
+    if not found_tags:
+        found_tags = ["[Verse]", "[Chorus]"]
+
+    return "\n\n".join(found_tags)
+
+
 def _clean_lora_trigger(val: str) -> str:
     """Extract clean trigger keyword/handle (e.g. 'que_hablen_de_mi' from 'in the style of que_hablen_de_mi')."""
     if not val:
@@ -682,6 +830,10 @@ class HZ3_YuE2_MixMashStyle:
                     "default": False,
                     "tooltip": "Experimental: When enabled, extends ABC_repaired to complete all sections present in the input lyrics by synthesizing missing musical parts from existing ABC sections."
                 }),
+                "karaoke_mode": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Karaoke Mode: Converts ABC vocal melody to instrumental (V: Ins) while keeping chords in V: Vocal, and outputs lyrics with only bracketed section tags [Section] separated by a blank line, without lyric words."
+                }),
             },
         }
 
@@ -690,13 +842,18 @@ class HZ3_YuE2_MixMashStyle:
                 abc_report="", audio2style_analysis="", abc="",
                 structure="", analysis="", report="", section_cues="",
                 instructions="", lyrics="", context="", extend_abc=False,
-                lora_trigger="", **kwargs):
+                lora_trigger="", karaoke_mode=False, **kwargs):
         struct = abc_report or structure or report or kwargs.get("abc_report", "") or kwargs.get("structure", "") or kwargs.get("report", "")
         analys = audio2style_analysis or analysis or kwargs.get("audio2style_analysis", "") or kwargs.get("analysis", "") or kwargs.get("audio_analysis", "")
         mix_inst = (instructions or kwargs.get("mix_instructions", "") or "").strip()
         score_input = (abc or section_cues or kwargs.get("abc", "") or kwargs.get("section_cues", "") or "").strip()
         do_extend = bool(extend_abc or kwargs.get("extend_abc", False) or kwargs.get("extend_abc_to_lyrics", False))
+        is_karaoke = bool(karaoke_mode or kwargs.get("karaoke_mode", False) or kwargs.get("karaoke", False))
         trigger_val = (lora_trigger or kwargs.get("trigger", "") or kwargs.get("lora_trigger", "") or "").strip()
+
+        if is_karaoke:
+            karaoke_directive = "Karaoke Mode enabled: generate an instrumental arrangement with lead instruments playing the vocal melody, instrumental only, no singing vocals."
+            mix_inst = (mix_inst + "\n" + karaoke_directive).strip()
 
         # Support single context and legacy context_1/2/3/contexto
         ctx = context or kwargs.get("context_1", "") or kwargs.get("contexto", "") or ""
@@ -707,6 +864,7 @@ class HZ3_YuE2_MixMashStyle:
 
         # Procedurally align and repair score if ABC is provided:
         abc_repaired = score_input
+        healed_struct = None
         if score_input:
             repaired_text, healed_struct = align_and_repair_abc(score_input, ctx, lyr)
             if repaired_text:
@@ -718,6 +876,9 @@ class HZ3_YuE2_MixMashStyle:
                     abc_repaired = extended_abc
                     if extended_struct:
                         healed_struct = extended_struct
+
+            if is_karaoke and abc_repaired:
+                abc_repaired = convert_abc_to_karaoke(abc_repaired)
 
             if healed_struct and (not struct or (isinstance(struct, (list, tuple)) and len(struct) < len(healed_struct)) or (isinstance(struct, str) and struct.count('"name"') < len(healed_struct))):
                 struct = json.dumps(healed_struct, ensure_ascii=False)
@@ -743,13 +904,17 @@ class HZ3_YuE2_MixMashStyle:
             lora_trigger=trigger_val,
         )
         final_lyrics = corrected_lyrics if corrected_lyrics else lyr
+        if is_karaoke:
+            final_lyrics = extract_karaoke_sections(final_lyrics or lyr, healed_struct if score_input else None)
+
         warnings = lyrics_warnings(final_lyrics)
         ext_note = ""
         if do_extend and score_input and healed_struct:
             ext_note = f" (extended to {len(healed_struct)} sections)"
-        visible = ("DETAILED STYLE (output: style):\n" + style +
-                   "\n\nCORRECTED LYRICS (output: lyrics):\n" + final_lyrics +
-                   "\n\nREPAIRED ABC (output: abc_repaired" + ext_note + "):\n" + (abc_repaired[:300] + "..." if len(abc_repaired) > 300 else abc_repaired) +
+        karaoke_note = " [Karaoke Mode]" if is_karaoke else ""
+        visible = ("DETAILED STYLE (output: style" + karaoke_note + "):\n" + style +
+                   "\n\nCORRECTED LYRICS (output: lyrics" + karaoke_note + "):\n" + final_lyrics +
+                   "\n\nREPAIRED ABC (output: abc_repaired" + ext_note + karaoke_note + "):\n" + (abc_repaired[:300] + "..." if len(abc_repaired) > 300 else abc_repaired) +
                    "\n\nBALANCED STYLE:\n" + balanced +
                    "\n\nCOMPACT STYLE:\n" + compact)
         if warnings:

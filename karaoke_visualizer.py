@@ -471,22 +471,34 @@ class HZ3_YuE2_KaraokeVisualizer:
             # (a) Previous line (above, dimmed)
             if active_idx > 0:
                 prev_text = lines[active_idx - 1]["text"]
+                p_font = font_sub
+                p_bbox = p_font.getbbox(prev_text)
+                p_w = p_bbox[2] - p_bbox[0]
+                if p_w > width - 80:
+                    p_scale = max(14, int(font_sub.size * (width - 100) / max(1, p_w)))
+                    p_font = _get_font(p_scale, bold=False)
                 draw.text(
                     (width // 2, lyric_center_y - line_spacing),
                     prev_text,
                     fill=(theme["lyrics_base"][0], theme["lyrics_base"][1], theme["lyrics_base"][2], 75),
-                    font=font_sub,
+                    font=p_font,
                     anchor="mm",
                 )
 
             # (b) Next line (below, upcoming)
             if active_idx + 1 < len(lines):
                 next_text = lines[active_idx + 1]["text"]
+                n_font = font_sub
+                n_bbox = n_font.getbbox(next_text)
+                n_w = n_bbox[2] - n_bbox[0]
+                if n_w > width - 80:
+                    n_scale = max(14, int(font_sub.size * (width - 100) / max(1, n_w)))
+                    n_font = _get_font(n_scale, bold=False)
                 draw.text(
                     (width // 2, lyric_center_y + line_spacing),
                     next_text,
                     fill=(theme["lyrics_base"][0], theme["lyrics_base"][1], theme["lyrics_base"][2], 115),
-                    font=font_sub,
+                    font=n_font,
                     anchor="mm",
                 )
 
@@ -494,20 +506,33 @@ class HZ3_YuE2_KaraokeVisualizer:
             line_text = active_line["text"]
             line_start = active_line["start"]
             line_end = active_line["end"]
-            bbox = font_main.getbbox(line_text)
+
+            cur_font = font_main
+            bbox = cur_font.getbbox(line_text)
             text_w = bbox[2] - bbox[0]
             text_h = bbox[3] - bbox[1]
-            x_start = (width - text_w) // 2
+            if text_w > width - 100:
+                scaled_size = max(18, int(font_main.size * (width - 120) / max(1, text_w)))
+                cur_font = _get_font(scaled_size, bold=True)
+                bbox = cur_font.getbbox(line_text)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
+
+            x_start = max(20, (width - text_w) // 2)
             y_start = lyric_center_y - text_h // 2
 
             # Base unsung text (off-white)
-            draw.text((x_start, y_start), line_text, fill=theme["lyrics_base"], font=font_main)
+            draw.text((x_start, y_start), line_text, fill=theme["lyrics_base"], font=cur_font)
 
             # Progressive Highlight Sweep
             if t >= line_start:
                 prog = 1.0 if t >= line_end else (t - line_start) / max(0.01, (line_end - line_start))
+                prog = max(0.0, min(1.0, prog))
                 fill_w = int(text_w * prog)
-                if fill_w > 0:
+                right_bound = x_start + fill_w
+                left_bound = x_start
+
+                if right_bound > left_bound and fill_w > 0:
                     hl_img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
                     hl_draw = ImageDraw.Draw(hl_img)
 
@@ -517,20 +542,22 @@ class HZ3_YuE2_KaraokeVisualizer:
                             (x_start + offset, y_start),
                             line_text,
                             fill=theme["lyrics_glow"],
-                            font=font_main,
+                            font=cur_font,
                         )
 
                     # Crisp main highlight text
-                    hl_draw.text((x_start, y_start), line_text, fill=theme["lyrics_highlight"], font=font_main)
+                    hl_draw.text((x_start, y_start), line_text, fill=theme["lyrics_highlight"], font=cur_font)
 
-                    # Crop to the active sung width
-                    crop_box = (0, 0, x_start + fill_w, height)
+                    # Crop safely with strict left <= right bounds
+                    crop_left = max(0, min(width - 1, left_bound))
+                    crop_right = max(crop_left + 1, min(width, right_bound))
+                    crop_box = (crop_left, 0, crop_right, height)
                     hl_clipped = hl_img.crop(crop_box)
-                    frame_img.paste(hl_clipped, (0, 0), hl_clipped)
+                    frame_img.paste(hl_clipped, (crop_left, 0), hl_clipped)
 
                     # Glowing karaoke bouncy pointer at singing head
                     if t < line_end:
-                        ball_x = x_start + fill_w
+                        ball_x = max(10, min(width - 10, right_bound))
                         ball_y = y_start - 6 + int(3.0 * math.sin(t * 12.0))
                         draw.ellipse(
                             [ball_x - 4, ball_y - 4, ball_x + 4, ball_y + 4],

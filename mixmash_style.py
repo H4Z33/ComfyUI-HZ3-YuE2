@@ -919,10 +919,10 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
 class HZ3_YuE2_MixMashStyle:
     CATEGORY = "HZ3 YuE2"
     FUNCTION = "compose"
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("style", "lyrics", "abc_repaired", "style_compact", "style_balanced", "abc_karaoke", "sections_karaoke")
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "BOOLEAN")
+    RETURN_NAMES = ("style", "lyrics", "abc_repaired", "style_compact", "style_balanced", "abc_karaoke", "sections_karaoke", "karaoke_mode")
     OUTPUT_NODE = True
-    DESCRIPTION = "Ask an Ollama model to turn audio analysis, structure and lyrics into a coherent multi-section YuE2 style prompt and formatted lyrics, with procedural ABC repair and specialized karaoke outputs."
+    DESCRIPTION = "Ask an Ollama model to turn audio analysis, structure and lyrics into a coherent multi-section YuE2 style prompt and formatted lyrics, with procedural ABC repair, specialized karaoke outputs, and karaoke_mode passthrough."
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1047,7 +1047,7 @@ class HZ3_YuE2_MixMashStyle:
         if warnings:
             visible += "\n\nLYRICS CHECK:\n- " + "\n- ".join(warnings)
         return {"ui": {"text": [visible]},
-                "result": (style, final_lyrics, abc_repaired, compact, balanced, abc_karaoke, sections_karaoke)}
+                "result": (style, final_lyrics, abc_repaired, compact, balanced, abc_karaoke, sections_karaoke, is_karaoke)}
 
 
 LYRICS_EDIT_MODES = {"punctuation_only", "light_rewrite", "fit_to_score"}

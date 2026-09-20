@@ -1,8 +1,10 @@
 """HZ3 YuE2 · Karaoke & Audio Visualizer.
 
-Generates synchronized karaoke video with progressive text sweep,
-chords, song section HUD, and audio-reactive spectrum or oscilloscope.
-Outputs ComfyUI IMAGE batch [F, H, W, 3], passthrough AUDIO, and saved MP4 video.
+Single node: times the clean lyrics against the generated song (audio forced alignment,
+with Whisper-segment and ABC-score fallbacks) and renders a synchronized karaoke video
+with progressive word sweep, chords, song section HUD, and an audio-reactive spectrum or
+oscilloscope. Outputs the IMAGE batch, passthrough AUDIO, the saved MP4 path, and the
+timed lyrics (JSON + LRC) plus an alignment report.
 """
 
 from __future__ import annotations
@@ -11,8 +13,6 @@ import json
 import logging
 import math
 import os
-import re
-from pathlib import Path
 import time
 from typing import Any
 
@@ -27,13 +27,19 @@ except ImportError:
     folder_paths = None
 
 try:
-    from .score_align import align_and_repair_abc
-    from .score_analysis import inspect_score, lyric_syllables
-    from .score_lyric_aligner import align_score_and_lyrics
+    from .score_lyric_aligner import (
+        ALIGNMENT_MODES,
+        align_lyrics,
+        audio_to_mono16k,
+        derive_sections_from_lines,
+    )
 except (ImportError, ValueError):
-    from score_align import align_and_repair_abc
-    from score_analysis import inspect_score, lyric_syllables
-    from score_lyric_aligner import align_score_and_lyrics
+    from score_lyric_aligner import (
+        ALIGNMENT_MODES,
+        align_lyrics,
+        audio_to_mono16k,
+        derive_sections_from_lines,
+    )
 
 logger = logging.getLogger("HZ3.KaraokeVisualizer")
 
@@ -162,12 +168,14 @@ def _lerp_color(c1: tuple[int, int, int], c2: tuple[int, int, int], t: float) ->
 class HZ3_YuE2_KaraokeVisualizer:
     CATEGORY = "HZ3 YuE2/Score"
     FUNCTION = "generate_karaoke"
-    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
-    RETURN_NAMES = ("images", "audio", "video_path")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("images", "audio", "video_path", "timed_lyrics", "lrc_text", "report")
     OUTPUT_NODE = True
     DESCRIPTION = (
-        "Render a synchronized karaoke video with progressive text highlighting, active chord tracking, "
-        "musical section HUD, and an audio-reactive visualizer (spectrum bars / oscilloscope)."
+        "Time the clean lyrics against the generated song (forced alignment on the vocal stem/audio, "
+        "with Whisper-segment and ABC-score fallbacks) and render a synchronized karaoke video with "
+        "progressive word highlighting, chord tracking, section HUD, and an audio-reactive visualizer. "
+        "Also returns the timed lyrics as JSON and LRC."
     )
 
     @classmethod
@@ -178,13 +186,42 @@ class HZ3_YuE2_KaraokeVisualizer:
                 "lyrics": ("STRING", {"multiline": True, "forceInput": True}),
             },
             "optional": {
-                "audio": ("AUDIO",),
-                "timed_lyrics": (
+                "audio": (
+                    "AUDIO",
+                    {"tooltip": "Generated song (full mix). Used for the video soundtrack, the visualizer, and as alignment audio when no vocal stem is connected."},
+                ),
+                "vocals": (
+                    "AUDIO",
+                    {"tooltip": "Optional separated vocal stem of the SAME audio (e.g. AudioSeparation.Vocals). Strongly recommended: forced alignment on isolated vocals is far more accurate than on the mix."},
+                ),
+                "whisper_segments": (
                     "STRING",
                     {
                         "multiline": True,
                         "default": "",
-                        "tooltip": "Optional LRC timestamps ([mm:ss.xx] line) or Whisper JSON segments for exact acoustic sync.",
+                        "forceInput": True,
+                        "tooltip": "Optional Whisper JSON segments (HZ3 Transcribe.segments) or LRC text. Fallback line anchors when forced alignment is unavailable.",
+                    },
+                ),
+                "alignment": (
+                    list(ALIGNMENT_MODES.keys()),
+                    {
+                        "default": list(ALIGNMENT_MODES.keys())[0],
+                        "tooltip": "Auto: forced alignment of the lyrics onto the audio (MMS_FA), then Whisper segments, then nominal ABC timing.",
+                    },
+                ),
+                "alignment_device": (
+                    ["auto", "cuda", "cpu"],
+                    {"default": "auto", "tooltip": "Device for the forced-alignment model (~1.2 GB, downloaded once to models/mms_fa)."},
+                ),
+                "lyrics_offset": (
+                    "FLOAT",
+                    {
+                        "default": 0.0,
+                        "min": -5.0,
+                        "max": 5.0,
+                        "step": 0.01,
+                        "tooltip": "Manual fine-tune in seconds applied to every lyric timestamp (negative = highlight earlier).",
                     },
                 ),
                 "resolution": (list(RESOLUTIONS.keys()), {"default": "1280x720 (16:9 HD)"}),
@@ -224,443 +261,124 @@ class HZ3_YuE2_KaraokeVisualizer:
             },
         }
 
-    def _word_syllable_count(self, w: str) -> int:
-        """Count syllables in a word using existing lyric_syllables analysis."""
-        clean = re.sub(r"[^a-zA-ZáéíóúüñÁÉÍÓÚÜÑ]", "", w)
-        if not clean:
-            return 1
-        syls = lyric_syllables(clean)
-        return max(1, len(syls))
-
-    def _parse_timed_lyrics(self, text: str, total_duration: float = 0.0) -> list[dict] | None:
-        """Parse Whisper JSON segments or LRC timestamps ([mm:ss.xx] line) into timed lines and words."""
-        if not text or not str(text).strip():
-            return None
-        raw = str(text).strip()
-
-        # 1. JSON segments array (Whisper / aligner)
-        if raw.startswith("[") and ("start" in raw or "end" in raw):
-            try:
-                data = json.loads(raw)
-                if isinstance(data, list) and data and isinstance(data[0], dict) and ("start" in data[0] or "end" in data[0]):
-                    lines = []
-                    for item in data:
-                        s = float(item.get("start", 0.0))
-                        e = float(item.get("end", s + 2.0))
-                        t = str(item.get("text", "")).strip()
-                        if not t:
-                            continue
-                        words_raw = item.get("words", [])
-                        timed_words = []
-                        if words_raw and isinstance(words_raw, list) and isinstance(words_raw[0], dict):
-                            for w in words_raw:
-                                w_s = float(w.get("start", s))
-                                w_e = float(w.get("end", e))
-                                timed_words.append({
-                                    "text": str(w.get("text", w.get("word", ""))).strip(),
-                                    "start": w_s,
-                                    "end": w_e,
-                                })
-                        else:
-                            words = t.split()
-                            syl_counts = [self._word_syllable_count(w) for w in words]
-                            tot_syl = max(1, sum(syl_counts))
-                            dur = max(0.1, e - s)
-                            cur_t = s
-                            for w, sc in zip(words, syl_counts):
-                                w_dur = dur * (sc / tot_syl)
-                                timed_words.append({"text": w, "start": cur_t, "end": cur_t + w_dur})
-                                cur_t += w_dur
-                        lines.append({"text": t, "start": s, "end": e, "words": timed_words})
-                    if lines:
-                        return lines
-            except Exception:
-                pass
-
-        # 2. LRC format: [mm:ss.xx] Line text...
-        lrc_pattern = re.compile(r"^\[(\d{1,2}):(\d{2}(?:\.\d+)?)\](.*)$")
-        lrc_entries = []
-        for line in raw.splitlines():
-            line = line.strip()
-            m = lrc_pattern.match(line)
-            if m:
-                mins = int(m.group(1))
-                secs = float(m.group(2))
-                t_sec = mins * 60.0 + secs
-                content = m.group(3).strip()
-                if re.match(r"^[a-zA-Z]{2,4}:", content):
-                    continue
-                if content:
-                    lrc_entries.append((t_sec, content))
-
-        if len(lrc_entries) >= 1:
-            lrc_entries.sort(key=lambda x: x[0])
-            lines = []
-            for idx, (t_start, content) in enumerate(lrc_entries):
-                if idx + 1 < len(lrc_entries):
-                    t_end = lrc_entries[idx + 1][0]
-                else:
-                    t_end = total_duration if total_duration > t_start else t_start + 3.5
-
-                words = content.split()
-                syl_counts = [self._word_syllable_count(w) for w in words]
-                tot_syl = max(1, sum(syl_counts))
-                dur = max(0.1, t_end - t_start)
-                cur_t = t_start
-                timed_words = []
-                for w, sc in zip(words, syl_counts):
-                    w_dur = dur * (sc / tot_syl)
-                    timed_words.append({"text": w, "start": cur_t, "end": cur_t + w_dur})
-                    cur_t += w_dur
-                lines.append({"text": content, "start": t_start, "end": t_end, "words": timed_words})
-            return lines
-
-        return None
-
-    def _parse_lyrics_sections(self, lyrics_text: str) -> list[dict]:
-        """Parse lyrics into structured section blocks preserving tags and line order."""
-        sections = []
-        curr_sec = {"name": "", "lines": []}
-        sec_header_re = re.compile(r"^\s*\[([a-zA-Z0-9_\s\-]+)\]\s*$")
-
-        for line in lyrics_text.splitlines():
-            line_str = line.strip()
-            if not line_str:
-                continue
-            m = sec_header_re.match(line_str)
-            if m:
-                if curr_sec["name"] or curr_sec["lines"]:
-                    sections.append(curr_sec)
-                curr_sec = {"name": m.group(1).strip(), "lines": []}
-            else:
-                curr_sec["lines"].append(line_str)
-
-        if curr_sec["name"] or curr_sec["lines"]:
-            sections.append(curr_sec)
-        return sections
-
-    def _cluster_notes_into_phrases(self, notes: list[dict], min_pause: float = 0.25) -> list[list[dict]]:
-        """Group musical notes into phrases separated by musical rests >= min_pause."""
-        phrases = []
-        cur_phrase = []
-        for n in notes:
-            if not cur_phrase:
-                cur_phrase.append(n)
-            else:
-                gap = n["start"] - cur_phrase[-1]["end"]
-                if gap >= min_pause:
-                    phrases.append(cur_phrase)
-                    cur_phrase = [n]
-                else:
-                    cur_phrase.append(n)
-        if cur_phrase:
-            phrases.append(cur_phrase)
-        return phrases
-
-    def _merge_phrases_to_target_count(self, phrases: list[list[dict]], target_count: int) -> list[list[dict]]:
-        """Merge closest adjacent phrases until phrase count matches target line count."""
-        phrases = list(phrases)
-        while len(phrases) > target_count and len(phrases) > 1:
-            min_gap = float("inf")
-            min_idx = 0
-            for p_i in range(len(phrases) - 1):
-                g = phrases[p_i + 1][0]["start"] - phrases[p_i][-1]["end"]
-                if g < min_gap:
-                    min_gap = g
-                    min_idx = p_i
-            merged = phrases[min_idx] + phrases[min_idx + 1]
-            phrases[min_idx] = merged
-            phrases.pop(min_idx + 1)
-        return phrases
-
-    def _split_phrases_to_target_count(self, phrases: list[list[dict]], target_count: int) -> list[list[dict]]:
-        """Split longest phrases at internal note gaps when more lines than phrases exist."""
-        phrases = list(phrases)
-        while len(phrases) < target_count:
-            best_p_idx = -1
-            best_dur = -1.0
-            for p_i, p in enumerate(phrases):
-                dur = p[-1]["end"] - p[0]["start"]
-                if dur > best_dur:
-                    best_dur = dur
-                    best_p_idx = p_i
-            if best_p_idx == -1 or best_dur <= 0.5:
-                break
-            target_phrase = phrases[best_p_idx]
-            if len(target_phrase) >= 2:
-                max_gap = -1.0
-                split_idx = len(target_phrase) // 2
-                for n_i in range(len(target_phrase) - 1):
-                    gap = target_phrase[n_i + 1]["start"] - target_phrase[n_i]["end"]
-                    if gap > max_gap:
-                        max_gap = gap
-                        split_idx = n_i + 1
-                p_a = target_phrase[:split_idx]
-                p_b = target_phrase[split_idx:]
-                phrases[best_p_idx] = p_a
-                phrases.insert(best_p_idx + 1, p_b)
-            else:
-                mid_t = (target_phrase[0]["start"] + target_phrase[0]["end"]) / 2.0
-                p_a = [{"start": target_phrase[0]["start"], "end": mid_t, "pitch": target_phrase[0].get("pitch", 60)}]
-                p_b = [{"start": mid_t, "end": target_phrase[0]["end"], "pitch": target_phrase[0].get("pitch", 60)}]
-                phrases[best_p_idx] = p_a
-                phrases.insert(best_p_idx + 1, p_b)
-        return phrases
-
-    def _adjust_phrases_to_target_count(self, phrases: list[list[dict]], target_count: int) -> list[list[dict]]:
-        """Balance phrase clustering to match exactly target line count."""
-        if not phrases or target_count <= 0:
-            return phrases
-        if len(phrases) > target_count:
-            return self._merge_phrases_to_target_count(phrases, target_count)
-        elif len(phrases) < target_count:
-            return self._split_phrases_to_target_count(phrases, target_count)
-        return phrases
-
-    def _align_lines_procedurally(
-        self,
-        lyrics_sections: list[dict],
-        abc_sections: list[dict],
-        melody_events: list[dict],
-        total_duration: float,
-    ) -> list[dict]:
-        """Procedurally align lyrics sections, musical phrases, and syllables with score."""
-        has_lyrics_tags = any(bool(s["name"]) for s in lyrics_sections)
-        timed_lines = []
-
-        if has_lyrics_tags and abc_sections:
-            abc_sec_idx = 0
-            for l_sec in lyrics_sections:
-                l_name = l_sec["name"].lower().strip()
-                lines = l_sec["lines"]
-                if not lines:
-                    for idx in range(abc_sec_idx, len(abc_sections)):
-                        a_name = abc_sections[idx]["name"].lower().strip()
-                        if l_name in a_name or a_name in l_name:
-                            abc_sec_idx = idx + 1
-                            break
-                    continue
-
-                target_abc_sec = None
-                for idx in range(abc_sec_idx, len(abc_sections)):
-                    a_name = abc_sections[idx]["name"].lower().strip()
-                    if l_name in a_name or a_name in l_name:
-                        target_abc_sec = abc_sections[idx]
-                        abc_sec_idx = idx + 1
-                        break
-                if not target_abc_sec and abc_sec_idx < len(abc_sections):
-                    target_abc_sec = abc_sections[abc_sec_idx]
-                    abc_sec_idx += 1
-
-                sec_start = target_abc_sec["start"] if target_abc_sec else 0.0
-                sec_end = target_abc_sec["end"] if target_abc_sec else total_duration
-
-                sec_notes = [n for n in melody_events if sec_start - 0.05 <= n["start"] < sec_end + 0.05]
-                phrases = self._cluster_notes_into_phrases(sec_notes, min_pause=0.25)
-                phrases = self._adjust_phrases_to_target_count(phrases, len(lines))
-
-                for idx, line_text in enumerate(lines):
-                    words = line_text.split()
-                    if not words:
-                        continue
-                    syl_counts = [self._word_syllable_count(w) for w in words]
-                    tot_syl = max(1, sum(syl_counts))
-
-                    if phrases:
-                        p_idx = min(idx, len(phrases) - 1)
-                        phrase = phrases[p_idx]
-                        l_start = phrase[0]["start"]
-                        l_end = phrase[-1]["end"]
-                        if l_end <= l_start:
-                            l_end = l_start + 2.0
-                    else:
-                        sec_dur = max(0.5, sec_end - sec_start)
-                        line_dur = sec_dur / max(1, len(lines))
-                        l_start = sec_start + idx * line_dur
-                        l_end = sec_start + (idx + 1) * line_dur
-
-                    phrase_dur = max(0.1, l_end - l_start)
-                    cur_t = l_start
-                    timed_words = []
-                    for w, sc in zip(words, syl_counts):
-                        w_dur = phrase_dur * (sc / tot_syl)
-                        timed_words.append({"text": w, "start": cur_t, "end": cur_t + w_dur})
-                        cur_t += w_dur
-
-                    timed_lines.append({
-                        "text": line_text,
-                        "start": l_start,
-                        "end": l_end,
-                        "words": timed_words,
-                    })
-        else:
-            flat_lines = []
-            for s in lyrics_sections:
-                flat_lines.extend(s["lines"])
-
-            if flat_lines:
-                phrases = self._cluster_notes_into_phrases(melody_events, min_pause=0.25)
-                phrases = self._adjust_phrases_to_target_count(phrases, len(flat_lines))
-
-                for idx, line_text in enumerate(flat_lines):
-                    words = line_text.split()
-                    if not words:
-                        continue
-                    syl_counts = [self._word_syllable_count(w) for w in words]
-                    tot_syl = max(1, sum(syl_counts))
-
-                    if phrases:
-                        p_idx = min(idx, len(phrases) - 1)
-                        phrase = phrases[p_idx]
-                        l_start = phrase[0]["start"]
-                        l_end = phrase[-1]["end"]
-                        if l_end <= l_start:
-                            l_end = l_start + 2.0
-                    else:
-                        line_dur = total_duration / max(1, len(flat_lines))
-                        l_start = idx * line_dur
-                        l_end = (idx + 1) * line_dur
-
-                    phrase_dur = max(0.1, l_end - l_start)
-                    cur_t = l_start
-                    timed_words = []
-                    for w, sc in zip(words, syl_counts):
-                        w_dur = phrase_dur * (sc / tot_syl)
-                        timed_words.append({"text": w, "start": cur_t, "end": cur_t + w_dur})
-                        cur_t += w_dur
-
-                    timed_lines.append({
-                        "text": line_text,
-                        "start": l_start,
-                        "end": l_end,
-                        "words": timed_words,
-                    })
-
-        return timed_lines
-
     def _parse_timeline(
         self,
         raw_abc: str,
         lyrics_text: str,
-        total_duration: float,
-        timed_lyrics: str = "",
+        audio_duration: float,
+        *,
+        align_mono16k: np.ndarray | None = None,
+        align_is_stem: bool = False,
+        whisper_segments: str = "",
+        alignment_mode: str = "auto",
+        alignment_device: str = "auto",
+        lyrics_offset: float = 0.0,
     ) -> dict[str, Any]:
-        """Align score and lyrics into timed sections, lines, words, chords, and notes."""
-        repaired_abc, structure = align_and_repair_abc(raw_abc, lyrics_text=lyrics_text)
-        info = inspect_score(repaired_abc, lyrics_text)
+        """Time lyrics, chords, notes and sections for rendering.
 
-        bpm = float(info.get("bpm", 120))
-        meter = info.get("meter", "4/4")
-        key = info.get("key", "C")
-        score_seconds = float(info.get("seconds", 0.0))
+        Lyrics come from the best available source (see score_lyric_aligner.align_lyrics).
+        Chords and note events keep their nominal ABC clock, shifted by the measured
+        audio-vs-score offset when the lyrics were aligned on audio. The section HUD then
+        follows the aligned lyric blocks instead of the nominal ABC sections.
+        """
+        result = align_lyrics(
+            raw_abc,
+            lyrics_text,
+            alignment_audio=align_mono16k,
+            alignment_is_stem=align_is_stem,
+            whisper_input=whisper_segments,
+            mode=alignment_mode,
+            device=alignment_device,
+            time_offset=lyrics_offset,
+            audio_seconds=audio_duration,
+        )
+        score = result["timeline"]
+        lines = result["lines"]
+        audio_based = result["source"] in ("forced", "whisper")
 
-        duration = max(total_duration, score_seconds)
+        if audio_duration > 0:
+            duration = audio_duration
+        else:
+            last_line_end = max((l["end"] for l in lines if not l.get("beyond_audio")), default=0.0)
+            duration = max(float(score["score_seconds"]), last_line_end + 2.0)
         if duration <= 0:
             duration = 10.0
 
-        # Vocal and Instrumental note events
-        vocal_notes_raw = info.get("roll", {}).get("tracks", {}).get("Vocal", [])
-        ins_notes_raw = info.get("roll", {}).get("tracks", {}).get("Ins", [])
+        score_shift = float(result["score_offset"] or 0.0) if audio_based else 0.0
 
-        vocal_events = []
-        for n in vocal_notes_raw:
-            t_start = float(n["start"] / 256.0) * (60.0 / bpm)
-            t_dur = float(n["duration"] / 256.0) * (60.0 / bpm)
-            vocal_events.append({
-                "start": t_start,
-                "end": t_start + t_dur,
-                "duration": t_dur,
-                "pitch": int(n.get("pitch", 60)),
-            })
+        def shifted(events: list[dict]) -> list[dict]:
+            if not score_shift:
+                return [dict(e) for e in events]
+            out = []
+            for e in events:
+                item = dict(e)
+                item["start"] = max(0.0, item["start"] + score_shift)
+                if "end" in item:
+                    item["end"] = max(item["start"], item["end"] + score_shift)
+                out.append(item)
+            return out
 
-        ins_events = []
-        for n in ins_notes_raw:
-            t_start = float(n["start"] / 256.0) * (60.0 / bpm)
-            t_dur = float(n["duration"] / 256.0) * (60.0 / bpm)
-            ins_events.append({
-                "start": t_start,
-                "end": t_start + t_dur,
-                "duration": t_dur,
-                "pitch": int(n.get("pitch", 48)),
-            })
-
-        # Chords timeline
-        chords_raw = info.get("roll", {}).get("chords", [])
-        chords = []
-        for c in chords_raw:
-            t_start = float(c["start"] / 256.0) * (60.0 / bpm)
-            chords.append({"start": t_start, "symbol": c.get("symbol", "")})
+        vocal_events = shifted(score["vocal_notes"])
+        ins_events = shifted(score["ins_notes"])
+        chords = shifted(score["chords"])
         chords.sort(key=lambda x: x["start"])
 
-        # Sections timeline
-        sections_raw = info.get("roll", {}).get("sections", [])
-        sections = []
-        bar_ticks = info.get("roll", {}).get("bar_ticks", 1024)
-        for s in sections_raw:
-            t_start = float(s["start"] * bar_ticks / 256.0) * (60.0 / bpm)
-            t_end = t_start + float(s["bars"] * bar_ticks / 256.0) * (60.0 / bpm)
-            sections.append({
-                "name": s.get("name", "section").upper(),
-                "start": t_start,
-                "end": t_end,
-            })
+        sections = derive_sections_from_lines(lines, duration) if audio_based else []
+        if not sections:
+            sections = [
+                {"name": str(s["name"]).upper(), "start": s["start"], "end": s["end"]}
+                for s in shifted(score["sections"])
+            ]
         if not sections:
             sections = [{"name": "MUSIC", "start": 0.0, "end": duration}]
 
-        # 1. Check for explicit timed lyrics or perform score-lyrics alignment
-        timed_lines = None
-        if timed_lyrics and timed_lyrics.strip():
-            # If clean lyrics are provided, reconcile them with Whisper/LRC timing and ABC notes
-            if lyrics_text and lyrics_text.strip():
-                try:
-                    aligned_lines, _, _ = align_score_and_lyrics(
-                        abc_text=raw_abc,
-                        lyrics_text=lyrics_text,
-                        whisper_input=timed_lyrics,
-                        alignment_mode="Hybrid (Whisper Audio + ABC Notes)",
-                        syllable_weighting="ABC Notes",
-                    )
-                    if aligned_lines:
-                        timed_lines = aligned_lines
-                except Exception as exc:
-                    logger.warning(f"align_score_and_lyrics hybrid fallback: {exc}")
-            if not timed_lines:
-                timed_lines = self._parse_timed_lyrics(timed_lyrics, duration)
-        if not timed_lines and lyrics_text and lyrics_text.strip():
-            timed_lines = self._parse_timed_lyrics(lyrics_text, duration)
-
-        # 2. If no explicit timed lyrics, perform procedural score-lyrics alignment
-        if not timed_lines and lyrics_text and lyrics_text.strip():
-            try:
-                aligned_lines, _, _ = align_score_and_lyrics(
-                    abc_text=raw_abc,
-                    lyrics_text=lyrics_text,
-                    whisper_input="",
-                    alignment_mode="ABC Score Timing",
-                    syllable_weighting="ABC Notes",
-                )
-                if aligned_lines:
-                    timed_lines = aligned_lines
-            except Exception as exc:
-                logger.warning(f"align_score_and_lyrics procedural fallback: {exc}")
-
-        if not timed_lines:
-            lyrics_sections = self._parse_lyrics_sections(lyrics_text)
-            # Active melody: prefer Vocal notes; if Vocal has only rests (karaoke mode), fall back to Instrumental notes!
-            melody_events = vocal_events if len(vocal_events) > 0 else ins_events
-            timed_lines = self._align_lines_procedurally(lyrics_sections, sections, melody_events, duration)
-
         return {
-            "bpm": int(bpm),
-            "meter": meter,
-            "key": key,
+            "bpm": int(score["bpm"]),
+            "meter": score["meter"],
+            "key": score["key"],
             "duration": duration,
             "vocal_events": vocal_events,
             "ins_events": ins_events,
             "chords": chords,
             "sections": sections,
-            "lines": timed_lines,
+            "lines": [l for l in lines if not l.get("beyond_audio")],
+            "alignment": result,
         }
+
+
+    def _band_levels(
+        self,
+        waveform_mono: np.ndarray,
+        audio_sr: int,
+        fps: int,
+        total_frames: int,
+        freq_bands: np.ndarray,
+        fft_win: int = 2048,
+    ) -> np.ndarray:
+        """Per-frame band magnitudes in dB, shape [total_frames, len(freq_bands) - 1]."""
+        half_win = fft_win // 2
+        num_bands = len(freq_bands) - 1
+        padded = np.pad(np.asarray(waveform_mono, dtype=np.float32), (half_win, fft_win))
+        centers = (np.arange(total_frames) / float(fps) * audio_sr).astype(np.int64)
+        centers = np.clip(centers, 0, max(0, len(padded) - fft_win - 1))
+        window = np.hanning(fft_win).astype(np.float32)
+        fft_freqs = np.fft.rfftfreq(fft_win, 1.0 / audio_sr)
+        membership = np.zeros((len(fft_freqs), num_bands), dtype=np.float32)
+        for b_i in range(num_bands):
+            mask = (fft_freqs >= freq_bands[b_i]) & (fft_freqs < freq_bands[b_i + 1])
+            if not np.any(mask):  # very narrow low bands: take the nearest bin
+                mask = np.zeros_like(mask)
+                mask[int(np.argmin(np.abs(fft_freqs - freq_bands[b_i])))] = True
+            membership[mask, b_i] = 1.0 / float(mask.sum())
+
+        levels = np.zeros((total_frames, num_bands), dtype=np.float32)
+        batch = 512
+        for start in range(0, total_frames, batch):
+            idx = centers[start:start + batch]
+            chunks = padded[idx[:, None] + np.arange(fft_win)[None, :]] * window
+            mags = np.abs(np.fft.rfft(chunks, axis=1)).astype(np.float32)
+            levels[start:start + len(idx)] = 20.0 * np.log10(mags @ membership + 1e-5)
+        return levels
 
     def _get_active_chord(self, chords: list[dict], t: float) -> str:
         """Find the chord sounding at time t."""
@@ -1034,7 +752,11 @@ class HZ3_YuE2_KaraokeVisualizer:
         abc: str,
         lyrics: str,
         audio: dict | None = None,
-        timed_lyrics: str = "",
+        vocals: dict | None = None,
+        whisper_segments: str = "",
+        alignment: str = "auto",
+        alignment_device: str = "auto",
+        lyrics_offset: float = 0.0,
         resolution: str = "1280x720 (16:9 HD)",
         fps: int = 30,
         theme: str = "Cyberpunk Neon",
@@ -1050,8 +772,11 @@ class HZ3_YuE2_KaraokeVisualizer:
         width, height = RESOLUTIONS.get(resolution, (1280, 720))
         theme_cfg = THEMES.get(theme, THEMES["Cyberpunk Neon"])
 
-        # 1. Resolve Audio Information
-        has_audio = audio is not None and isinstance(audio, dict) and "waveform" in audio
+        # 1. Resolve Audio Information (the mix drives the video; the stem, if any, drives alignment)
+        has_vocals = isinstance(vocals, dict) and "waveform" in vocals
+        if not (isinstance(audio, dict) and "waveform" in audio) and has_vocals:
+            audio = vocals
+        has_audio = isinstance(audio, dict) and "waveform" in audio
         audio_duration = 0.0
         audio_sr = 44100
         waveform_mono = None
@@ -1067,8 +792,27 @@ class HZ3_YuE2_KaraokeVisualizer:
             audio_duration = float(w_2d.shape[-1]) / float(audio_sr)
             waveform_mono = w_2d.mean(dim=0).cpu().numpy()
 
-        # 2. Build Timeline
-        timeline = self._parse_timeline(abc, lyrics, audio_duration, timed_lyrics=timed_lyrics)
+        align_mono16k = audio_to_mono16k(vocals if has_vocals else audio) if has_audio else None
+
+        # 2. Build Timeline (lyrics alignment + score events)
+        timeline = self._parse_timeline(
+            abc,
+            lyrics,
+            audio_duration,
+            align_mono16k=align_mono16k,
+            align_is_stem=has_vocals,
+            whisper_segments=whisper_segments,
+            alignment_mode=alignment,
+            alignment_device=alignment_device,
+            lyrics_offset=lyrics_offset,
+        )
+        alignment_result = timeline["alignment"]
+        logger.info(
+            "Karaoke lyrics alignment: source=%s lines=%d %s",
+            alignment_result["source"],
+            len(alignment_result["lines"]),
+            "; ".join(alignment_result["warnings"]) if alignment_result["warnings"] else "",
+        )
         total_duration = timeline["duration"]
         if max_duration > 0.0:
             total_duration = min(total_duration, float(max_duration))
@@ -1147,35 +891,21 @@ class HZ3_YuE2_KaraokeVisualizer:
 
         # 4. Render & Encode Loop
         image_batch_list = []
-        fft_win = 2048
-        half_win = fft_win // 2
-        hanning = np.hanning(fft_win)
+        band_db_all = None
+        db_floor, db_span = -50.0, 48.0
+        if has_audio and waveform_mono is not None:
+            # Band levels for every frame at once; the display range adapts to the track's
+            # own loudness so a hot master does not pin every bar to the ceiling.
+            band_db_all = self._band_levels(waveform_mono, audio_sr, fps, total_frames, freq_bands)
+            db_floor = float(np.percentile(band_db_all, 12.0))
+            db_span = max(18.0, float(np.percentile(band_db_all, 99.5)) - db_floor)
 
         for frame_idx in range(total_frames):
             cur_time = float(frame_idx) / float(fps)
 
             # Compute Spectrum Bars
-            if has_audio and waveform_mono is not None:
-                center_sample = int(cur_time * audio_sr)
-                start_s = max(0, center_sample - half_win)
-                end_s = min(len(waveform_mono), center_sample + half_win)
-                chunk = waveform_mono[start_s:end_s]
-                if len(chunk) < fft_win:
-                    chunk = np.pad(chunk, (0, fft_win - len(chunk)))
-
-                fft_mag = np.abs(np.fft.rfft(chunk * hanning))
-                fft_freqs = np.fft.rfftfreq(fft_win, 1.0 / audio_sr)
-
-                raw_bars = np.zeros(num_bands, dtype=np.float32)
-                for b_i in range(num_bands):
-                    f_lo, f_hi = freq_bands[b_i], freq_bands[b_i + 1]
-                    mask = (fft_freqs >= f_lo) & (fft_freqs < f_hi)
-                    if np.any(mask):
-                        band_energy = np.mean(fft_mag[mask])
-                        dB = 20.0 * np.log10(band_energy + 1e-5)
-                        norm_val = np.clip((dB + 50.0) / 48.0, 0.0, 1.0)
-                        raw_bars[b_i] = float(norm_val)
-
+            if band_db_all is not None:
+                raw_bars = np.clip((band_db_all[frame_idx] - db_floor) / db_span, 0.0, 1.0).astype(np.float32)
                 smooth_bars = smooth_bars * 0.60 + raw_bars * 0.40
             else:
                 raw_bars = np.zeros(num_bands, dtype=np.float32)
@@ -1286,11 +1016,23 @@ class HZ3_YuE2_KaraokeVisualizer:
         else:
             audio_out = audio
 
-        report = (
+        timed_lines = alignment_result["lines"]
+        timed_json = json.dumps(timed_lines, ensure_ascii=False, indent=2)
+        lrc_text = alignment_result["lrc"]
+        sung_lines = sum(1 for l in timed_lines if not l.get("beyond_audio"))
+        alignment_label = {
+            "forced": f"forced alignment on {'vocal stem' if has_vocals else 'mix'} ({alignment_result['stats'].get('device', '?')})",
+            "whisper": "Whisper segments",
+            "score": "nominal ABC timing",
+            "none": "none",
+        }.get(alignment_result["source"], alignment_result["source"])
+        render_summary = (
             f"Rendered Karaoke & Visualizer · {total_frames} frames ({total_duration:.1f}s) @ {fps}fps\n"
             f"Encoder: {chosen_codec} · Resolution: {width}x{height} · Speed: {fps_rendered:.1f} fps ({elapsed:.2f}s total)\n"
+            f"Lyrics: {sung_lines}/{len(timed_lines)} lines timed via {alignment_label}\n"
             f"Saved MP4: {video_full_path}"
         )
+        report = render_summary + "\n\n" + alignment_result["report"]
 
         ui_output = {
             "images": [
@@ -1307,7 +1049,7 @@ class HZ3_YuE2_KaraokeVisualizer:
 
         return {
             "ui": ui_output,
-            "result": (images_tensor, audio_out, str(video_full_path)),
+            "result": (images_tensor, audio_out, str(video_full_path), timed_json, lrc_text, report),
         }
 
 

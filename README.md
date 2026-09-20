@@ -24,10 +24,34 @@ Independent ComfyUI node pack for YuE2 workflow preparation.
 - HZ3 YuE2 · MixMash Genius (Ollama)
 - HZ3 YuE2 · Section Plan
 - HZ3 YuE2 · Assemble Sections
+- HZ3 YuE2 · Karaoke & Audio Visualizer
 
 The audio classifier expects `discogs-effnet-bsdynamic-1.onnx` and its matching
 JSON metadata under `models/audio_classifiers/discogs_effnet`. The Ollama nodes
 expect a locally reachable Ollama server.
+
+## Karaoke & Audio Visualizer
+
+`Karaoke & Audio Visualizer` is a single node: it times the clean lyrics against the
+generated song and renders the karaoke video (word sweep, chords, section HUD, spectrum).
+It also returns `timed_lyrics` (JSON with per-word times), `lrc_text` and an alignment
+`report`.
+
+Lyric timing sources, tried in this order in `Auto` mode:
+
+1. **Forced alignment on audio** (`torchaudio.pipelines.MMS_FA`, multilingual CTC). Connect
+   the generated song to `audio` and, strongly recommended, the separated vocal stem of the
+   same audio (`AudioSeparation.Vocals`) to `vocals`. The lyrics text is never changed; each
+   word receives the time it is actually sung. Unscripted vocals (ad-libs) are absorbed by a
+   wildcard token at section boundaries; lyrics the generation never reached are flagged as
+   `beyond_audio`. The ~1.2 GB model is downloaded once into `models/mms_fa`.
+2. **Whisper segments**: `HZ3 YuE2 · Transcribe.segments` (or LRC text) on `whisper_segments`
+   anchors the clean lines when forced alignment is unavailable.
+3. **ABC score timing**: nominal sections, vocal phrases and note onsets from the ABC.
+
+`lyrics_offset` fine-tunes every timestamp. Chords and the section HUD follow the measured
+audio-vs-score offset when the lyrics were aligned on audio. The former `Score & Lyrics
+Aligner` node was merged into this node; `score_lyric_aligner.py` remains as the library.
 
 ## Procedural prosody + agent
 

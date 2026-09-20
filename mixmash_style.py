@@ -725,6 +725,90 @@ def convert_abc_to_karaoke(abc_text: str, lyrics_text: str = "") -> str:
     return converted
 
 
+def vocal_bar_to_pure_vocal_notes(vocal_bar: str) -> str:
+    """Strip all chord annotations from a vocal bar. If no notes exist, return 'Z'."""
+    cleaned = re.sub(r'"[^"]*"', "", vocal_bar).strip()
+    if not cleaned:
+        return "Z"
+    has_notes = bool(re.search(r"[A-Ga-g]", cleaned))
+    return cleaned if has_notes else "Z"
+
+
+def convert_abc_to_vocals_only(abc_text: str) -> str:
+    """Convert ABC score to vocals-only:
+    - V: Vocal retains vocal melody notes, but all chord symbols are removed.
+    - V: Ins is replaced entirely with measure rests ('Z|').
+    - Sections without vocal notes (e.g. intro/solo) have rests in both voices.
+    """
+    if not abc_text or not str(abc_text).strip():
+        return abc_text
+
+    lines = str(abc_text).replace("\r\n", "\n").splitlines()
+    k_idx = -1
+    for i, l in enumerate(lines):
+        if l.startswith("K:"):
+            k_idx = i
+            break
+    if k_idx == -1:
+        return abc_text
+
+    header = lines[:k_idx + 1]
+    body = lines[k_idx + 1:]
+
+    new_body = []
+    i = 0
+    while i < len(body):
+        line = body[i]
+        stripped = line.strip()
+
+        if stripped.startswith("% "):
+            new_body.append(line)
+            i += 1
+            continue
+
+        if stripped == "V: Vocal":
+            v_headers = [line]
+            i += 1
+            inline_settings = []
+            while i < len(body) and body[i].strip().startswith(("M:", "K:")):
+                inline_settings.append(body[i])
+                i += 1
+            v_headers.extend(inline_settings)
+            if i >= len(body):
+                new_body.extend(v_headers)
+                break
+            vocal_music_line = body[i]
+            i += 1
+
+            # Look for existing V: Ins
+            while i < len(body) and not body[i].strip().startswith(("V: Ins", "% ", "V: Vocal")):
+                i += 1
+            if i < len(body) and body[i].strip() == "V: Ins":
+                i += 1
+                while i < len(body) and body[i].strip().startswith(("M:", "K:")):
+                    i += 1
+                if i < len(body):
+                    i += 1  # skip original ins music line
+
+            v_bars = [b.strip() for b in vocal_music_line[:-1].split("|") if b.strip()] if vocal_music_line.endswith("|") else [vocal_music_line]
+            num_bars = max(1, len(v_bars))
+
+            new_v_bars = [vocal_bar_to_pure_vocal_notes(b) for b in v_bars]
+            new_v_line = "|".join(new_v_bars) + "|"
+            new_i_line = "|".join(["Z"] * num_bars) + "|"
+
+            new_body.extend(v_headers)
+            new_body.append(new_v_line)
+            new_body.append("V: Ins")
+            if inline_settings:
+                new_body.extend(inline_settings)
+            new_body.append(new_i_line)
+        else:
+            i += 1
+
+    return "\n".join(header + new_body) + "\n"
+
+
 def extract_karaoke_sections(lyrics_text: str = "", structure: list[dict] | None = None) -> str:
     """Extract only section tags [Section] separated by a single blank line, without lyric words."""
     found_tags = []
@@ -919,10 +1003,10 @@ def ollama_mixmash(context_1="", mix_instructions="", lyrics="", context_2="", c
 class HZ3_YuE2_MixMashStyle:
     CATEGORY = "HZ3 YuE2"
     FUNCTION = "compose"
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "BOOLEAN")
-    RETURN_NAMES = ("style", "lyrics", "abc_repaired", "style_compact", "style_balanced", "abc_karaoke", "sections_karaoke", "karaoke_mode")
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "STRING", "BOOLEAN")
+    RETURN_NAMES = ("style", "lyrics", "abc_repaired", "style_compact", "style_balanced", "abc_karaoke", "sections_karaoke", "abc_vocals", "karaoke_mode")
     OUTPUT_NODE = True
-    DESCRIPTION = "Ask an Ollama model to turn audio analysis, structure and lyrics into a coherent multi-section YuE2 style prompt and formatted lyrics, with procedural ABC repair, specialized karaoke outputs, and karaoke_mode passthrough."
+    DESCRIPTION = "Ask an Ollama model to turn audio analysis, structure and lyrics into a coherent multi-section YuE2 style prompt and formatted lyrics, with procedural ABC repair, specialized karaoke/vocals outputs, and karaoke_mode passthrough."
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1032,6 +1116,9 @@ class HZ3_YuE2_MixMashStyle:
         # 2. sections_karaoke: section tags without lyric words ([Section]\n\n[Section])
         sections_karaoke = extract_karaoke_sections(final_lyrics or lyr, healed_struct if score_input else None)
 
+        # 3. abc_vocals: pure vocal melody notes without instruments or chords, rests elsewhere
+        abc_vocals = convert_abc_to_vocals_only(abc_repaired) if abc_repaired else ""
+
         warnings = lyrics_warnings(final_lyrics)
         ext_note = ""
         if do_extend and score_input and healed_struct:
@@ -1041,13 +1128,14 @@ class HZ3_YuE2_MixMashStyle:
                    "\n\nCORRECTED LYRICS (output: lyrics):\n" + final_lyrics +
                    "\n\nREPAIRED ABC (output: abc_repaired" + ext_note + intro_note + "):\n" + (abc_repaired[:300] + "..." if len(abc_repaired) > 300 else abc_repaired) +
                    "\n\nKARAOKE ABC (output: abc_karaoke):\n" + (abc_karaoke[:300] + "..." if len(abc_karaoke) > 300 else abc_karaoke) +
+                   "\n\nVOCALS ONLY ABC (output: abc_vocals):\n" + (abc_vocals[:300] + "..." if len(abc_vocals) > 300 else abc_vocals) +
                    "\n\nKARAOKE SECTIONS (output: sections_karaoke):\n" + sections_karaoke +
                    "\n\nBALANCED STYLE:\n" + balanced +
                    "\n\nCOMPACT STYLE:\n" + compact)
         if warnings:
             visible += "\n\nLYRICS CHECK:\n- " + "\n- ".join(warnings)
         return {"ui": {"text": [visible]},
-                "result": (style, final_lyrics, abc_repaired, compact, balanced, abc_karaoke, sections_karaoke, is_karaoke)}
+                "result": (style, final_lyrics, abc_repaired, compact, balanced, abc_karaoke, sections_karaoke, abc_vocals, is_karaoke)}
 
 
 LYRICS_EDIT_MODES = {"punctuation_only", "light_rewrite", "fit_to_score"}

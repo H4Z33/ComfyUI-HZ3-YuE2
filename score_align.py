@@ -75,7 +75,34 @@ def sanitize_abc(text: str) -> str:
     if k_idx == -1:
         return text
 
-    header = "\n".join(lines[:k_idx + 1])
+    x_line = "X:1"
+    t_line = "T:"
+    m_line = "M:4/4"
+    l_line = "L:1/8"
+    q_line = "Q:1/4=120"
+    k_line = "K:C"
+    for l in lines[:k_idx + 1]:
+        if l.startswith("X:"):
+            x_line = l
+        elif l.startswith("M:"):
+            m_line = l
+        elif l.startswith("L:"):
+            l_line = l
+        elif l.startswith("Q:"):
+            q_line = l
+        elif l.startswith("K:"):
+            k_line = l
+
+    header = "\n".join([
+        x_line,
+        t_line,
+        m_line,
+        l_line,
+        q_line,
+        'V: Vocal clef=treble name="Vocal Melody" snm="Vocal"',
+        'V: Ins clef=treble name="Ins Melody" snm="Inst."',
+        k_line,
+    ])
     body = "\n".join(lines[k_idx + 1:])
 
     def repl(match):
@@ -83,6 +110,25 @@ def sanitize_abc(text: str) -> str:
         return f'"{cleaned}"' if cleaned else ""
 
     clean_body = re.sub(r'"([^"\n]*)"', repl, body)
+    clean_body = re.sub(r"^V:\s*Vocal\b", "V: Vocal", clean_body, flags=re.MULTILINE)
+    clean_body = re.sub(r"^V:\s*Ins\b", "V: Ins", clean_body, flags=re.MULTILINE)
+
+    # In native YuE2 ABC, chord symbols belong in Vocal, not Ins
+    body_lines = clean_body.splitlines()
+    in_ins = False
+    fixed_body_lines = []
+    for bl in body_lines:
+        if bl.startswith("V: Ins"):
+            in_ins = True
+        elif bl.startswith("V: Vocal"):
+            in_ins = False
+        if in_ins and not bl.startswith("V:"):
+            fixed_body_lines.append(re.sub(r'"[^"\n]*"', '', bl))
+        else:
+            fixed_body_lines.append(bl)
+    clean_body = "\n".join(fixed_body_lines)
+    # Collapse polyphonic note clusters [CEG]8 or [G,B,D]8 to single monophonic note G,8
+    clean_body = re.sub(r"\[([A-Ga-gz][,']*)[A-Ga-gz,']*\]([0-9]*)", r"\1\2", clean_body)
     return header + "\n" + clean_body
 
 

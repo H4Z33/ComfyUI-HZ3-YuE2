@@ -29,9 +29,11 @@ except ImportError:
 try:
     from .score_align import align_and_repair_abc
     from .score_analysis import inspect_score, lyric_syllables
+    from .score_lyric_aligner import align_score_and_lyrics
 except (ImportError, ValueError):
     from score_align import align_and_repair_abc
     from score_analysis import inspect_score, lyric_syllables
+    from score_lyric_aligner import align_score_and_lyrics
 
 logger = logging.getLogger("HZ3.KaraokeVisualizer")
 
@@ -605,14 +607,43 @@ class HZ3_YuE2_KaraokeVisualizer:
         if not sections:
             sections = [{"name": "MUSIC", "start": 0.0, "end": duration}]
 
-        # 1. Check for explicit timed lyrics (LRC or Whisper JSON segments)
+        # 1. Check for explicit timed lyrics or perform score-lyrics alignment
         timed_lines = None
         if timed_lyrics and timed_lyrics.strip():
-            timed_lines = self._parse_timed_lyrics(timed_lyrics, duration)
-        if not timed_lines:
+            # If clean lyrics are provided, reconcile them with Whisper/LRC timing and ABC notes
+            if lyrics_text and lyrics_text.strip():
+                try:
+                    aligned_lines, _, _ = align_score_and_lyrics(
+                        abc_text=raw_abc,
+                        lyrics_text=lyrics_text,
+                        whisper_input=timed_lyrics,
+                        alignment_mode="Hybrid (Whisper Audio + ABC Notes)",
+                        syllable_weighting="ABC Notes",
+                    )
+                    if aligned_lines:
+                        timed_lines = aligned_lines
+                except Exception as exc:
+                    logger.warning(f"align_score_and_lyrics hybrid fallback: {exc}")
+            if not timed_lines:
+                timed_lines = self._parse_timed_lyrics(timed_lyrics, duration)
+        if not timed_lines and lyrics_text and lyrics_text.strip():
             timed_lines = self._parse_timed_lyrics(lyrics_text, duration)
 
         # 2. If no explicit timed lyrics, perform procedural score-lyrics alignment
+        if not timed_lines and lyrics_text and lyrics_text.strip():
+            try:
+                aligned_lines, _, _ = align_score_and_lyrics(
+                    abc_text=raw_abc,
+                    lyrics_text=lyrics_text,
+                    whisper_input="",
+                    alignment_mode="ABC Score Timing",
+                    syllable_weighting="ABC Notes",
+                )
+                if aligned_lines:
+                    timed_lines = aligned_lines
+            except Exception as exc:
+                logger.warning(f"align_score_and_lyrics procedural fallback: {exc}")
+
         if not timed_lines:
             lyrics_sections = self._parse_lyrics_sections(lyrics_text)
             # Active melody: prefer Vocal notes; if Vocal has only rests (karaoke mode), fall back to Instrumental notes!

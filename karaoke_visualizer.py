@@ -194,6 +194,10 @@ class HZ3_YuE2_KaraokeVisualizer:
                     "AUDIO",
                     {"tooltip": "Optional separated vocal stem of the SAME audio (e.g. AudioSeparation.Vocals). Strongly recommended: forced alignment on isolated vocals is far more accurate than on the mix."},
                 ),
+                "instrumental": (
+                    "AUDIO",
+                    {"tooltip": "Optional separated instrumental stem (e.g. AudioSeparation.Instrumental). Drives the left speaker water ripples in Rolling Mode."},
+                ),
                 "whisper_segments": (
                     "STRING",
                     {
@@ -228,7 +232,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 "fps": ("INT", {"default": 30, "min": 15, "max": 60, "step": 1}),
                 "theme": (list(THEMES.keys()), {"default": "Cyberpunk Neon"}),
                 "visualizer_mode": (
-                    ["Spectrum Bars", "Mirrored Spectrum", "Waveform Oscilloscope"],
+                    ["Spectrum Bars", "Mirrored Spectrum", "Waveform Oscilloscope", "Rolling Mode"],
                     {"default": "Spectrum Bars"},
                 ),
                 "font_size": ("INT", {"default": 38, "min": 20, "max": 72, "step": 2}),
@@ -430,6 +434,510 @@ class HZ3_YuE2_KaraokeVisualizer:
             return 0
         return len(lines) - 1
 
+    def _frame_rms(
+        self,
+        mono: np.ndarray,
+        audio_sr: int,
+        fps: int,
+        total_frames: int,
+        win_ms: float = 50.0,
+    ) -> np.ndarray:
+        """Fast vectorized RMS amplitude envelope per video frame."""
+        win_samples = max(64, int(audio_sr * (win_ms / 1000.0)))
+        half = win_samples // 2
+        padded = np.pad(np.asarray(mono, dtype=np.float32), (half, win_samples))
+        centers = (np.arange(total_frames) / float(fps) * audio_sr).astype(np.int64)
+        centers = np.clip(centers, 0, max(0, len(padded) - win_samples - 1))
+        rms = np.zeros(total_frames, dtype=np.float32)
+        batch = 1024
+        for start in range(0, total_frames, batch):
+            idx = centers[start:start + batch]
+            chunks = padded[idx[:, None] + np.arange(win_samples)[None, :]]
+            rms[start:start + len(idx)] = np.sqrt(np.mean(chunks ** 2, axis=1) + 1e-8)
+        return rms
+
+    def _draw_karaoke_sweep(
+        self,
+        frame_img: Image.Image,
+        draw: ImageDraw.ImageDraw,
+        active_line: dict,
+        x_start: int,
+        y_start: int,
+        text_w: int,
+        cur_font: ImageFont.FreeTypeFont,
+        theme: dict,
+        t: float,
+        width: int,
+        height: int,
+    ) -> None:
+        """Draw two-tone progressive highlight sweep with glow and bouncing singing pointer."""
+        line_text = active_line["text"]
+        line_start = active_line["start"]
+        line_end = active_line["end"]
+        timed_words = active_line.get("words", [])
+
+        if t < line_start:
+            return
+
+        if t >= line_end or not timed_words:
+            prog = 1.0 if t >= line_end else (t - line_start) / max(0.01, (line_end - line_start))
+            fill_w = int(text_w * max(0.0, min(1.0, prog)))
+        else:
+            idx_char = 0
+            word_spans = []
+            for tw in timed_words:
+                w_str = tw["text"]
+                pos = line_text.find(w_str, idx_char)
+                if pos != -1:
+                    w_left = cur_font.getlength(line_text[:pos])
+                    w_right = cur_font.getlength(line_text[:pos + len(w_str)])
+                    word_spans.append({
+                        "start": tw["start"],
+                        "end": tw["end"],
+                        "left": w_left,
+                        "right": w_right,
+                        "width": max(1.0, w_right - w_left),
+                    })
+                    idx_char = pos + len(w_str)
+
+            if word_spans:
+                fill_w = 0
+                for i, ws in enumerate(word_spans):
+                    if t < ws["start"]:
+                        if i > 0:
+                            prev_ws = word_spans[i - 1]
+                            gap_dur = ws["start"] - prev_ws["end"]
+                            if gap_dur > 0.01:
+                                gap_frac = min(1.0, (t - prev_ws["end"]) / gap_dur)
+                                fill_w = int(prev_ws["right"] + gap_frac * (ws["left"] - prev_ws["right"]))
+                            else:
+                                fill_w = int(prev_ws["right"])
+                        else:
+                            fill_w = 0
+                        break
+                    elif ws["start"] <= t <= ws["end"]:
+                        dur = max(0.01, ws["end"] - ws["start"])
+                        w_prog = min(1.0, max(0.0, (t - ws["start"]) / dur))
+                        fill_w = int(ws["left"] + w_prog * ws["width"])
+                        break
+                    else:
+                        fill_w = int(ws["right"])
+            else:
+                prog = (t - line_start) / max(0.01, (line_end - line_start))
+                fill_w = int(text_w * max(0.0, min(1.0, prog)))
+
+        fill_w = max(0, min(text_w, fill_w))
+        right_bound = x_start + fill_w
+        left_bound = x_start
+
+        if right_bound > left_bound and fill_w > 0:
+            hl_img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            hl_draw = ImageDraw.Draw(hl_img)
+
+            # Soft glow pass behind highlight text
+            for offset in (-1, 0, 1):
+                hl_draw.text(
+                    (x_start + offset, y_start),
+                    line_text,
+                    fill=theme["lyrics_glow"],
+                    font=cur_font,
+                )
+
+            # Crisp main highlight text
+            hl_draw.text((x_start, y_start), line_text, fill=theme["lyrics_highlight"], font=cur_font)
+
+            # Crop safely with strict bounds
+            crop_left = max(0, min(width - 1, left_bound))
+            crop_right = max(crop_left + 1, min(width, right_bound))
+            crop_box = (crop_left, 0, crop_right, height)
+            hl_clipped = hl_img.crop(crop_box)
+            frame_img.paste(hl_clipped, (crop_left, 0), hl_clipped)
+
+            # Glowing karaoke bouncy pointer at singing head
+            if t < line_end:
+                ball_x = max(10, min(width - 10, right_bound))
+                ball_y = y_start - 6 + int(3.0 * math.sin(t * 12.0))
+                draw.ellipse(
+                    [ball_x - 4, ball_y - 4, ball_x + 4, ball_y + 4],
+                    fill=theme["lyrics_highlight"],
+                    outline=(255, 255, 255),
+                )
+
+    def _render_speakers(
+        self,
+        draw: ImageDraw.ImageDraw,
+        t: float,
+        width: int,
+        height: int,
+        theme: dict,
+        energies: tuple[float, float],
+    ) -> None:
+        """Render left (instrumental/bass) and right (vocal) elliptical speakers with water ripple shockwaves."""
+        xl = int(width * 0.105)
+        xr = int(width * 0.895)
+        ys = int(height * 0.58)
+
+        base_rx = max(30, int(width * 0.052))
+        base_ry = max(50, int(height * 0.155))
+
+        speakers = [
+            ("BASS / INS", xl, energies[0], theme["bar_low"]),
+            ("VOCALS", xr, energies[1], theme["bar_high"]),
+        ]
+
+        for label, cx, energy, col in speakers:
+            e = max(0.0, min(1.0, float(energy)))
+
+            # Water Ripple Shockwaves (expanding concentric elliptical rings)
+            num_ripples = 4
+            for w in range(num_ripples):
+                phase = (t * 1.5 + w * 0.25) % 1.0
+                wave_rx = int(base_rx + phase * (base_rx * 1.35))
+                wave_ry = int(base_ry + phase * (base_ry * 1.35))
+                fade = ((1.0 - phase) ** 1.6) * (0.20 + 0.80 * e)
+                if fade > 0.02:
+                    alpha = int(210 * fade)
+                    ripple_col = (col[0], col[1], col[2], alpha)
+                    thickness = 2 if phase < 0.55 else 1
+                    draw.ellipse(
+                        [cx - wave_rx, ys - wave_ry, cx + wave_rx, ys + wave_ry],
+                        outline=ripple_col,
+                        width=thickness,
+                    )
+
+            # Vibrating speaker membrane
+            pulse = 1.0 + 0.12 * e
+            cur_rx = int(base_rx * pulse)
+            cur_ry = int(base_ry * pulse)
+
+            # 1. Outer Chassis Ellipse (cabinet trim)
+            chassis_rx = base_rx + 10
+            chassis_ry = base_ry + 12
+            draw.ellipse(
+                [cx - chassis_rx, ys - chassis_ry, cx + chassis_rx, ys + chassis_ry],
+                fill=(22, 18, 34, 230),
+                outline=theme["pill_border"],
+                width=2,
+            )
+
+            # 2. Suspension surround ring
+            draw.ellipse(
+                [cx - cur_rx, ys - cur_ry, cx + cur_rx, ys + cur_ry],
+                fill=(12, 10, 18, 245),
+                outline=(col[0] // 2, col[1] // 2, col[2] // 2, 180),
+                width=2,
+            )
+
+            # 3. Inner Cone Diaphragm
+            cone_rx = int(cur_rx * 0.78)
+            cone_ry = int(cur_ry * 0.78)
+            cone_col = (
+                int(theme["bg_top"][0] * 0.4 + col[0] * 0.25 * e),
+                int(theme["bg_top"][1] * 0.4 + col[1] * 0.25 * e),
+                int(theme["bg_top"][2] * 0.4 + col[2] * 0.25 * e),
+                255,
+            )
+            draw.ellipse(
+                [cx - cone_rx, ys - cone_ry, cx + cone_rx, ys + cone_ry],
+                fill=cone_col,
+                outline=col,
+                width=1,
+            )
+
+            # 4. Center Dust Cap
+            cap_rx = max(6, int(cur_rx * 0.32))
+            cap_ry = max(8, int(cur_ry * 0.32))
+            cap_alpha = int(140 + 115 * e)
+            draw.ellipse(
+                [cx - cap_rx, ys - cap_ry, cx + cap_rx, ys + cap_ry],
+                fill=(theme["peak_color"][0], theme["peak_color"][1], theme["peak_color"][2], cap_alpha),
+                outline=(255, 255, 255, 220),
+                width=1,
+            )
+
+            # 5. Subtle speaker indicator badge below
+            draw.text(
+                (cx, ys + chassis_ry + 10),
+                label,
+                fill=(theme["info_text"][0], theme["info_text"][1], theme["info_text"][2], 140),
+                font=_get_font(11, bold=True),
+                anchor="mm",
+            )
+
+    def _render_musical_staff(
+        self,
+        draw: ImageDraw.ImageDraw,
+        t: float,
+        timeline: dict,
+        width: int,
+        height: int,
+        theme: dict,
+        font_hud: ImageFont.FreeTypeFont,
+    ) -> None:
+        """Render center musical staff (pentagrama) with horizontal flowing vocal melody notes."""
+        x_left = int(width * 0.19)
+        x_right = int(width * 0.81)
+        w_staff = x_right - x_left
+        y_center = int(height * 0.72)
+        spacing = 11  # distance between staff lines
+
+        # 1. Frosted glass panel backing
+        draw.rounded_rectangle(
+            [x_left - 10, y_center - 36, x_right + 10, y_center + 36],
+            radius=8,
+            fill=theme["pill_bg"],
+            outline=(theme["pill_border"][0], theme["pill_border"][1], theme["pill_border"][2], 90),
+            width=1,
+        )
+
+        # 2. Draw 5 Horizontal Staff Lines (E4, G4, B4, D5, F5 in treble)
+        for i in (-2, -1, 0, 1, 2):
+            ly = y_center + i * spacing
+            draw.line([(x_left, ly), (x_right, ly)], fill=(255, 255, 255, 60), width=1)
+
+        # 3. Treble Clef indicator & badge on left
+        clef_x = x_left + 14
+        draw.text((clef_x, y_center), "𝄞", fill=theme["bar_low"], font=_get_font(26, bold=True), anchor="mm")
+        meter_str = str(timeline.get("meter", "4/4"))
+        draw.text((clef_x + 18, y_center), meter_str, fill=theme["info_text"], font=_get_font(11, bold=True), anchor="mm")
+
+        # 4. Vertical Playhead (Singing / Auditory Now line)
+        x_play = x_left + int(w_staff * 0.25)
+        # Soft glow halo
+        draw.line([(x_play, y_center - 34), (x_play, y_center + 34)], fill=theme["lyrics_glow"], width=4)
+        # Main crisp laser beam
+        draw.line([(x_play, y_center - 34), (x_play, y_center + 34)], fill=theme["lyrics_highlight"], width=1)
+
+        # 5. Project notes from vocal_events
+        vocal_notes = timeline.get("vocal_events", [])
+        speed = 145.0  # pixels per second horizontal flow
+
+        # Reference note: B4 (MIDI 71) = staff center line (Y = y_center)
+        dia_map = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6]
+
+        for note in vocal_notes:
+            n_start = note["start"]
+            n_end = note["end"]
+
+            x0 = x_play + (n_start - t) * speed
+            x1 = x_play + (n_end - t) * speed
+
+            if x1 < x_left - 10 or x0 > x_right + 10:
+                continue
+
+            pitch = int(note.get("pitch", 60))
+            octave = pitch // 12 - 1
+            semi = pitch % 12
+            dia_abs = (octave - 4) * 7 + dia_map[semi]
+            step_diff = dia_abs - 6  # relative to B4 (center line)
+            step_clamped = max(-6, min(6, step_diff))
+            y_note = y_center - int(step_clamped * (spacing / 2.0))
+
+            is_active = (n_start <= t <= n_end)
+
+            # Draw ledger lines if out of standard 5-line range
+            if abs(step_clamped) >= 5:
+                draw.line([(max(x_left, x0 - 4), y_note), (min(x_right, x0 + 12), y_note)], fill=(255, 255, 255, 120), width=1)
+
+            if is_active:
+                # Sustained glowing ribbon extending from playhead to end of note
+                ribbon_x0 = max(x_left, x_play)
+                ribbon_x1 = min(x_right, max(x_play + 4, x1))
+                draw.rounded_rectangle(
+                    [ribbon_x0, y_note - 3, ribbon_x1, y_note + 3],
+                    radius=3,
+                    fill=(theme["lyrics_highlight"][0], theme["lyrics_highlight"][1], theme["lyrics_highlight"][2], 180),
+                )
+                # Active glowing notehead at the playhead
+                draw.ellipse(
+                    [x_play - 5, y_note - 4, x_play + 5, y_note + 4],
+                    fill=theme["peak_color"],
+                    outline=(255, 255, 255),
+                    width=1,
+                )
+                # Playhead impact pulse
+                draw.ellipse(
+                    [x_play - 8, y_note - 7, x_play + 8, y_note + 7],
+                    outline=theme["lyrics_highlight"],
+                    width=1,
+                )
+            elif t < n_start:
+                # Future note flowing toward playhead
+                note_w = max(8, int(x1 - x0))
+                # Note ribbon / sustain
+                if note_w > 12:
+                    ribbon_x0 = max(x_left, x0)
+                    ribbon_x1 = min(x_right, x1)
+                    draw.rounded_rectangle(
+                        [ribbon_x0, y_note - 2, ribbon_x1, y_note + 2],
+                        radius=2,
+                        fill=(theme["bar_low"][0], theme["bar_low"][1], theme["bar_low"][2], 90),
+                    )
+                # Oval notehead at start
+                if x_left <= x0 <= x_right:
+                    draw.ellipse(
+                        [x0 - 4, y_note - 3, x0 + 4, y_note + 3],
+                        fill=theme["lyrics_base"],
+                        outline=theme["bar_low"],
+                        width=1,
+                    )
+                    # Vertical stem
+                    stem_dir = -1 if step_clamped < 0 else 1
+                    draw.line([(x0 + 3, y_note), (x0 + 3, y_note + stem_dir * 16)], fill=theme["lyrics_base"], width=1)
+            else:
+                # Past note trailing off past playhead
+                ribbon_x0 = max(x_left, x0)
+                ribbon_x1 = min(x_right, min(x_play, x1))
+                if ribbon_x1 > ribbon_x0:
+                    draw.rounded_rectangle(
+                        [ribbon_x0, y_note - 2, ribbon_x1, y_note + 2],
+                        radius=2,
+                        fill=(theme["lyrics_base"][0], theme["lyrics_base"][1], theme["lyrics_base"][2], 50),
+                    )
+
+    def _get_rolling_lambda(self, lines: list[dict], t: float) -> float:
+        """Compute smooth continuous virtual line index lambda(t).
+        Remains stationary at integer i while line i is sung; smoothly eases to i+1 during handover."""
+        n = len(lines)
+        if n == 0:
+            return 0.0
+        if n == 1 or t < lines[0]["start"]:
+            return 0.0
+        if t >= lines[-1]["end"]:
+            return float(n - 1)
+
+        for i in range(n - 1):
+            cur_line = lines[i]
+            next_line = lines[i + 1]
+            t_end = cur_line["end"]
+            t_next_start = next_line["start"]
+
+            gap = t_next_start - t_end
+            if gap > 0.6:
+                t0 = t_end + 0.05
+                t1 = min(t_next_start - 0.05, t0 + 0.45)
+            else:
+                t1 = max(t_end, t_next_start)
+                t0 = max(cur_line["start"] + 0.10, t1 - 0.45)
+
+            if t < t0:
+                return float(i)
+            elif t0 <= t < t1:
+                u = (t - t0) / max(0.01, (t1 - t0))
+                return float(i) + (u * u * (3.0 - 2.0 * u))
+            # If t >= t1, proceed to next line i+1 in loop
+
+        return float(n - 1)
+
+    def _render_rolling_lyrics(
+        self,
+        frame_img: Image.Image,
+        draw: ImageDraw.ImageDraw,
+        t: float,
+        timeline: dict,
+        width: int,
+        height: int,
+        theme: dict,
+        font_main: ImageFont.FreeTypeFont,
+        font_sub: ImageFont.FreeTypeFont,
+    ) -> None:
+        """Render rolling lyrics: stays steady during line singing; smoothly scrolls upward during transitions."""
+        lines = timeline.get("lines", [])
+        if not lines:
+            draw.text(
+                (width // 2, int(height * 0.38)),
+                "( Instrumental )",
+                fill=(theme["lyrics_base"][0], theme["lyrics_base"][1], theme["lyrics_base"][2], 120),
+                font=font_main,
+                anchor="mm",
+            )
+            return
+
+        lambda_line = self._get_rolling_lambda(lines, t)
+
+        y_focus = int(height * 0.38)
+        line_spacing = int(font_main.size * 1.42)
+
+        min_k = max(0, int(lambda_line) - 2)
+        max_k = min(len(lines), int(lambda_line) + 3)
+
+        for k in range(min_k, max_k):
+            k_line = lines[k]
+            text = k_line["text"]
+            d = k - lambda_line
+
+            yk = y_focus + int(d * line_spacing)
+            if yk < int(height * 0.10) or yk > int(height * 0.58):
+                continue
+
+            dist = abs(d)
+            scale = 0.65 + 0.35 * max(0.0, 1.0 - (dist ** 1.3))
+            scaled_size = max(16, int(font_main.size * scale))
+            cur_font = _get_font(scaled_size, bold=(dist < 0.45))
+
+            if d <= 0:
+                alpha = int(255 * max(0.0, 1.0 - (dist * 0.65)))
+            else:
+                alpha = int(255 * max(0.20, 1.0 - (dist * 0.50)))
+
+            bbox = cur_font.getbbox(text)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+
+            if text_w > width - 140:
+                cur_font = _get_font(max(14, int(scaled_size * (width - 160) / max(1, text_w))), bold=False)
+                bbox = cur_font.getbbox(text)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
+
+            x_start = max(20, (width - text_w) // 2)
+            y_start = yk - text_h // 2
+
+            col = (theme["lyrics_base"][0], theme["lyrics_base"][1], theme["lyrics_base"][2], alpha)
+            draw.text((x_start, y_start), text, fill=col, font=cur_font)
+
+            # Karaoke sweep: active while line is being sung or during handover before next line starts
+            should_sweep = (k_line["start"] <= t <= k_line["end"]) or (
+                k == int(lambda_line) and t >= k_line["start"] and (k + 1 >= len(lines) or t < lines[k + 1]["start"])
+            )
+            if should_sweep:
+                self._draw_karaoke_sweep(
+                    frame_img, draw, k_line, x_start, y_start, text_w, cur_font, theme, t, width, height
+                )
+
+    def _render_progress_bar(
+        self,
+        draw: ImageDraw.ImageDraw,
+        t: float,
+        duration: float,
+        width: int,
+        height: int,
+        theme: dict,
+        font_hud: ImageFont.FreeTypeFont,
+    ) -> None:
+        """Bottom progress bar and timecodes."""
+        prog_y = height - 16
+        tot_dur = max(0.1, duration)
+        p_frac = max(0.0, min(1.0, t / tot_dur))
+        margin_x = int(width * 0.08)
+
+        draw.rectangle([margin_x, prog_y, width - margin_x, prog_y + 3], fill=(50, 55, 75))
+        draw.rectangle(
+            [margin_x, prog_y, margin_x + int((width - 2 * margin_x) * p_frac), prog_y + 3],
+            fill=theme["progress_fill"],
+        )
+
+        cur_min, cur_sec = int(t // 60), int(t % 60)
+        tot_min, tot_sec = int(tot_dur // 60), int(tot_dur % 60)
+        draw.text((margin_x, prog_y - 14), f"{cur_min:02d}:{cur_sec:02d}", fill=theme["info_text"], font=font_hud)
+        draw.text(
+            (width - margin_x, prog_y - 14),
+            f"{tot_min:02d}:{tot_sec:02d}",
+            fill=theme["info_text"],
+            font=font_hud,
+            anchor="ra",
+        )
+
     def _render_frame(
         self,
         t: float,
@@ -443,6 +951,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         font_main: ImageFont.FreeTypeFont,
         font_sub: ImageFont.FreeTypeFont,
         font_hud: ImageFont.FreeTypeFont,
+        speaker_energies: tuple[float, float] = (0.0, 0.0),
     ) -> Image.Image:
         """Render a single high-quality video frame with Pillow."""
         # 1. Background Gradient
@@ -468,7 +977,6 @@ class HZ3_YuE2_KaraokeVisualizer:
         active_sec = self._get_active_section(timeline["sections"], t)
         active_chord = self._get_active_chord(timeline["chords"], t)
 
-        # Section pill (Top-Left)
         sec_text = f"  {active_sec}  "
         sec_bbox = font_hud.getbbox(sec_text)
         sec_w = sec_bbox[2] - sec_bbox[0] + 16
@@ -482,11 +990,9 @@ class HZ3_YuE2_KaraokeVisualizer:
         )
         draw.text((48, hud_y + 4), sec_text.strip(), fill=theme["section_text"], font=font_hud)
 
-        # Song info (Top-Center)
         info_str = f"Key: {timeline['key']}  ·  {timeline['meter']}  ·  {timeline['bpm']} BPM"
         draw.text((width // 2, hud_y + sec_h // 2), info_str, fill=theme["info_text"], font=font_hud, anchor="mm")
 
-        # Chord pill (Top-Right)
         if active_chord:
             chord_str = f"  {active_chord}  "
             c_bbox = font_hud.getbbox(chord_str)
@@ -501,7 +1007,15 @@ class HZ3_YuE2_KaraokeVisualizer:
             )
             draw.text((width - 40 - c_w + 8, hud_y + 4), chord_str.strip(), fill=theme["chord_text"], font=font_hud)
 
-        # 3. Karaoke Lyrics Display
+        # 3. Rolling Mode vs Classic Visualizers
+        if mode == "Rolling Mode":
+            self._render_speakers(draw, t, width, height, theme, speaker_energies)
+            self._render_musical_staff(draw, t, timeline, width, height, theme, font_hud)
+            self._render_rolling_lyrics(frame_img, draw, t, timeline, width, height, theme, font_main, font_sub)
+            self._render_progress_bar(draw, t, timeline["duration"], width, height, theme, font_hud)
+            return frame_img
+
+        # Classic Karaoke Display
         lines = timeline["lines"]
         active_idx = self._get_active_line_index(lines, t)
         lyric_center_y = int(height * 0.38)
@@ -510,7 +1024,6 @@ class HZ3_YuE2_KaraokeVisualizer:
         if 0 <= active_idx < len(lines):
             active_line = lines[active_idx]
 
-            # (a) Previous line (above, dimmed)
             if active_idx > 0:
                 prev_text = lines[active_idx - 1]["text"]
                 p_font = font_sub
@@ -527,7 +1040,6 @@ class HZ3_YuE2_KaraokeVisualizer:
                     anchor="mm",
                 )
 
-            # (b) Next line (below, upcoming)
             if active_idx + 1 < len(lines):
                 next_text = lines[active_idx + 1]["text"]
                 n_font = font_sub
@@ -544,11 +1056,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                     anchor="mm",
                 )
 
-            # (c) Active line with progressive two-tone karaoke sweep!
             line_text = active_line["text"]
-            line_start = active_line["start"]
-            line_end = active_line["end"]
-
             cur_font = font_main
             bbox = cur_font.getbbox(line_text)
             text_w = bbox[2] - bbox[0]
@@ -562,100 +1070,12 @@ class HZ3_YuE2_KaraokeVisualizer:
 
             x_start = max(20, (width - text_w) // 2)
             y_start = lyric_center_y - text_h // 2
-
-            # Base unsung text (off-white)
             draw.text((x_start, y_start), line_text, fill=theme["lyrics_base"], font=cur_font)
 
-            # Progressive Word-Aware Highlight Sweep
-            timed_words = active_line.get("words", [])
-            if t >= line_start:
-                if t >= line_end or not timed_words:
-                    prog = 1.0 if t >= line_end else (t - line_start) / max(0.01, (line_end - line_start))
-                    prog = max(0.0, min(1.0, prog))
-                    fill_w = int(text_w * prog)
-                else:
-                    # Calculate sub-pixel fill width based on timed words & font character metrics
-                    idx_char = 0
-                    word_spans = []
-                    for tw in timed_words:
-                        w_str = tw["text"]
-                        pos = line_text.find(w_str, idx_char)
-                        if pos != -1:
-                            w_left = cur_font.getlength(line_text[:pos])
-                            w_right = cur_font.getlength(line_text[:pos + len(w_str)])
-                            word_spans.append({
-                                "start": tw["start"],
-                                "end": tw["end"],
-                                "left": w_left,
-                                "right": w_right,
-                                "width": max(1.0, w_right - w_left),
-                            })
-                            idx_char = pos + len(w_str)
-
-                    if word_spans:
-                        fill_w = 0
-                        for i, ws in enumerate(word_spans):
-                            if t < ws["start"]:
-                                if i > 0:
-                                    prev_ws = word_spans[i - 1]
-                                    gap_dur = ws["start"] - prev_ws["end"]
-                                    if gap_dur > 0.01:
-                                        gap_frac = min(1.0, (t - prev_ws["end"]) / gap_dur)
-                                        fill_w = int(prev_ws["right"] + gap_frac * (ws["left"] - prev_ws["right"]))
-                                    else:
-                                        fill_w = int(prev_ws["right"])
-                                else:
-                                    fill_w = 0
-                                break
-                            elif ws["start"] <= t <= ws["end"]:
-                                dur = max(0.01, ws["end"] - ws["start"])
-                                w_prog = min(1.0, max(0.0, (t - ws["start"]) / dur))
-                                fill_w = int(ws["left"] + w_prog * ws["width"])
-                                break
-                            else:
-                                fill_w = int(ws["right"])
-                    else:
-                        prog = (t - line_start) / max(0.01, (line_end - line_start))
-                        fill_w = int(text_w * max(0.0, min(1.0, prog)))
-
-                fill_w = max(0, min(text_w, fill_w))
-                right_bound = x_start + fill_w
-                left_bound = x_start
-
-                if right_bound > left_bound and fill_w > 0:
-                    hl_img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-                    hl_draw = ImageDraw.Draw(hl_img)
-
-                    # Soft glow pass behind highlight text
-                    for offset in (-1, 0, 1):
-                        hl_draw.text(
-                            (x_start + offset, y_start),
-                            line_text,
-                            fill=theme["lyrics_glow"],
-                            font=cur_font,
-                        )
-
-                    # Crisp main highlight text
-                    hl_draw.text((x_start, y_start), line_text, fill=theme["lyrics_highlight"], font=cur_font)
-
-                    # Crop safely with strict left <= right bounds
-                    crop_left = max(0, min(width - 1, left_bound))
-                    crop_right = max(crop_left + 1, min(width, right_bound))
-                    crop_box = (crop_left, 0, crop_right, height)
-                    hl_clipped = hl_img.crop(crop_box)
-                    frame_img.paste(hl_clipped, (crop_left, 0), hl_clipped)
-
-                    # Glowing karaoke bouncy pointer at singing head
-                    if t < line_end:
-                        ball_x = max(10, min(width - 10, right_bound))
-                        ball_y = y_start - 6 + int(3.0 * math.sin(t * 12.0))
-                        draw.ellipse(
-                            [ball_x - 4, ball_y - 4, ball_x + 4, ball_y + 4],
-                            fill=theme["lyrics_highlight"],
-                            outline=(255, 255, 255),
-                        )
+            self._draw_karaoke_sweep(
+                frame_img, draw, active_line, x_start, y_start, text_w, cur_font, theme, t, width, height
+            )
         else:
-            # Instrumental or waiting text
             draw.text(
                 (width // 2, lyric_center_y),
                 "( Instrumental )",
@@ -664,7 +1084,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 anchor="mm",
             )
 
-        # 4. Audio Reactive Visualizer
+        # 4. Audio Reactive Visualizer (Spectrum Bars, Mirrored, Oscilloscope)
         num_bars = len(spectrum_vals)
         margin_x = int(width * 0.08)
         avail_w = width - 2 * margin_x
@@ -681,11 +1101,8 @@ class HZ3_YuE2_KaraokeVisualizer:
                 bx = margin_x + b * bar_w
                 by = base_y - h
                 bar_col = _lerp_color(theme["bar_low"], theme["bar_high"], val)
-
                 if h > 2:
                     draw.rounded_rectangle([bx, by, bx + actual_bar_w, base_y], radius=3, fill=bar_col)
-
-                # Floating peak hold dot
                 pk = float(peaks[b])
                 pk_y = base_y - int(pk * max_bar_h) - 4
                 draw.rectangle([bx, pk_y, bx + actual_bar_w, pk_y + 2], fill=theme["peak_color"])
@@ -698,7 +1115,6 @@ class HZ3_YuE2_KaraokeVisualizer:
                 h = int(val * max_half_h)
                 bx = margin_x + b * bar_w
                 bar_col = _lerp_color(theme["bar_low"], theme["bar_high"], val)
-
                 if h > 2:
                     draw.rounded_rectangle(
                         [bx, center_y - h, bx + actual_bar_w, center_y + h], radius=3, fill=bar_col
@@ -717,33 +1133,13 @@ class HZ3_YuE2_KaraokeVisualizer:
                 bx = margin_x + b * bar_w + actual_bar_w // 2
                 by = center_y + int(math.sin(b * 0.4 + t * 6.0) * val * amp)
                 pts.append((bx, by))
-
             if len(pts) > 1:
                 draw.line(pts, fill=theme["lyrics_glow"], width=6)
                 draw.line(pts, fill=theme["bar_low"], width=3)
                 draw.line(pts, fill=(255, 255, 255, 220), width=1)
 
         # 5. Bottom Progress Bar & Timecodes
-        prog_y = height - 16
-        tot_dur = max(0.1, timeline["duration"])
-        p_frac = max(0.0, min(1.0, t / tot_dur))
-
-        # Track
-        draw.rectangle([margin_x, prog_y, width - margin_x, prog_y + 3], fill=(50, 55, 75))
-        # Filled progress
-        draw.rectangle([margin_x, prog_y, margin_x + int((width - 2 * margin_x) * p_frac), prog_y + 3], fill=theme["progress_fill"])
-
-        # Time labels
-        cur_min, cur_sec = int(t // 60), int(t % 60)
-        tot_min, tot_sec = int(tot_dur // 60), int(tot_dur % 60)
-        draw.text((margin_x, prog_y - 14), f"{cur_min:02d}:{cur_sec:02d}", fill=theme["info_text"], font=font_hud)
-        draw.text(
-            (width - margin_x, prog_y - 14),
-            f"{tot_min:02d}:{tot_sec:02d}",
-            fill=theme["info_text"],
-            font=font_hud,
-            anchor="ra",
-        )
+        self._render_progress_bar(draw, t, timeline["duration"], width, height, theme, font_hud)
 
         return frame_img
 
@@ -753,6 +1149,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         lyrics: str,
         audio: dict | None = None,
         vocals: dict | None = None,
+        instrumental: dict | None = None,
         whisper_segments: str = "",
         alignment: str = "auto",
         alignment_device: str = "auto",
@@ -767,6 +1164,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         render_image_batch: bool = False,
         encoder: str = "Auto (NVENC / CPU)",
         max_duration: float = 0.0,
+        **kwargs,
     ):
         t_start = time.time()
         width, height = RESOLUTIONS.get(resolution, (1280, 720))
@@ -774,8 +1172,14 @@ class HZ3_YuE2_KaraokeVisualizer:
 
         # 1. Resolve Audio Information (the mix drives the video; the stem, if any, drives alignment)
         has_vocals = isinstance(vocals, dict) and "waveform" in vocals
-        if not (isinstance(audio, dict) and "waveform" in audio) and has_vocals:
-            audio = vocals
+        has_ins = isinstance(instrumental, dict) and "waveform" in instrumental
+        if not (isinstance(audio, dict) and "waveform" in audio):
+            if has_ins and has_vocals:
+                audio = vocals
+            elif has_vocals:
+                audio = vocals
+            elif has_ins:
+                audio = instrumental
         has_audio = isinstance(audio, dict) and "waveform" in audio
         audio_duration = 0.0
         audio_sr = 44100
@@ -791,6 +1195,20 @@ class HZ3_YuE2_KaraokeVisualizer:
                 w_2d = waveform_tensor
             audio_duration = float(w_2d.shape[-1]) / float(audio_sr)
             waveform_mono = w_2d.mean(dim=0).cpu().numpy()
+
+        vocals_mono = None
+        if has_vocals:
+            v_tensor = vocals["waveform"]
+            if v_tensor.dim() == 3:
+                v_tensor = v_tensor[0]
+            vocals_mono = v_tensor.mean(dim=0).cpu().numpy()
+
+        ins_mono = None
+        if has_ins:
+            i_tensor = instrumental["waveform"]
+            if i_tensor.dim() == 3:
+                i_tensor = i_tensor[0]
+            ins_mono = i_tensor.mean(dim=0).cpu().numpy()
 
         align_mono16k = audio_to_mono16k(vocals if has_vocals else audio) if has_audio else None
 
@@ -900,6 +1318,36 @@ class HZ3_YuE2_KaraokeVisualizer:
             db_floor = float(np.percentile(band_db_all, 12.0))
             db_span = max(18.0, float(np.percentile(band_db_all, 99.5)) - db_floor)
 
+        left_rms_all = None
+        right_rms_all = None
+        smooth_left = 0.0
+        smooth_right = 0.0
+
+        if visualizer_mode == "Rolling Mode":
+            # 1. Left Channel (Instrumental / Bass)
+            if ins_mono is not None:
+                rms_raw = self._frame_rms(ins_mono, audio_sr, fps, total_frames)
+                p95 = float(np.percentile(rms_raw, 95)) if len(rms_raw) else 1.0
+                left_rms_all = np.clip(rms_raw / max(1e-4, p95), 0.0, 1.0)
+            elif waveform_mono is not None and vocals_mono is not None:
+                min_l = min(len(waveform_mono), len(vocals_mono))
+                diff = waveform_mono[:min_l] - vocals_mono[:min_l]
+                rms_raw = self._frame_rms(diff, audio_sr, fps, total_frames)
+                p95 = float(np.percentile(rms_raw, 95)) if len(rms_raw) else 1.0
+                left_rms_all = np.clip(rms_raw / max(1e-4, p95), 0.0, 1.0)
+            elif band_db_all is not None:
+                bass = np.clip((band_db_all[:, :6].mean(axis=1) - db_floor) / db_span, 0.0, 1.0)
+                left_rms_all = bass.astype(np.float32)
+
+            # 2. Right Channel (Vocals)
+            if vocals_mono is not None:
+                rms_raw = self._frame_rms(vocals_mono, audio_sr, fps, total_frames)
+                p95 = float(np.percentile(rms_raw, 95)) if len(rms_raw) else 1.0
+                right_rms_all = np.clip(rms_raw / max(1e-4, p95), 0.0, 1.0)
+            elif band_db_all is not None:
+                vocal_range = np.clip((band_db_all[:, 10:30].mean(axis=1) - db_floor) / db_span, 0.0, 1.0)
+                right_rms_all = vocal_range.astype(np.float32)
+
         for frame_idx in range(total_frames):
             cur_time = float(frame_idx) / float(fps)
 
@@ -933,6 +1381,28 @@ class HZ3_YuE2_KaraokeVisualizer:
 
             peaks = np.maximum(peaks - 0.022, smooth_bars)
 
+            # Calculate speaker energies for Rolling Mode
+            speaker_energies = (0.0, 0.0)
+            if visualizer_mode == "Rolling Mode":
+                if left_rms_all is not None:
+                    raw_l = float(left_rms_all[frame_idx])
+                else:
+                    beat_phase = (cur_time * timeline["bpm"] / 60.0) % 1.0
+                    raw_l = float(math.exp(-beat_phase * 5.0) * 0.85)
+
+                if right_rms_all is not None:
+                    raw_r = float(right_rms_all[frame_idx])
+                else:
+                    raw_r = 0.0
+                    for vn in timeline["vocal_events"]:
+                        if vn["start"] <= cur_time <= vn["end"]:
+                            raw_r = 0.85
+                            break
+
+                smooth_left = smooth_left * 0.55 + raw_l * 0.45
+                smooth_right = smooth_right * 0.55 + raw_r * 0.45
+                speaker_energies = (smooth_left, smooth_right)
+
             frame_img = self._render_frame(
                 cur_time,
                 timeline,
@@ -945,6 +1415,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 font_main,
                 font_sub,
                 font_hud,
+                speaker_energies=speaker_energies,
             )
 
             v_frame = av.VideoFrame.from_image(frame_img)
@@ -1007,6 +1478,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 font_main,
                 font_sub,
                 font_hud,
+                speaker_energies=(0.0, 0.0),
             )
             images_tensor = torch.from_numpy(np.array(first_frame, dtype=np.float32) / 255.0).unsqueeze(0)
 

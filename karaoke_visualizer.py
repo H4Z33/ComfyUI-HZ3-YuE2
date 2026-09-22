@@ -192,11 +192,11 @@ class HZ3_YuE2_KaraokeVisualizer:
                 ),
                 "vocals": (
                     "AUDIO",
-                    {"tooltip": "Optional separated vocal stem of the SAME audio (e.g. AudioSeparation.Vocals). Strongly recommended: forced alignment on isolated vocals is far more accurate than on the mix."},
+                    {"tooltip": "Optional separated vocal stem of the SAME audio (e.g. AudioSeparation.Vocals). Drives the central mirrored waveform in Rolling Mode. Strongly recommended for accurate forced alignment."},
                 ),
                 "instrumental": (
                     "AUDIO",
-                    {"tooltip": "Optional separated instrumental stem (e.g. AudioSeparation.Instrumental). Drives the left speaker water ripples in Rolling Mode."},
+                    {"tooltip": "Optional separated instrumental stem (e.g. AudioSeparation.Instrumental). Used as the audio fallback when neither audio nor vocals is connected."},
                 ),
                 "whisper_segments": (
                     "STRING",
@@ -572,7 +572,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         theme: dict,
         energies: tuple[float, float],
     ) -> None:
-        """Render left (instrumental/bass) and right (vocal) elliptical speakers with water ripple shockwaves."""
+        """Render oppositely tilted speakers with synchronized audio-driven ripples."""
         xl = int(width * 0.105)
         xr = int(width * 0.895)
         ys = int(height * 0.58)
@@ -581,11 +581,26 @@ class HZ3_YuE2_KaraokeVisualizer:
         base_ry = max(50, int(height * 0.155))
 
         speakers = [
-            ("BASS / INS", xl, energies[0], theme["bar_low"]),
-            ("VOCALS", xr, energies[1], theme["bar_high"]),
+            ("AUDIO", xl, energies[0], theme["bar_low"], -15),
+            ("AUDIO", xr, energies[0], theme["bar_high"], 15),
         ]
 
-        for label, cx, energy, col in speakers:
+        for label, cx, energy, col, angle in speakers:
+            rotation = math.radians(angle)
+            cos_a, sin_a = math.cos(rotation), math.sin(rotation)
+
+            def tilted_ellipse(bounds, fill=None, outline=None, width=1):
+                rx = (bounds[2] - bounds[0]) / 2
+                ry = (bounds[3] - bounds[1]) / 2
+                points = []
+                for i in range(121):
+                    phase = i * math.tau / 120
+                    dx, dy = rx * math.cos(phase), ry * math.sin(phase)
+                    points.append((cx + dx * cos_a - dy * sin_a, ys + dx * sin_a + dy * cos_a))
+                if fill is not None:
+                    draw.polygon(points, fill=fill)
+                if outline is not None:
+                    draw.line(points, fill=outline, width=width, joint="curve")
             e = max(0.0, min(1.0, float(energy)))
 
             # Water Ripple Shockwaves (expanding concentric elliptical rings)
@@ -599,7 +614,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                     alpha = int(210 * fade)
                     ripple_col = (col[0], col[1], col[2], alpha)
                     thickness = 2 if phase < 0.55 else 1
-                    draw.ellipse(
+                    tilted_ellipse(
                         [cx - wave_rx, ys - wave_ry, cx + wave_rx, ys + wave_ry],
                         outline=ripple_col,
                         width=thickness,
@@ -613,7 +628,7 @@ class HZ3_YuE2_KaraokeVisualizer:
             # 1. Outer Chassis Ellipse (cabinet trim)
             chassis_rx = base_rx + 10
             chassis_ry = base_ry + 12
-            draw.ellipse(
+            tilted_ellipse(
                 [cx - chassis_rx, ys - chassis_ry, cx + chassis_rx, ys + chassis_ry],
                 fill=(22, 18, 34, 230),
                 outline=theme["pill_border"],
@@ -621,7 +636,7 @@ class HZ3_YuE2_KaraokeVisualizer:
             )
 
             # 2. Suspension surround ring
-            draw.ellipse(
+            tilted_ellipse(
                 [cx - cur_rx, ys - cur_ry, cx + cur_rx, ys + cur_ry],
                 fill=(12, 10, 18, 245),
                 outline=(col[0] // 2, col[1] // 2, col[2] // 2, 180),
@@ -637,7 +652,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 int(theme["bg_top"][2] * 0.4 + col[2] * 0.25 * e),
                 255,
             )
-            draw.ellipse(
+            tilted_ellipse(
                 [cx - cone_rx, ys - cone_ry, cx + cone_rx, ys + cone_ry],
                 fill=cone_col,
                 outline=col,
@@ -648,7 +663,7 @@ class HZ3_YuE2_KaraokeVisualizer:
             cap_rx = max(6, int(cur_rx * 0.32))
             cap_ry = max(8, int(cur_ry * 0.32))
             cap_alpha = int(140 + 115 * e)
-            draw.ellipse(
+            tilted_ellipse(
                 [cx - cap_rx, ys - cap_ry, cx + cap_rx, ys + cap_ry],
                 fill=(theme["peak_color"][0], theme["peak_color"][1], theme["peak_color"][2], cap_alpha),
                 outline=(255, 255, 255, 220),
@@ -664,136 +679,40 @@ class HZ3_YuE2_KaraokeVisualizer:
                 anchor="mm",
             )
 
-    def _render_musical_staff(
+    def _render_vocal_waveform(
         self,
         draw: ImageDraw.ImageDraw,
         t: float,
-        timeline: dict,
+        envelope: np.ndarray | None,
+        envelope_rate: float,
         width: int,
         height: int,
         theme: dict,
-        font_hud: ImageFont.FreeTypeFont,
     ) -> None:
-        """Render center musical staff (pentagrama) with horizontal flowing vocal melody notes."""
-        x_left = int(width * 0.19)
-        x_right = int(width * 0.81)
-        w_staff = x_right - x_left
+        """Draw a two-second vocal amplitude window mirrored around its center line."""
+        x_left, x_right = int(width * 0.22), int(width * 0.78)
         y_center = int(height * 0.72)
-        spacing = 11  # distance between staff lines
-
-        # 1. Frosted glass panel backing
-        draw.rounded_rectangle(
-            [x_left - 10, y_center - 36, x_right + 10, y_center + 36],
-            radius=8,
-            fill=theme["pill_bg"],
-            outline=(theme["pill_border"][0], theme["pill_border"][1], theme["pill_border"][2], 90),
-            width=1,
-        )
-
-        # 2. Draw 5 Horizontal Staff Lines (E4, G4, B4, D5, F5 in treble)
-        for i in (-2, -1, 0, 1, 2):
-            ly = y_center + i * spacing
-            draw.line([(x_left, ly), (x_right, ly)], fill=(255, 255, 255, 60), width=1)
-
-        # 3. Treble Clef indicator & badge on left
-        clef_x = x_left + 14
-        draw.text((clef_x, y_center), "𝄞", fill=theme["bar_low"], font=_get_font(26, bold=True), anchor="mm")
-        meter_str = str(timeline.get("meter", "4/4"))
-        draw.text((clef_x + 18, y_center), meter_str, fill=theme["info_text"], font=_get_font(11, bold=True), anchor="mm")
-
-        # 4. Vertical Playhead (Singing / Auditory Now line)
-        x_play = x_left + int(w_staff * 0.25)
-        # Soft glow halo
-        draw.line([(x_play, y_center - 34), (x_play, y_center + 34)], fill=theme["lyrics_glow"], width=4)
-        # Main crisp laser beam
-        draw.line([(x_play, y_center - 34), (x_play, y_center + 34)], fill=theme["lyrics_highlight"], width=1)
-
-        # 5. Project notes from vocal_events
-        vocal_notes = timeline.get("vocal_events", [])
-        speed = 145.0  # pixels per second horizontal flow
-
-        # Reference note: B4 (MIDI 71) = staff center line (Y = y_center)
-        dia_map = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6]
-
-        for note in vocal_notes:
-            n_start = note["start"]
-            n_end = note["end"]
-
-            x0 = x_play + (n_start - t) * speed
-            x1 = x_play + (n_end - t) * speed
-
-            if x1 < x_left - 10 or x0 > x_right + 10:
-                continue
-
-            pitch = int(note.get("pitch", 60))
-            octave = pitch // 12 - 1
-            semi = pitch % 12
-            dia_abs = (octave - 4) * 7 + dia_map[semi]
-            step_diff = dia_abs - 6  # relative to B4 (center line)
-            step_clamped = max(-6, min(6, step_diff))
-            y_note = y_center - int(step_clamped * (spacing / 2.0))
-
-            is_active = (n_start <= t <= n_end)
-
-            # Draw ledger lines if out of standard 5-line range
-            if abs(step_clamped) >= 5:
-                draw.line([(max(x_left, x0 - 4), y_note), (min(x_right, x0 + 12), y_note)], fill=(255, 255, 255, 120), width=1)
-
-            if is_active:
-                # Sustained glowing ribbon extending from playhead to end of note
-                ribbon_x0 = max(x_left, x_play)
-                ribbon_x1 = min(x_right, max(x_play + 4, x1))
-                draw.rounded_rectangle(
-                    [ribbon_x0, y_note - 3, ribbon_x1, y_note + 3],
-                    radius=3,
-                    fill=(theme["lyrics_highlight"][0], theme["lyrics_highlight"][1], theme["lyrics_highlight"][2], 180),
+        max_height = height * 0.085
+        count = max(2, (x_right - x_left) // 3)
+        amplitudes = np.zeros(count, dtype=np.float32)
+        if envelope is not None and len(envelope):
+            positions = (t + np.linspace(-1.0, 1.0, count)) * envelope_rate
+            window_start = max(0, int(math.floor(positions[0])))
+            window_end = min(len(envelope), int(math.ceil(positions[-1])) + 1)
+            if window_end > window_start:
+                amplitudes = np.interp(
+                    positions, np.arange(window_start, window_end),
+                    envelope[window_start:window_end], left=0.0, right=0.0,
                 )
-                # Active glowing notehead at the playhead
-                draw.ellipse(
-                    [x_play - 5, y_note - 4, x_play + 5, y_note + 4],
-                    fill=theme["peak_color"],
-                    outline=(255, 255, 255),
-                    width=1,
-                )
-                # Playhead impact pulse
-                draw.ellipse(
-                    [x_play - 8, y_note - 7, x_play + 8, y_note + 7],
-                    outline=theme["lyrics_highlight"],
-                    width=1,
-                )
-            elif t < n_start:
-                # Future note flowing toward playhead
-                note_w = max(8, int(x1 - x0))
-                # Note ribbon / sustain
-                if note_w > 12:
-                    ribbon_x0 = max(x_left, x0)
-                    ribbon_x1 = min(x_right, x1)
-                    draw.rounded_rectangle(
-                        [ribbon_x0, y_note - 2, ribbon_x1, y_note + 2],
-                        radius=2,
-                        fill=(theme["bar_low"][0], theme["bar_low"][1], theme["bar_low"][2], 90),
-                    )
-                # Oval notehead at start
-                if x_left <= x0 <= x_right:
-                    draw.ellipse(
-                        [x0 - 4, y_note - 3, x0 + 4, y_note + 3],
-                        fill=theme["lyrics_base"],
-                        outline=theme["bar_low"],
-                        width=1,
-                    )
-                    # Vertical stem
-                    stem_dir = -1 if step_clamped < 0 else 1
-                    draw.line([(x0 + 3, y_note), (x0 + 3, y_note + stem_dir * 16)], fill=theme["lyrics_base"], width=1)
-            else:
-                # Past note trailing off past playhead
-                ribbon_x0 = max(x_left, x0)
-                ribbon_x1 = min(x_right, min(x_play, x1))
-                if ribbon_x1 > ribbon_x0:
-                    draw.rounded_rectangle(
-                        [ribbon_x0, y_note - 2, ribbon_x1, y_note + 2],
-                        radius=2,
-                        fill=(theme["lyrics_base"][0], theme["lyrics_base"][1], theme["lyrics_base"][2], 50),
-                    )
+        xs = np.linspace(x_left, x_right, count)
+        top = [(float(x), y_center - float(v) * max_height) for x, v in zip(xs, amplitudes)]
+        bottom = [(float(x), y_center + float(v) * max_height) for x, v in zip(xs, amplitudes)]
+        color = theme["lyrics_highlight"][:3]
+        draw.polygon(top + bottom[::-1], fill=(*color, 45))
+        for points in (top, bottom):
+            draw.line(points, fill=(*color, 40), width=7)
+            draw.line(points, fill=(*color, 220), width=2)
+        draw.line([(x_left, y_center), (x_right, y_center)], fill=(*color, 80), width=1)
 
     def _get_rolling_lambda(self, lines: list[dict], t: float) -> float:
         """Compute smooth continuous virtual line index lambda(t).
@@ -952,6 +871,8 @@ class HZ3_YuE2_KaraokeVisualizer:
         font_sub: ImageFont.FreeTypeFont,
         font_hud: ImageFont.FreeTypeFont,
         speaker_energies: tuple[float, float] = (0.0, 0.0),
+        vocal_envelope: np.ndarray | None = None,
+        vocal_envelope_rate: float = 1.0,
     ) -> Image.Image:
         """Render a single high-quality video frame with Pillow."""
         # 1. Background Gradient
@@ -1010,7 +931,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         # 3. Rolling Mode vs Classic Visualizers
         if mode == "Rolling Mode":
             self._render_speakers(draw, t, width, height, theme, speaker_energies)
-            self._render_musical_staff(draw, t, timeline, width, height, theme, font_hud)
+            self._render_vocal_waveform(draw, t, vocal_envelope, vocal_envelope_rate, width, height, theme)
             self._render_rolling_lyrics(frame_img, draw, t, timeline, width, height, theme, font_main, font_sub)
             self._render_progress_bar(draw, t, timeline["duration"], width, height, theme, font_hud)
             return frame_img
@@ -1203,13 +1124,6 @@ class HZ3_YuE2_KaraokeVisualizer:
                 v_tensor = v_tensor[0]
             vocals_mono = v_tensor.mean(dim=0).cpu().numpy()
 
-        ins_mono = None
-        if has_ins:
-            i_tensor = instrumental["waveform"]
-            if i_tensor.dim() == 3:
-                i_tensor = i_tensor[0]
-            ins_mono = i_tensor.mean(dim=0).cpu().numpy()
-
         align_mono16k = audio_to_mono16k(vocals if has_vocals else audio) if has_audio else None
 
         # 2. Build Timeline (lyrics alignment + score events)
@@ -1318,35 +1232,23 @@ class HZ3_YuE2_KaraokeVisualizer:
             db_floor = float(np.percentile(band_db_all, 12.0))
             db_span = max(18.0, float(np.percentile(band_db_all, 99.5)) - db_floor)
 
-        left_rms_all = None
-        right_rms_all = None
-        smooth_left = 0.0
-        smooth_right = 0.0
-
+        speaker_rms_all = None
+        smooth_energy = 0.0
+        vocal_envelope = None
+        vocal_envelope_rate = 1.0
         if visualizer_mode == "Rolling Mode":
-            # 1. Left Channel (Instrumental / Bass)
-            if ins_mono is not None:
-                rms_raw = self._frame_rms(ins_mono, audio_sr, fps, total_frames)
+            if waveform_mono is not None:
+                rms_raw = self._frame_rms(waveform_mono, audio_sr, fps, total_frames)
                 p95 = float(np.percentile(rms_raw, 95)) if len(rms_raw) else 1.0
-                left_rms_all = np.clip(rms_raw / max(1e-4, p95), 0.0, 1.0)
-            elif waveform_mono is not None and vocals_mono is not None:
-                min_l = min(len(waveform_mono), len(vocals_mono))
-                diff = waveform_mono[:min_l] - vocals_mono[:min_l]
-                rms_raw = self._frame_rms(diff, audio_sr, fps, total_frames)
-                p95 = float(np.percentile(rms_raw, 95)) if len(rms_raw) else 1.0
-                left_rms_all = np.clip(rms_raw / max(1e-4, p95), 0.0, 1.0)
-            elif band_db_all is not None:
-                bass = np.clip((band_db_all[:, :6].mean(axis=1) - db_floor) / db_span, 0.0, 1.0)
-                left_rms_all = bass.astype(np.float32)
-
-            # 2. Right Channel (Vocals)
-            if vocals_mono is not None:
-                rms_raw = self._frame_rms(vocals_mono, audio_sr, fps, total_frames)
-                p95 = float(np.percentile(rms_raw, 95)) if len(rms_raw) else 1.0
-                right_rms_all = np.clip(rms_raw / max(1e-4, p95), 0.0, 1.0)
-            elif band_db_all is not None:
-                vocal_range = np.clip((band_db_all[:, 10:30].mean(axis=1) - db_floor) / db_span, 0.0, 1.0)
-                right_rms_all = vocal_range.astype(np.float32)
+                speaker_rms_all = np.clip(rms_raw / max(1e-4, p95), 0.0, 1.0)
+            if vocals_mono is not None and len(vocals_mono):
+                vocal_sr = int(vocals.get("sample_rate", 44100))
+                block_size = max(1, round(vocal_sr / 240))
+                padded_vocals = np.pad(vocals_mono, (0, (-len(vocals_mono)) % block_size))
+                vocal_envelope = np.max(np.abs(padded_vocals.reshape(-1, block_size)), axis=1)
+                vocal_peak = max(1e-4, float(np.max(vocal_envelope)))
+                vocal_envelope = vocal_envelope / vocal_peak
+                vocal_envelope_rate = vocal_sr / block_size
 
         for frame_idx in range(total_frames):
             cur_time = float(frame_idx) / float(fps)
@@ -1381,27 +1283,10 @@ class HZ3_YuE2_KaraokeVisualizer:
 
             peaks = np.maximum(peaks - 0.022, smooth_bars)
 
-            # Calculate speaker energies for Rolling Mode
             speaker_energies = (0.0, 0.0)
-            if visualizer_mode == "Rolling Mode":
-                if left_rms_all is not None:
-                    raw_l = float(left_rms_all[frame_idx])
-                else:
-                    beat_phase = (cur_time * timeline["bpm"] / 60.0) % 1.0
-                    raw_l = float(math.exp(-beat_phase * 5.0) * 0.85)
-
-                if right_rms_all is not None:
-                    raw_r = float(right_rms_all[frame_idx])
-                else:
-                    raw_r = 0.0
-                    for vn in timeline["vocal_events"]:
-                        if vn["start"] <= cur_time <= vn["end"]:
-                            raw_r = 0.85
-                            break
-
-                smooth_left = smooth_left * 0.55 + raw_l * 0.45
-                smooth_right = smooth_right * 0.55 + raw_r * 0.45
-                speaker_energies = (smooth_left, smooth_right)
+            if visualizer_mode == "Rolling Mode" and speaker_rms_all is not None:
+                smooth_energy = smooth_energy * 0.55 + float(speaker_rms_all[frame_idx]) * 0.45
+                speaker_energies = (smooth_energy, smooth_energy)
 
             frame_img = self._render_frame(
                 cur_time,
@@ -1416,6 +1301,8 @@ class HZ3_YuE2_KaraokeVisualizer:
                 font_sub,
                 font_hud,
                 speaker_energies=speaker_energies,
+                vocal_envelope=vocal_envelope,
+                vocal_envelope_rate=vocal_envelope_rate,
             )
 
             v_frame = av.VideoFrame.from_image(frame_img)
@@ -1479,6 +1366,8 @@ class HZ3_YuE2_KaraokeVisualizer:
                 font_sub,
                 font_hud,
                 speaker_energies=(0.0, 0.0),
+                vocal_envelope=vocal_envelope,
+                vocal_envelope_rate=vocal_envelope_rate,
             )
             images_tensor = torch.from_numpy(np.array(first_frame, dtype=np.float32) / 255.0).unsqueeze(0)
 

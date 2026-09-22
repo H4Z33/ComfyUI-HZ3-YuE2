@@ -1222,7 +1222,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         image_batch_list = []
         band_db_all = None
         db_floor, db_span = -50.0, 48.0
-        if has_audio and waveform_mono is not None:
+        if visualizer_mode != "Rolling Mode" and has_audio and waveform_mono is not None:
             # Band levels for every frame at once; the display range adapts to the track's
             # own loudness so a hot master does not pin every bar to the ceiling.
             band_db_all = self._band_levels(waveform_mono, audio_sr, fps, total_frames, freq_bands)
@@ -1246,35 +1246,36 @@ class HZ3_YuE2_KaraokeVisualizer:
         for frame_idx in range(total_frames):
             cur_time = float(frame_idx) / float(fps)
 
-            # Compute Spectrum Bars
-            if band_db_all is not None:
-                raw_bars = np.clip((band_db_all[frame_idx] - db_floor) / db_span, 0.0, 1.0).astype(np.float32)
-                smooth_bars = smooth_bars * 0.60 + raw_bars * 0.40
-            else:
-                raw_bars = np.zeros(num_bands, dtype=np.float32)
-                for vn in timeline["vocal_events"]:
-                    if vn["start"] <= cur_time <= vn["end"]:
-                        p_bin = int((vn["pitch"] - 40) / (84 - 40) * num_bands)
-                        p_bin = np.clip(p_bin, 0, num_bands - 1)
-                        raw_bars[p_bin] = 1.0
-                        if p_bin > 0:
-                            raw_bars[p_bin - 1] = max(raw_bars[p_bin - 1], 0.6)
-                        if p_bin < num_bands - 1:
-                            raw_bars[p_bin + 1] = max(raw_bars[p_bin + 1], 0.6)
+            if visualizer_mode != "Rolling Mode":
+                # Compute Spectrum Bars
+                if band_db_all is not None:
+                    raw_bars = np.clip((band_db_all[frame_idx] - db_floor) / db_span, 0.0, 1.0).astype(np.float32)
+                    smooth_bars = smooth_bars * 0.60 + raw_bars * 0.40
+                else:
+                    raw_bars = np.zeros(num_bands, dtype=np.float32)
+                    for vn in timeline["vocal_events"]:
+                        if vn["start"] <= cur_time <= vn["end"]:
+                            p_bin = int((vn["pitch"] - 40) / (84 - 40) * num_bands)
+                            p_bin = np.clip(p_bin, 0, num_bands - 1)
+                            raw_bars[p_bin] = 1.0
+                            if p_bin > 0:
+                                raw_bars[p_bin - 1] = max(raw_bars[p_bin - 1], 0.6)
+                            if p_bin < num_bands - 1:
+                                raw_bars[p_bin + 1] = max(raw_bars[p_bin + 1], 0.6)
 
-                for in_n in timeline["ins_events"]:
-                    if in_n["start"] <= cur_time <= in_n["end"]:
-                        i_bin = int((in_n["pitch"] - 36) / (72 - 36) * num_bands)
-                        i_bin = np.clip(i_bin, 0, num_bands - 1)
-                        raw_bars[i_bin] = max(raw_bars[i_bin], 0.75)
+                    for in_n in timeline["ins_events"]:
+                        if in_n["start"] <= cur_time <= in_n["end"]:
+                            i_bin = int((in_n["pitch"] - 36) / (72 - 36) * num_bands)
+                            i_bin = np.clip(i_bin, 0, num_bands - 1)
+                            raw_bars[i_bin] = max(raw_bars[i_bin], 0.75)
 
-                beat_phase = (cur_time * timeline["bpm"] / 60.0) % 1.0
-                kick = math.exp(-beat_phase * 6.0)
-                raw_bars[0:4] = np.maximum(raw_bars[0:4], float(kick * 0.90))
+                    beat_phase = (cur_time * timeline["bpm"] / 60.0) % 1.0
+                    kick = math.exp(-beat_phase * 6.0)
+                    raw_bars[0:4] = np.maximum(raw_bars[0:4], float(kick * 0.90))
 
-                smooth_bars = smooth_bars * 0.70 + raw_bars * 0.30
+                    smooth_bars = smooth_bars * 0.70 + raw_bars * 0.30
 
-            peaks = np.maximum(peaks - 0.022, smooth_bars)
+                peaks = np.maximum(peaks - 0.022, smooth_bars)
 
             speaker_energies = (0.0, 0.0)
             if visualizer_mode == "Rolling Mode" and speaker_rms_all is not None:

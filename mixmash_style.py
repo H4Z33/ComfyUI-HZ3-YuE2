@@ -484,37 +484,12 @@ def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
 
 def vocal_bar_to_chords_only(vocal_bar: str) -> str:
     """Convert vocal bar to rests while preserving chord symbols at their exact offsets."""
-    cursor = 0
-    events = []
-    while cursor < len(vocal_bar):
-        if vocal_bar[cursor].isspace():
-            cursor += 1
-            continue
-        m = TOKEN.match(vocal_bar, cursor)
-        if not m:
-            break
-        cursor = m.end()
-        chord = m.group("chord")
-        note = m.group("note")
-        dur = int(m.group("duration") or "1") if note else 0
-        events.append((chord, note, dur))
+    def replace_note(match):
+        if match.group("note"):
+            return "z" + match.group("duration")
+        return match.group(0)
 
-    chords_with_dur = []
-    curr_chord = None
-    curr_dur = 0
-    for chord, note, dur in events:
-        if chord is not None:
-            if curr_chord is not None:
-                chords_with_dur.append((curr_chord, curr_dur))
-                curr_dur = 0
-            curr_chord = chord
-        curr_dur += dur
-    if curr_chord is not None:
-        chords_with_dur.append((curr_chord, curr_dur))
-
-    if not chords_with_dur:
-        return "Z"
-    return "".join(f'"{c}"z{d if d > 1 else ""}' for c, d in chords_with_dur)
+    return TOKEN.sub(replace_note, vocal_bar).strip() or "Z"
 
 
 def vocal_bar_to_ins_melody(vocal_bar: str) -> str:
@@ -600,7 +575,7 @@ def get_abc_intro_params(abc_text: str) -> tuple[str, int]:
 
 
 def insert_karaoke_intro(abc_text: str) -> str:
-    """Insert an intro section with V: Vocal only (no V: Ins) if not already present."""
+    """Insert a four-bar chord intro with rests in both voices if absent."""
     if not abc_text or not str(abc_text).strip():
         return abc_text
 
@@ -638,7 +613,7 @@ def convert_abc_to_karaoke(abc_text: str, lyrics_text: str = "") -> str:
 
     V: Vocal keeps the chords placed over rests (no sung notes).
     V: Ins receives the melody notes (stripped of chord annotations).
-    If lyrics have [Intro] but ABC does not, adds an intro section with V: Vocal only (no V: Ins).
+    Section structure comes exclusively from the supplied repaired ABC.
     """
     if not abc_text or not str(abc_text).strip():
         return abc_text
@@ -721,19 +696,13 @@ def convert_abc_to_karaoke(abc_text: str, lyrics_text: str = "") -> str:
 
     converted = "\n".join(header + new_body) + "\n"
 
-    if lyrics_has_intro(lyrics_text) and not abc_has_intro(converted):
-        converted = insert_karaoke_intro(converted)
-
     return converted
 
 
 def vocal_bar_to_pure_vocal_notes(vocal_bar: str) -> str:
-    """Strip all chord annotations from a vocal bar. If no notes exist, return 'Z'."""
+    """Strip chord annotations while preserving notes and exact rest durations."""
     cleaned = re.sub(r'"[^"]*"', "", vocal_bar).strip()
-    if not cleaned:
-        return "Z"
-    has_notes = bool(re.search(r"[A-Ga-g]", cleaned))
-    return cleaned if has_notes else "Z"
+    return cleaned if cleaned else "Z"
 
 
 def convert_abc_to_vocals_only(abc_text: str) -> str:
@@ -793,11 +762,9 @@ def convert_abc_to_vocals_only(abc_text: str) -> str:
                     i += 1  # skip original ins music line
 
             v_bars = [b.strip() for b in vocal_music_line[:-1].split("|") if b.strip()] if vocal_music_line.endswith("|") else [vocal_music_line]
-            num_bars = max(1, len(v_bars))
-
             new_v_bars = [vocal_bar_to_pure_vocal_notes(b) for b in v_bars]
             new_v_line = "|".join(new_v_bars) + "|"
-            new_i_line = "|".join(["Z"] * num_bars) + "|"
+            new_i_line = "|".join(vocal_bar_to_chords_only(b) for b in new_v_bars) + "|"
 
             new_body.extend(v_headers)
             new_body.append(new_v_line)

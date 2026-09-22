@@ -14,6 +14,7 @@ import logging
 import math
 import os
 import time
+from collections import deque
 from functools import lru_cache
 from typing import Any
 
@@ -200,6 +201,9 @@ class _RenderResources:
                     for cosine, sine in unit_circle]
 
         self.ellipse = ellipse
+        self.trails = deque(maxlen=16)
+        self.last_visual_time = None
+        self.last_trail_time = -math.inf
 
 
 class HZ3_YuE2_KaraokeVisualizer:
@@ -490,7 +494,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         for start in range(0, total_frames, batch):
             idx = centers[start:start + batch]
             chunks = padded[idx[:, None] + np.arange(win_samples)[None, :]]
-            rms[start:start + len(idx)] = np.sqrt(np.mean(chunks ** 2, axis=1) + 1e-8)
+            rms[start:start + len(idx)] = np.sqrt(np.mean(chunks ** 2, axis=1))
         return rms
 
     def _draw_karaoke_sweep(
@@ -615,16 +619,22 @@ class HZ3_YuE2_KaraokeVisualizer:
         theme: dict,
         energies: tuple[float, float],
         render_resources: _RenderResources,
+        bass_pulse: float = 0.0,
+        opacity: float = 1.0,
     ) -> None:
         """Render mirrored waves expanding from lower audio-reactive centers."""
         xl = int(width * 0.105)
-        ys = int(height * 0.66)
+        ys = int(height * 0.73)
         base_rx = max(30, int(width * 0.052))
-        base_ry = max(50, int(height * 0.13))
+        base_ry = max(50, int(height * 0.105))
         energy = max(0.0, min(1.0, float(energies[0])))
         color = theme["bar_low"]
 
         for cx, angle in ((xl, -15), (width - xl, 15)):
+            if bass_pulse > 0.01:
+                scale = 0.35 + 0.75 * bass_pulse
+                points = render_resources.ellipse(cx, ys, base_rx * scale, base_ry * scale, angle)
+                draw.polygon(points, fill=(*color[:3], int(150 * bass_pulse * opacity)))
             for wave in range(4):
                 phase = (t * 1.5 + wave * 0.25) % 1.0
                 fade = ((1.0 - phase) ** 1.6) * energy
@@ -634,25 +644,15 @@ class HZ3_YuE2_KaraokeVisualizer:
                     points = render_resources.ellipse(cx, ys, rx, ry, angle)
                     draw.line(
                         points,
-                        fill=(*color[:3], int(210 * fade)),
+                        fill=(*color[:3], int(210 * fade * opacity)),
                         width=2 if phase < 0.55 else 1,
                         joint="curve",
                     )
 
-    def _render_vocal_waveform(
-        self,
-        draw: ImageDraw.ImageDraw,
-        t: float,
-        samples: np.ndarray | None,
-        sample_rate: float,
-        width: int,
-        height: int,
-        theme: dict,
-    ) -> None:
-        """Draw signed vocal samples over a 40 ms oscilloscope window."""
+    def _vocal_waveform_points(self, t, samples, sample_rate, width, height):
         x_left, x_right = int(width * 0.22), int(width * 0.78)
-        y_center = int(height * 0.72)
-        max_height = height * 0.085
+        y_center = int(height * 0.79)
+        max_height = height * 0.075
         count = max(2, x_right - x_left + 1)
         amplitudes = np.zeros(count, dtype=np.float32)
         if samples is not None and len(samples):
@@ -666,10 +666,51 @@ class HZ3_YuE2_KaraokeVisualizer:
                 )
         xs = np.linspace(x_left, x_right, count)
         points = list(zip(xs.tolist(), (y_center - amplitudes * max_height).tolist()))
+        return points
+
+    def _render_audio_visuals(self, draw, t, width, height, theme, energies, samples,
+                              sample_rate, resources, bass_pulse):
+        if resources.last_visual_time is not None and t <= resources.last_visual_time:
+            resources.trails.clear()
+            resources.last_trail_time = -math.inf
+        resources.last_visual_time = t
+        while resources.trails and t - resources.trails[0][0] >= 2.0:
+            resources.trails.popleft()
+
         color = theme["lyrics_highlight"][:3]
-        draw.line([(x_left, y_center), (x_right, y_center)], fill=(*color, 45), width=1)
+        for old_time, old_energy, old_bass, old_points in resources.trails:
+            opacity = 0.18 * (1.0 - (t - old_time) / 2.0) ** 2
+            self._render_speakers(draw, old_time, width, height, theme, old_energy, resources,
+                                  old_bass, opacity)
+            draw.line(old_points, fill=(*color, int(180 * opacity)), width=1)
+
+        self._render_speakers(draw, t, width, height, theme, energies, resources, bass_pulse)
+        points = self._vocal_waveform_points(t, samples, sample_rate, width, height)
         draw.line(points, fill=(*color, 40), width=5)
         draw.line(points, fill=(*color, 230), width=2)
+        # Keep geometry snapshots at 8 Hz, rather than retaining full image frames.
+        if t - resources.last_trail_time >= 0.125 - 1e-9:
+            resources.trails.append((t, energies, bass_pulse, points))
+            resources.last_trail_time = t
+
+    def _bass_pulses(self, mono, sample_rate, fps, total_frames):
+        bass_db = self._band_levels(mono, sample_rate, fps, total_frames, np.array([30.0, 180.0]))[:, 0]
+        amplitude = np.power(10.0, bass_db / 20.0)
+        level = np.clip(amplitude / max(1e-4, float(np.percentile(amplitude, 95))), 0.0, 1.0)
+        onset = np.maximum(0.0, np.diff(level, prepend=0.0))
+        threshold = max(0.025, float(np.percentile(onset, 90)))
+        pulses = np.zeros(total_frames, dtype=np.float32)
+        decay = math.exp(-1.0 / (fps * 0.24))
+        last_beat = -fps
+        pulse = 0.0
+        for index in range(total_frames):
+            pulse *= decay
+            if (onset[index] >= threshold and level[index] > 0.12
+                    and index - last_beat >= max(1, round(fps * 0.18))):
+                pulse = max(pulse, float(level[index]))
+                last_beat = index
+            pulses[index] = pulse
+        return pulses
 
     def _get_rolling_lambda(self, lines: list[dict], t: float) -> float:
         """Compute smooth continuous virtual line index lambda(t).
@@ -705,6 +746,42 @@ class HZ3_YuE2_KaraokeVisualizer:
 
         return float(n - 1)
 
+    def _draw_rolling_line(self, draw, text, d, width, height, theme, font_main,
+                           render_resources, highlight=False):
+        y_focus = int(height * 0.38)
+        line_spacing = int(font_main.size * 1.42)
+        yk = y_focus + int(d * line_spacing)
+        if yk < int(height * 0.10) or yk > int(height * 0.58):
+            return None
+
+        dist = abs(d)
+        scale = 0.65 + 0.35 * max(0.0, 1.0 - (dist ** 1.3))
+        scaled_size = max(16, int(font_main.size * scale))
+        cur_font = render_resources.font(scaled_size, bold=(dist < 0.45))
+
+        if d <= 0:
+            alpha = int(255 * max(0.0, 1.0 - (dist * 0.65)))
+        else:
+            alpha = int(255 * max(0.20, 1.0 - (dist * 0.50)))
+
+        bbox = cur_font.getbbox(text)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+
+        if text_w > width - 140:
+            cur_font = render_resources.font(max(14, int(scaled_size * (width - 160) / max(1, text_w))), bold=False)
+            bbox = cur_font.getbbox(text)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+
+        x_start = max(20, (width - text_w) // 2)
+        y_start = yk - text_h // 2
+
+        col = (*theme["lyrics_highlight" if highlight else "lyrics_base"][:3], alpha)
+        draw.text((x_start, y_start), text, fill=col, font=cur_font)
+
+        return x_start, y_start, text_w, cur_font
+
     def _render_rolling_lyrics(
         self,
         frame_img: Image.Image,
@@ -732,9 +809,6 @@ class HZ3_YuE2_KaraokeVisualizer:
 
         lambda_line = self._get_rolling_lambda(lines, t)
 
-        y_focus = int(height * 0.38)
-        line_spacing = int(font_main.size * 1.42)
-
         min_k = max(0, int(lambda_line) - 2)
         max_k = min(len(lines), int(lambda_line) + 3)
 
@@ -743,35 +817,10 @@ class HZ3_YuE2_KaraokeVisualizer:
             text = k_line["text"]
             d = k - lambda_line
 
-            yk = y_focus + int(d * line_spacing)
-            if yk < int(height * 0.10) or yk > int(height * 0.58):
+            layout = self._draw_rolling_line(draw, text, d, width, height, theme, font_main, render_resources)
+            if layout is None:
                 continue
-
-            dist = abs(d)
-            scale = 0.65 + 0.35 * max(0.0, 1.0 - (dist ** 1.3))
-            scaled_size = max(16, int(font_main.size * scale))
-            cur_font = render_resources.font(scaled_size, bold=(dist < 0.45))
-
-            if d <= 0:
-                alpha = int(255 * max(0.0, 1.0 - (dist * 0.65)))
-            else:
-                alpha = int(255 * max(0.20, 1.0 - (dist * 0.50)))
-
-            bbox = cur_font.getbbox(text)
-            text_w = bbox[2] - bbox[0]
-            text_h = bbox[3] - bbox[1]
-
-            if text_w > width - 140:
-                cur_font = render_resources.font(max(14, int(scaled_size * (width - 160) / max(1, text_w))), bold=False)
-                bbox = cur_font.getbbox(text)
-                text_w = bbox[2] - bbox[0]
-                text_h = bbox[3] - bbox[1]
-
-            x_start = max(20, (width - text_w) // 2)
-            y_start = yk - text_h // 2
-
-            col = (theme["lyrics_base"][0], theme["lyrics_base"][1], theme["lyrics_base"][2], alpha)
-            draw.text((x_start, y_start), text, fill=col, font=cur_font)
+            x_start, y_start, text_w, cur_font = layout
 
             # Karaoke sweep: active while line is being sung or during handover before next line starts
             should_sweep = (k_line["start"] <= t <= k_line["end"]) or (
@@ -821,18 +870,45 @@ class HZ3_YuE2_KaraokeVisualizer:
             countdown = math.ceil(next_start - t)
         return label, countdown
 
-    def _render_lyric_break(self, draw, lyric_break, width, height, theme, font_main):
+    def _render_lyric_break(self, draw, lyric_break, t, timeline, width, height, theme,
+                           font_main, render_resources):
         label, countdown = lyric_break
-        center_y = int(height * 0.38)
-        draw.text(
-            (width // 2, center_y), f"({label})",
-            fill=(*theme["lyrics_base"][:3], 180), font=font_main, anchor="mm",
-        )
+        next_line = next((line for line in timeline["lines"] if line["start"] > t), None)
+        shift = 0.0
+        if next_line is not None:
+            remaining = next_line["start"] - t
+            progress = max(0.0, min(1.0, 1.0 - remaining / 0.45))
+            shift = progress * progress * (3.0 - 2.0 * progress)
+        self._draw_rolling_line(draw, f"({label})", -1.0 - shift, width, height,
+                                theme, font_main, render_resources)
         if countdown is not None:
-            draw.text(
-                (width // 2, center_y + int(font_main.size * 1.6)), str(countdown),
-                fill=theme["lyrics_highlight"], font=font_main, anchor="mm",
-            )
+            self._draw_rolling_line(draw, str(countdown), -shift, width, height,
+                                    theme, font_main, render_resources, highlight=True)
+        if next_line is not None:
+            self._draw_rolling_line(draw, next_line["text"], 1.0 - shift, width, height,
+                                    theme, font_main, render_resources)
+
+    def _render_progress_frame(self, draw, t, duration, width, height, theme):
+        inset = max(8, int(min(width, height) * 0.018))
+        left, top, right, bottom = inset, inset, width - inset, height - inset
+        path = [(width / 2, top), (left, top), (left, bottom),
+                (right, bottom), (right, top), (width / 2, top)]
+        draw.line(path, fill=(*theme["pill_border"][:3], 25), width=1)
+        perimeter = 2 * (right - left + bottom - top)
+        remaining = perimeter * max(0.0, min(1.0, t / max(0.001, duration)))
+        completed = [path[0]]
+        for start, end in zip(path, path[1:]):
+            length = abs(end[0] - start[0]) + abs(end[1] - start[1])
+            if remaining <= 0:
+                break
+            fraction = min(1.0, remaining / length)
+            completed.append((start[0] + (end[0] - start[0]) * fraction,
+                              start[1] + (end[1] - start[1]) * fraction))
+            remaining -= length
+        if len(completed) > 1:
+            color = theme["progress_fill"][:3]
+            draw.line(completed, fill=(*color, 40), width=7, joint="curve")
+            draw.line(completed, fill=(*color, 230), width=3, joint="curve")
 
     def _render_frame(
         self,
@@ -851,6 +927,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         vocal_samples: np.ndarray | None = None,
         vocal_sample_rate: float = 1.0,
         render_resources: _RenderResources | None = None,
+        bass_pulse: float = 0.0,
     ) -> Image.Image:
         """Render a single high-quality video frame with Pillow."""
         if render_resources is None:
@@ -895,14 +972,15 @@ class HZ3_YuE2_KaraokeVisualizer:
 
         lyric_break = self._get_lyric_break(timeline, t)
         if lyric_break is not None:
-            self._render_lyric_break(draw, lyric_break, width, height, theme, font_main)
+            self._render_lyric_break(draw, lyric_break, t, timeline, width, height, theme, font_main, render_resources)
 
         # 3. Rolling Mode vs Classic Visualizers
         if mode == "Rolling Mode":
-            self._render_speakers(draw, t, width, height, theme, speaker_energies, render_resources)
-            self._render_vocal_waveform(draw, t, vocal_samples, vocal_sample_rate, width, height, theme)
+            self._render_audio_visuals(draw, t, width, height, theme, speaker_energies,
+                                       vocal_samples, vocal_sample_rate, render_resources, bass_pulse)
             if lyric_break is None:
                 self._render_rolling_lyrics(frame_img, draw, t, timeline, width, height, theme, font_main, font_sub, render_resources)
+            self._render_progress_frame(draw, t, timeline["duration"], width, height, theme)
             return frame_img
 
         # Classic Karaoke Display
@@ -1028,6 +1106,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 draw.line(pts, fill=theme["bar_low"], width=3)
                 draw.line(pts, fill=(255, 255, 255, 220), width=1)
 
+        self._render_progress_frame(draw, t, timeline["duration"], width, height, theme)
         return frame_img
 
     def generate_karaoke(
@@ -1201,11 +1280,13 @@ class HZ3_YuE2_KaraokeVisualizer:
             db_span = max(18.0, float(np.percentile(band_db_all, 99.5)) - db_floor)
 
         speaker_rms_all = None
+        bass_pulses = np.zeros(total_frames, dtype=np.float32)
         smooth_energy = 0.0
         vocal_samples = None
         vocal_sample_rate = 1.0
         if visualizer_mode == "Rolling Mode":
             if waveform_mono is not None:
+                bass_pulses = self._bass_pulses(waveform_mono, audio_sr, fps, total_frames)
                 rms_raw = self._frame_rms(waveform_mono, audio_sr, fps, total_frames)
                 p95 = float(np.percentile(rms_raw, 95)) if len(rms_raw) else 1.0
                 speaker_rms_all = np.clip(rms_raw / max(1e-4, p95), 0.0, 1.0)
@@ -1269,6 +1350,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 font_sub,
                 font_hud,
                 speaker_energies=speaker_energies,
+                bass_pulse=float(bass_pulses[frame_idx]),
                 vocal_samples=vocal_samples,
                 vocal_sample_rate=vocal_sample_rate,
                 render_resources=render_resources,

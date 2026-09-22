@@ -674,11 +674,26 @@ def convert_abc_to_karaoke(abc_text: str, lyrics_text: str = "") -> str:
 
             # Transform bars
             v_bars = [b.strip() for b in vocal_music_line[:-1].split("|") if b.strip()] if vocal_music_line.endswith("|") else [vocal_music_line]
-            has_vocal_notes = any(re.search(r"[A-Ga-g]", re.sub(r'"[^"]*"', "", b)) for b in v_bars)
-
-            if has_vocal_notes and ins_music_line is not None:
-                new_v_bars = [vocal_bar_to_chords_only(b) for b in v_bars]
-                new_i_bars = [vocal_bar_to_ins_melody(b) for b in v_bars]
+            if ins_music_line is not None:
+                # Expand measure rests before pairing bars; Z4 spans four bars, not one.
+                i_bars = [b.strip() for b in ins_music_line.rstrip().rstrip("|").split("|") if b.strip()]
+                expanded_voices = []
+                for bars in (v_bars, i_bars):
+                    expanded = []
+                    for bar in bars:
+                        rest = re.fullmatch(r"Z([0-9]*)", bar)
+                        expanded.extend(["Z"] * int(rest.group(1) or "1") if rest else [bar])
+                    expanded_voices.append(expanded)
+                vocal_bars, instrumental_bars = expanded_voices
+                new_v_bars = []
+                new_i_bars = []
+                for bar_index, vocal_bar in enumerate(vocal_bars):
+                    melody = vocal_bar_to_ins_melody(vocal_bar)
+                    has_notes = any(match.group("note") in "ABCDEFGabcdefg"
+                                    for match in TOKEN.finditer(melody) if match.group("note"))
+                    new_v_bars.append(vocal_bar_to_chords_only(vocal_bar))
+                    original_ins = instrumental_bars[bar_index] if bar_index < len(instrumental_bars) else "Z"
+                    new_i_bars.append(melody if has_notes else original_ins)
                 new_v_line = "|".join(new_v_bars) + "|"
                 new_i_line = "|".join(new_i_bars) + "|"
             else:

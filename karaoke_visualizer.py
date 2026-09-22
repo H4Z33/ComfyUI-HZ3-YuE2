@@ -568,27 +568,33 @@ class HZ3_YuE2_KaraokeVisualizer:
         left_bound = x_start
 
         if right_bound > left_bound and fill_w > 0:
-            hl_img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            text_bbox = cur_font.getbbox(line_text)
+            highlight_top = y_start + text_bbox[1]
+            highlight_height = max(1, text_bbox[3] - text_bbox[1])
+            hl_img = Image.new("RGBA", (width, highlight_height), (0, 0, 0, 0))
             hl_draw = ImageDraw.Draw(hl_img)
 
             # Soft glow pass behind highlight text
             for offset in (-1, 0, 1):
                 hl_draw.text(
-                    (x_start + offset, y_start),
+                    (x_start + offset, -text_bbox[1]),
                     line_text,
                     fill=theme["lyrics_glow"],
                     font=cur_font,
                 )
 
             # Crisp main highlight text
-            hl_draw.text((x_start, y_start), line_text, fill=theme["lyrics_highlight"], font=cur_font)
+            hl_draw.text((x_start, -text_bbox[1]), line_text, fill=theme["lyrics_highlight"], font=cur_font)
 
             # Crop safely with strict bounds
             crop_left = max(0, min(width - 1, left_bound))
             crop_right = max(crop_left + 1, min(width, right_bound))
-            crop_box = (crop_left, 0, crop_right, height)
-            hl_clipped = hl_img.crop(crop_box)
-            frame_img.paste(hl_clipped, (crop_left, 0), hl_clipped)
+            crop_top = max(0, highlight_top)
+            crop_bottom = min(height, highlight_top + highlight_height)
+            if crop_bottom > crop_top:
+                crop_box = (crop_left, crop_top - highlight_top, crop_right, crop_bottom - highlight_top)
+                hl_clipped = hl_img.crop(crop_box)
+                frame_img.paste(hl_clipped, (crop_left, crop_top), hl_clipped)
 
             # Glowing karaoke bouncy pointer at singing head
             if t < line_end:
@@ -1265,6 +1271,8 @@ class HZ3_YuE2_KaraokeVisualizer:
                 vocal_peak = max(1e-4, float(np.max(np.abs(vocals_mono))))
                 vocal_samples = vocals_mono / vocal_peak
 
+        render_seconds = 0.0
+        encode_seconds = 0.0
         for frame_idx in range(total_frames):
             cur_time = float(frame_idx) / float(fps)
 
@@ -1304,6 +1312,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 smooth_energy = smooth_energy * 0.55 + float(speaker_rms_all[frame_idx]) * 0.45
                 speaker_energies = (smooth_energy, smooth_energy)
 
+            render_start = time.perf_counter()
             frame_img = self._render_frame(
                 cur_time,
                 timeline,
@@ -1322,18 +1331,25 @@ class HZ3_YuE2_KaraokeVisualizer:
                 render_resources=render_resources,
             )
 
+            render_seconds += time.perf_counter() - render_start
+            encode_start = time.perf_counter()
             v_frame = av.VideoFrame.from_image(frame_img)
             for p in v_stream.encode(v_frame):
                 container.mux(p)
+
+            encode_seconds += time.perf_counter() - encode_start
 
             if render_image_batch and (total_frames <= 1200 or frame_idx % 2 == 0):
                 arr = np.array(frame_img, dtype=np.float32) / 255.0
                 image_batch_list.append(arr)
 
+        encode_start = time.perf_counter()
         for p in v_stream.encode():
             container.mux(p)
+        encode_seconds += time.perf_counter() - encode_start
 
         # 5. Mux Audio Stream
+        audio_mux_start = time.perf_counter()
         if has_audio and a_stream is not None and waveform_tensor is not None:
             chunk_size = 1024
             w_2d_cpu = w_2d.cpu()
@@ -1362,6 +1378,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 container.mux(p)
 
         container.close()
+        audio_mux_seconds = time.perf_counter() - audio_mux_start
 
         # 6. Format Outputs for ComfyUI
         elapsed = time.time() - t_start
@@ -1408,6 +1425,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         render_summary = (
             f"Rendered Karaoke & Visualizer · {total_frames} frames ({total_duration:.1f}s) @ {fps}fps\n"
             f"Encoder: {chosen_codec} · Resolution: {width}x{height} · Speed: {fps_rendered:.1f} fps ({elapsed:.2f}s total)\n"
+            f"Timing: drawing {render_seconds:.2f}s · video encoding {encode_seconds:.2f}s · audio/finalize {audio_mux_seconds:.2f}s\n"
             f"Lyrics: {sung_lines}/{len(timed_lines)} lines timed via {alignment_label}\n"
             f"Saved MP4: {video_full_path}"
         )

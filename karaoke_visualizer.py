@@ -14,6 +14,7 @@ import logging
 import math
 import os
 import time
+from functools import lru_cache
 from typing import Any
 
 import av
@@ -163,6 +164,42 @@ def _lerp_color(c1: tuple[int, int, int], c2: tuple[int, int, int], t: float) ->
         int(c1[1] + (c2[1] - c1[1]) * t),
         int(c1[2] + (c2[2] - c1[2]) * t),
     )
+
+
+class _RenderResources:
+    """Bounded drawing resources owned by one video render."""
+
+    def __init__(self, width: int, height: int, theme: dict):
+        background = Image.new("RGB", (width, height), theme["bg_top"])
+        draw = ImageDraw.Draw(background, "RGBA")
+
+        # Fast 4-pixel vertical gradient
+        for y_step in range(0, height, 4):
+            frac = y_step / float(height)
+            col = _lerp_color(theme["bg_top"], theme["bg_bottom"], frac)
+            draw.rectangle([0, y_step, width, y_step + 4], fill=col)
+
+        # Subtle ambient spotlight glow behind lyrics
+        spot_center_y = int(height * 0.36)
+        spot_r = int(min(width, height) * 0.40)
+        draw.ellipse(
+            [width // 2 - spot_r, spot_center_y - spot_r // 2, width // 2 + spot_r, spot_center_y + spot_r // 2],
+            fill=(theme["bar_low"][0] // 10, theme["bar_low"][1] // 10, theme["bar_low"][2] // 10, 45),
+        )
+
+        self.background = background
+        self.font = lru_cache(maxsize=128)(_get_font)
+        unit_circle = [(math.cos(i * math.tau / 120), math.sin(i * math.tau / 120)) for i in range(121)]
+        rotations = {angle: (math.cos(math.radians(angle)), math.sin(math.radians(angle))) for angle in (-15, 15)}
+
+        @lru_cache(maxsize=512)
+        def ellipse(cx, cy, rx, ry, angle):
+            cos_a, sin_a = rotations[angle]
+            return [(cx + rx * cosine * cos_a - ry * sine * sin_a,
+                     cy + rx * cosine * sin_a + ry * sine * cos_a)
+                    for cosine, sine in unit_circle]
+
+        self.ellipse = ellipse
 
 
 class HZ3_YuE2_KaraokeVisualizer:
@@ -571,6 +608,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         height: int,
         theme: dict,
         energies: tuple[float, float],
+        render_resources: _RenderResources,
     ) -> None:
         """Render oppositely tilted speakers with synchronized audio-driven ripples."""
         xl = int(width * 0.105)
@@ -586,17 +624,10 @@ class HZ3_YuE2_KaraokeVisualizer:
         ]
 
         for label, cx, energy, col, angle in speakers:
-            rotation = math.radians(angle)
-            cos_a, sin_a = math.cos(rotation), math.sin(rotation)
-
             def tilted_ellipse(bounds, fill=None, outline=None, width=1):
                 rx = (bounds[2] - bounds[0]) / 2
                 ry = (bounds[3] - bounds[1]) / 2
-                points = []
-                for i in range(121):
-                    phase = i * math.tau / 120
-                    dx, dy = rx * math.cos(phase), ry * math.sin(phase)
-                    points.append((cx + dx * cos_a - dy * sin_a, ys + dx * sin_a + dy * cos_a))
+                points = render_resources.ellipse(cx, ys, rx, ry, angle)
                 if fill is not None:
                     draw.polygon(points, fill=fill)
                 if outline is not None:
@@ -675,7 +706,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 (cx, ys + chassis_ry + 10),
                 label,
                 fill=(theme["info_text"][0], theme["info_text"][1], theme["info_text"][2], 140),
-                font=_get_font(11, bold=True),
+                font=render_resources.font(11, bold=True),
                 anchor="mm",
             )
 
@@ -756,6 +787,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         theme: dict,
         font_main: ImageFont.FreeTypeFont,
         font_sub: ImageFont.FreeTypeFont,
+        render_resources: _RenderResources,
     ) -> None:
         """Render rolling lyrics: stays steady during line singing; smoothly scrolls upward during transitions."""
         lines = timeline.get("lines", [])
@@ -789,7 +821,7 @@ class HZ3_YuE2_KaraokeVisualizer:
             dist = abs(d)
             scale = 0.65 + 0.35 * max(0.0, 1.0 - (dist ** 1.3))
             scaled_size = max(16, int(font_main.size * scale))
-            cur_font = _get_font(scaled_size, bold=(dist < 0.45))
+            cur_font = render_resources.font(scaled_size, bold=(dist < 0.45))
 
             if d <= 0:
                 alpha = int(255 * max(0.0, 1.0 - (dist * 0.65)))
@@ -801,7 +833,7 @@ class HZ3_YuE2_KaraokeVisualizer:
             text_h = bbox[3] - bbox[1]
 
             if text_w > width - 140:
-                cur_font = _get_font(max(14, int(scaled_size * (width - 160) / max(1, text_w))), bold=False)
+                cur_font = render_resources.font(max(14, int(scaled_size * (width - 160) / max(1, text_w))), bold=False)
                 bbox = cur_font.getbbox(text)
                 text_w = bbox[2] - bbox[0]
                 text_h = bbox[3] - bbox[1]
@@ -870,25 +902,13 @@ class HZ3_YuE2_KaraokeVisualizer:
         speaker_energies: tuple[float, float] = (0.0, 0.0),
         vocal_samples: np.ndarray | None = None,
         vocal_sample_rate: float = 1.0,
+        render_resources: _RenderResources | None = None,
     ) -> Image.Image:
         """Render a single high-quality video frame with Pillow."""
-        # 1. Background Gradient
-        frame_img = Image.new("RGB", (width, height), theme["bg_top"])
+        if render_resources is None:
+            render_resources = _RenderResources(width, height, theme)
+        frame_img = render_resources.background.copy()
         draw = ImageDraw.Draw(frame_img, "RGBA")
-
-        # Fast 4-pixel vertical gradient
-        for y_step in range(0, height, 4):
-            frac = y_step / float(height)
-            col = _lerp_color(theme["bg_top"], theme["bg_bottom"], frac)
-            draw.rectangle([0, y_step, width, y_step + 4], fill=col)
-
-        # Subtle ambient spotlight glow behind lyrics
-        spot_center_y = int(height * 0.36)
-        spot_r = int(min(width, height) * 0.40)
-        draw.ellipse(
-            [width // 2 - spot_r, spot_center_y - spot_r // 2, width // 2 + spot_r, spot_center_y + spot_r // 2],
-            fill=(theme["bar_low"][0] // 10, theme["bar_low"][1] // 10, theme["bar_low"][2] // 10, 45),
-        )
 
         # 2. Top HUD Bar
         hud_y = int(height * 0.04)
@@ -927,9 +947,9 @@ class HZ3_YuE2_KaraokeVisualizer:
 
         # 3. Rolling Mode vs Classic Visualizers
         if mode == "Rolling Mode":
-            self._render_speakers(draw, t, width, height, theme, speaker_energies)
+            self._render_speakers(draw, t, width, height, theme, speaker_energies, render_resources)
             self._render_vocal_waveform(draw, t, vocal_samples, vocal_sample_rate, width, height, theme)
-            self._render_rolling_lyrics(frame_img, draw, t, timeline, width, height, theme, font_main, font_sub)
+            self._render_rolling_lyrics(frame_img, draw, t, timeline, width, height, theme, font_main, font_sub, render_resources)
             self._render_progress_bar(draw, t, timeline["duration"], width, height, theme, font_hud)
             return frame_img
 
@@ -949,7 +969,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 p_w = p_bbox[2] - p_bbox[0]
                 if p_w > width - 80:
                     p_scale = max(14, int(font_sub.size * (width - 100) / max(1, p_w)))
-                    p_font = _get_font(p_scale, bold=False)
+                    p_font = render_resources.font(p_scale, bold=False)
                 draw.text(
                     (width // 2, lyric_center_y - line_spacing),
                     prev_text,
@@ -965,7 +985,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 n_w = n_bbox[2] - n_bbox[0]
                 if n_w > width - 80:
                     n_scale = max(14, int(font_sub.size * (width - 100) / max(1, n_w)))
-                    n_font = _get_font(n_scale, bold=False)
+                    n_font = render_resources.font(n_scale, bold=False)
                 draw.text(
                     (width // 2, lyric_center_y + line_spacing),
                     next_text,
@@ -981,7 +1001,7 @@ class HZ3_YuE2_KaraokeVisualizer:
             text_h = bbox[3] - bbox[1]
             if text_w > width - 100:
                 scaled_size = max(18, int(font_main.size * (width - 120) / max(1, text_w)))
-                cur_font = _get_font(scaled_size, bold=True)
+                cur_font = render_resources.font(scaled_size, bold=True)
                 bbox = cur_font.getbbox(line_text)
                 text_w = bbox[2] - bbox[0]
                 text_h = bbox[3] - bbox[1]
@@ -1148,6 +1168,8 @@ class HZ3_YuE2_KaraokeVisualizer:
         timeline["duration"] = total_duration
         total_frames = max(1, int(total_duration * fps))
 
+        render_resources = _RenderResources(width, height, theme_cfg)
+
         # Fonts
         font_main = _get_font(font_size, bold=True)
         font_sub = _get_font(int(font_size * 0.65), bold=False)
@@ -1297,6 +1319,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 speaker_energies=speaker_energies,
                 vocal_samples=vocal_samples,
                 vocal_sample_rate=vocal_sample_rate,
+                render_resources=render_resources,
             )
 
             v_frame = av.VideoFrame.from_image(frame_img)
@@ -1362,6 +1385,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 speaker_energies=(0.0, 0.0),
                 vocal_samples=vocal_samples,
                 vocal_sample_rate=vocal_sample_rate,
+                render_resources=render_resources,
             )
             images_tensor = torch.from_numpy(np.array(first_frame, dtype=np.float32) / 255.0).unsqueeze(0)
 

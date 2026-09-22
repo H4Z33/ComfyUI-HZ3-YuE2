@@ -192,7 +192,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 ),
                 "vocals": (
                     "AUDIO",
-                    {"tooltip": "Optional separated vocal stem of the SAME audio (e.g. AudioSeparation.Vocals). Drives the central mirrored waveform in Rolling Mode. Strongly recommended for accurate forced alignment."},
+                    {"tooltip": "Optional separated vocal stem of the SAME audio (e.g. AudioSeparation.Vocals). Drives the central vocal waveform oscilloscope in Rolling Mode. Strongly recommended for accurate forced alignment."},
                 ),
                 "instrumental": (
                     "AUDIO",
@@ -574,7 +574,7 @@ class HZ3_YuE2_KaraokeVisualizer:
     ) -> None:
         """Render oppositely tilted speakers with synchronized audio-driven ripples."""
         xl = int(width * 0.105)
-        xr = int(width * 0.895)
+        xr = width - xl
         ys = int(height * 0.58)
 
         base_rx = max(30, int(width * 0.052))
@@ -582,7 +582,7 @@ class HZ3_YuE2_KaraokeVisualizer:
 
         speakers = [
             ("AUDIO", xl, energies[0], theme["bar_low"], -15),
-            ("AUDIO", xr, energies[0], theme["bar_high"], 15),
+            ("AUDIO", xr, energies[0], theme["bar_low"], 15),
         ]
 
         for label, cx, energy, col, angle in speakers:
@@ -602,23 +602,6 @@ class HZ3_YuE2_KaraokeVisualizer:
                 if outline is not None:
                     draw.line(points, fill=outline, width=width, joint="curve")
             e = max(0.0, min(1.0, float(energy)))
-
-            # Water Ripple Shockwaves (expanding concentric elliptical rings)
-            num_ripples = 4
-            for w in range(num_ripples):
-                phase = (t * 1.5 + w * 0.25) % 1.0
-                wave_rx = int(base_rx + phase * (base_rx * 1.35))
-                wave_ry = int(base_ry + phase * (base_ry * 1.35))
-                fade = ((1.0 - phase) ** 1.6) * (0.20 + 0.80 * e)
-                if fade > 0.02:
-                    alpha = int(210 * fade)
-                    ripple_col = (col[0], col[1], col[2], alpha)
-                    thickness = 2 if phase < 0.55 else 1
-                    tilted_ellipse(
-                        [cx - wave_rx, ys - wave_ry, cx + wave_rx, ys + wave_ry],
-                        outline=ripple_col,
-                        width=thickness,
-                    )
 
             # Vibrating speaker membrane
             pulse = 1.0 + 0.12 * e
@@ -670,6 +653,23 @@ class HZ3_YuE2_KaraokeVisualizer:
                 width=1,
             )
 
+            # Water Ripple Shockwaves (expanding concentric elliptical rings)
+            num_ripples = 4
+            for w in range(num_ripples):
+                phase = (t * 1.5 + w * 0.25) % 1.0
+                wave_rx = int(phase * base_rx * 2.35)
+                wave_ry = int(phase * base_ry * 2.35)
+                fade = ((1.0 - phase) ** 1.6) * e
+                if fade > 0.02:
+                    alpha = int(210 * fade)
+                    ripple_col = (col[0], col[1], col[2], alpha)
+                    thickness = 2 if phase < 0.55 else 1
+                    tilted_ellipse(
+                        [cx - wave_rx, ys - wave_ry, cx + wave_rx, ys + wave_ry],
+                        outline=ripple_col,
+                        width=thickness,
+                    )
+
             # 5. Subtle speaker indicator badge below
             draw.text(
                 (cx, ys + chassis_ry + 10),
@@ -683,36 +683,33 @@ class HZ3_YuE2_KaraokeVisualizer:
         self,
         draw: ImageDraw.ImageDraw,
         t: float,
-        envelope: np.ndarray | None,
-        envelope_rate: float,
+        samples: np.ndarray | None,
+        sample_rate: float,
         width: int,
         height: int,
         theme: dict,
     ) -> None:
-        """Draw a two-second vocal amplitude window mirrored around its center line."""
+        """Draw signed vocal samples over a 40 ms oscilloscope window."""
         x_left, x_right = int(width * 0.22), int(width * 0.78)
         y_center = int(height * 0.72)
         max_height = height * 0.085
-        count = max(2, (x_right - x_left) // 3)
+        count = max(2, x_right - x_left + 1)
         amplitudes = np.zeros(count, dtype=np.float32)
-        if envelope is not None and len(envelope):
-            positions = (t + np.linspace(-1.0, 1.0, count)) * envelope_rate
+        if samples is not None and len(samples):
+            positions = (t + np.linspace(-0.02, 0.02, count)) * sample_rate
             window_start = max(0, int(math.floor(positions[0])))
-            window_end = min(len(envelope), int(math.ceil(positions[-1])) + 1)
+            window_end = min(len(samples), int(math.ceil(positions[-1])) + 1)
             if window_end > window_start:
                 amplitudes = np.interp(
                     positions, np.arange(window_start, window_end),
-                    envelope[window_start:window_end], left=0.0, right=0.0,
+                    samples[window_start:window_end], left=0.0, right=0.0,
                 )
         xs = np.linspace(x_left, x_right, count)
-        top = [(float(x), y_center - float(v) * max_height) for x, v in zip(xs, amplitudes)]
-        bottom = [(float(x), y_center + float(v) * max_height) for x, v in zip(xs, amplitudes)]
+        points = list(zip(xs.tolist(), (y_center - amplitudes * max_height).tolist()))
         color = theme["lyrics_highlight"][:3]
-        draw.polygon(top + bottom[::-1], fill=(*color, 45))
-        for points in (top, bottom):
-            draw.line(points, fill=(*color, 40), width=7)
-            draw.line(points, fill=(*color, 220), width=2)
-        draw.line([(x_left, y_center), (x_right, y_center)], fill=(*color, 80), width=1)
+        draw.line([(x_left, y_center), (x_right, y_center)], fill=(*color, 45), width=1)
+        draw.line(points, fill=(*color, 40), width=5)
+        draw.line(points, fill=(*color, 230), width=2)
 
     def _get_rolling_lambda(self, lines: list[dict], t: float) -> float:
         """Compute smooth continuous virtual line index lambda(t).
@@ -871,8 +868,8 @@ class HZ3_YuE2_KaraokeVisualizer:
         font_sub: ImageFont.FreeTypeFont,
         font_hud: ImageFont.FreeTypeFont,
         speaker_energies: tuple[float, float] = (0.0, 0.0),
-        vocal_envelope: np.ndarray | None = None,
-        vocal_envelope_rate: float = 1.0,
+        vocal_samples: np.ndarray | None = None,
+        vocal_sample_rate: float = 1.0,
     ) -> Image.Image:
         """Render a single high-quality video frame with Pillow."""
         # 1. Background Gradient
@@ -931,7 +928,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         # 3. Rolling Mode vs Classic Visualizers
         if mode == "Rolling Mode":
             self._render_speakers(draw, t, width, height, theme, speaker_energies)
-            self._render_vocal_waveform(draw, t, vocal_envelope, vocal_envelope_rate, width, height, theme)
+            self._render_vocal_waveform(draw, t, vocal_samples, vocal_sample_rate, width, height, theme)
             self._render_rolling_lyrics(frame_img, draw, t, timeline, width, height, theme, font_main, font_sub)
             self._render_progress_bar(draw, t, timeline["duration"], width, height, theme, font_hud)
             return frame_img
@@ -1234,21 +1231,17 @@ class HZ3_YuE2_KaraokeVisualizer:
 
         speaker_rms_all = None
         smooth_energy = 0.0
-        vocal_envelope = None
-        vocal_envelope_rate = 1.0
+        vocal_samples = None
+        vocal_sample_rate = 1.0
         if visualizer_mode == "Rolling Mode":
             if waveform_mono is not None:
                 rms_raw = self._frame_rms(waveform_mono, audio_sr, fps, total_frames)
                 p95 = float(np.percentile(rms_raw, 95)) if len(rms_raw) else 1.0
                 speaker_rms_all = np.clip(rms_raw / max(1e-4, p95), 0.0, 1.0)
             if vocals_mono is not None and len(vocals_mono):
-                vocal_sr = int(vocals.get("sample_rate", 44100))
-                block_size = max(1, round(vocal_sr / 240))
-                padded_vocals = np.pad(vocals_mono, (0, (-len(vocals_mono)) % block_size))
-                vocal_envelope = np.max(np.abs(padded_vocals.reshape(-1, block_size)), axis=1)
-                vocal_peak = max(1e-4, float(np.max(vocal_envelope)))
-                vocal_envelope = vocal_envelope / vocal_peak
-                vocal_envelope_rate = vocal_sr / block_size
+                vocal_sample_rate = int(vocals.get("sample_rate", 44100))
+                vocal_peak = max(1e-4, float(np.max(np.abs(vocals_mono))))
+                vocal_samples = vocals_mono / vocal_peak
 
         for frame_idx in range(total_frames):
             cur_time = float(frame_idx) / float(fps)
@@ -1301,8 +1294,8 @@ class HZ3_YuE2_KaraokeVisualizer:
                 font_sub,
                 font_hud,
                 speaker_energies=speaker_energies,
-                vocal_envelope=vocal_envelope,
-                vocal_envelope_rate=vocal_envelope_rate,
+                vocal_samples=vocal_samples,
+                vocal_sample_rate=vocal_sample_rate,
             )
 
             v_frame = av.VideoFrame.from_image(frame_img)
@@ -1366,8 +1359,8 @@ class HZ3_YuE2_KaraokeVisualizer:
                 font_sub,
                 font_hud,
                 speaker_energies=(0.0, 0.0),
-                vocal_envelope=vocal_envelope,
-                vocal_envelope_rate=vocal_envelope_rate,
+                vocal_samples=vocal_samples,
+                vocal_sample_rate=vocal_sample_rate,
             )
             images_tensor = torch.from_numpy(np.array(first_frame, dtype=np.float32) / 255.0).unsqueeze(0)
 

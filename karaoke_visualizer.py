@@ -616,105 +616,28 @@ class HZ3_YuE2_KaraokeVisualizer:
         energies: tuple[float, float],
         render_resources: _RenderResources,
     ) -> None:
-        """Render oppositely tilted speakers with synchronized audio-driven ripples."""
+        """Render mirrored waves expanding from lower audio-reactive centers."""
         xl = int(width * 0.105)
-        xr = width - xl
-        ys = int(height * 0.58)
-
+        ys = int(height * 0.66)
         base_rx = max(30, int(width * 0.052))
-        base_ry = max(50, int(height * 0.155))
+        base_ry = max(50, int(height * 0.13))
+        energy = max(0.0, min(1.0, float(energies[0])))
+        color = theme["bar_low"]
 
-        speakers = [
-            ("AUDIO", xl, energies[0], theme["bar_low"], -15),
-            ("AUDIO", xr, energies[0], theme["bar_low"], 15),
-        ]
-
-        for label, cx, energy, col, angle in speakers:
-            def tilted_ellipse(bounds, fill=None, outline=None, width=1):
-                rx = (bounds[2] - bounds[0]) / 2
-                ry = (bounds[3] - bounds[1]) / 2
-                points = render_resources.ellipse(cx, ys, rx, ry, angle)
-                if fill is not None:
-                    draw.polygon(points, fill=fill)
-                if outline is not None:
-                    draw.line(points, fill=outline, width=width, joint="curve")
-            e = max(0.0, min(1.0, float(energy)))
-
-            # Vibrating speaker membrane
-            pulse = 1.0 + 0.12 * e
-            cur_rx = int(base_rx * pulse)
-            cur_ry = int(base_ry * pulse)
-
-            # 1. Outer Chassis Ellipse (cabinet trim)
-            chassis_rx = base_rx + 10
-            chassis_ry = base_ry + 12
-            tilted_ellipse(
-                [cx - chassis_rx, ys - chassis_ry, cx + chassis_rx, ys + chassis_ry],
-                fill=(22, 18, 34, 230),
-                outline=theme["pill_border"],
-                width=2,
-            )
-
-            # 2. Suspension surround ring
-            tilted_ellipse(
-                [cx - cur_rx, ys - cur_ry, cx + cur_rx, ys + cur_ry],
-                fill=(12, 10, 18, 245),
-                outline=(col[0] // 2, col[1] // 2, col[2] // 2, 180),
-                width=2,
-            )
-
-            # 3. Inner Cone Diaphragm
-            cone_rx = int(cur_rx * 0.78)
-            cone_ry = int(cur_ry * 0.78)
-            cone_col = (
-                int(theme["bg_top"][0] * 0.4 + col[0] * 0.25 * e),
-                int(theme["bg_top"][1] * 0.4 + col[1] * 0.25 * e),
-                int(theme["bg_top"][2] * 0.4 + col[2] * 0.25 * e),
-                255,
-            )
-            tilted_ellipse(
-                [cx - cone_rx, ys - cone_ry, cx + cone_rx, ys + cone_ry],
-                fill=cone_col,
-                outline=col,
-                width=1,
-            )
-
-            # 4. Center Dust Cap
-            cap_rx = max(6, int(cur_rx * 0.32))
-            cap_ry = max(8, int(cur_ry * 0.32))
-            cap_alpha = int(140 + 115 * e)
-            tilted_ellipse(
-                [cx - cap_rx, ys - cap_ry, cx + cap_rx, ys + cap_ry],
-                fill=(theme["peak_color"][0], theme["peak_color"][1], theme["peak_color"][2], cap_alpha),
-                outline=(255, 255, 255, 220),
-                width=1,
-            )
-
-            # Water Ripple Shockwaves (expanding concentric elliptical rings)
-            num_ripples = 4
-            for w in range(num_ripples):
-                phase = (t * 1.5 + w * 0.25) % 1.0
-                wave_rx = int(phase * base_rx * 2.35)
-                wave_ry = int(phase * base_ry * 2.35)
-                fade = ((1.0 - phase) ** 1.6) * e
+        for cx, angle in ((xl, -15), (width - xl, 15)):
+            for wave in range(4):
+                phase = (t * 1.5 + wave * 0.25) % 1.0
+                fade = ((1.0 - phase) ** 1.6) * energy
                 if fade > 0.02:
-                    alpha = int(210 * fade)
-                    ripple_col = (col[0], col[1], col[2], alpha)
-                    thickness = 2 if phase < 0.55 else 1
-                    tilted_ellipse(
-                        [cx - wave_rx, ys - wave_ry, cx + wave_rx, ys + wave_ry],
-                        outline=ripple_col,
-                        width=thickness,
+                    rx = int(phase * base_rx * 2.35)
+                    ry = int(phase * base_ry * 2.35)
+                    points = render_resources.ellipse(cx, ys, rx, ry, angle)
+                    draw.line(
+                        points,
+                        fill=(*color[:3], int(210 * fade)),
+                        width=2 if phase < 0.55 else 1,
+                        joint="curve",
                     )
-
-            # 5. Subtle speaker indicator badge below
-            draw.text(
-                (cx, ys + chassis_ry + 10),
-                label,
-                fill=(theme["info_text"][0], theme["info_text"][1], theme["info_text"][2], 140),
-                font=render_resources.font(11, bold=True),
-                anchor="mm",
-            )
 
     def _render_vocal_waveform(
         self,
@@ -859,38 +782,57 @@ class HZ3_YuE2_KaraokeVisualizer:
                     frame_img, draw, k_line, x_start, y_start, text_w, cur_font, theme, t, width, height
                 )
 
-    def _render_progress_bar(
-        self,
-        draw: ImageDraw.ImageDraw,
-        t: float,
-        duration: float,
-        width: int,
-        height: int,
-        theme: dict,
-        font_hud: ImageFont.FreeTypeFont,
-    ) -> None:
-        """Bottom progress bar and timecodes."""
-        prog_y = height - 16
-        tot_dur = max(0.1, duration)
-        p_frac = max(0.0, min(1.0, t / tot_dur))
-        margin_x = int(width * 0.08)
+    def _get_lyric_break(self, timeline: dict, t: float) -> tuple[str, int | None] | None:
+        """Use aligned lyric times to distinguish instrumental breaks from short breaths."""
+        previous_end = None
+        next_start = None
+        for line in timeline["lines"]:
+            if line["start"] <= t < line["end"]:
+                return None
+            if line["end"] <= t:
+                previous_end = max(previous_end or 0.0, line["end"])
+            elif line["start"] > t:
+                next_start = line["start"] if next_start is None else min(next_start, line["start"])
 
-        draw.rectangle([margin_x, prog_y, width - margin_x, prog_y + 3], fill=(50, 55, 75))
-        draw.rectangle(
-            [margin_x, prog_y, margin_x + int((width - 2 * margin_x) * p_frac), prog_y + 3],
-            fill=theme["progress_fill"],
-        )
+        label = None
+        for section in timeline["sections"]:
+            if section["start"] <= t < section["end"]:
+                name = section["name"].strip().lower()
+                if name.startswith("intro"):
+                    label = "intro"
+                elif name.startswith("interlude"):
+                    label = "interlude"
+                elif name.startswith(("instrumental", "solo", "break", "outro")):
+                    label = "instrumental"
+                break
 
-        cur_min, cur_sec = int(t // 60), int(t % 60)
-        tot_min, tot_sec = int(tot_dur // 60), int(tot_dur % 60)
-        draw.text((margin_x, prog_y - 14), f"{cur_min:02d}:{cur_sec:02d}", fill=theme["info_text"], font=font_hud)
+        if label is None:
+            if previous_end is None and next_start is not None:
+                label = "intro"
+            elif next_start is None:
+                label = "instrumental"
+            elif previous_end is not None and next_start - previous_end >= 4.0:
+                label = "interlude"
+            else:
+                return None
+
+        countdown = None
+        if next_start is not None and 0.0 < next_start - t <= 3.0:
+            countdown = math.ceil(next_start - t)
+        return label, countdown
+
+    def _render_lyric_break(self, draw, lyric_break, width, height, theme, font_main):
+        label, countdown = lyric_break
+        center_y = int(height * 0.38)
         draw.text(
-            (width - margin_x, prog_y - 14),
-            f"{tot_min:02d}:{tot_sec:02d}",
-            fill=theme["info_text"],
-            font=font_hud,
-            anchor="ra",
+            (width // 2, center_y), f"({label})",
+            fill=(*theme["lyrics_base"][:3], 180), font=font_main, anchor="mm",
         )
+        if countdown is not None:
+            draw.text(
+                (width // 2, center_y + int(font_main.size * 1.6)), str(countdown),
+                fill=theme["lyrics_highlight"], font=font_main, anchor="mm",
+            )
 
     def _render_frame(
         self,
@@ -951,12 +893,16 @@ class HZ3_YuE2_KaraokeVisualizer:
             )
             draw.text((width - 40 - c_w + 8, hud_y + 4), chord_str.strip(), fill=theme["chord_text"], font=font_hud)
 
+        lyric_break = self._get_lyric_break(timeline, t)
+        if lyric_break is not None:
+            self._render_lyric_break(draw, lyric_break, width, height, theme, font_main)
+
         # 3. Rolling Mode vs Classic Visualizers
         if mode == "Rolling Mode":
             self._render_speakers(draw, t, width, height, theme, speaker_energies, render_resources)
             self._render_vocal_waveform(draw, t, vocal_samples, vocal_sample_rate, width, height, theme)
-            self._render_rolling_lyrics(frame_img, draw, t, timeline, width, height, theme, font_main, font_sub, render_resources)
-            self._render_progress_bar(draw, t, timeline["duration"], width, height, theme, font_hud)
+            if lyric_break is None:
+                self._render_rolling_lyrics(frame_img, draw, t, timeline, width, height, theme, font_main, font_sub, render_resources)
             return frame_img
 
         # Classic Karaoke Display
@@ -965,7 +911,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         lyric_center_y = int(height * 0.38)
         line_spacing = int(font_main.size * 1.35)
 
-        if 0 <= active_idx < len(lines):
+        if lyric_break is None and 0 <= active_idx < len(lines):
             active_line = lines[active_idx]
 
             if active_idx > 0:
@@ -1019,7 +965,7 @@ class HZ3_YuE2_KaraokeVisualizer:
             self._draw_karaoke_sweep(
                 frame_img, draw, active_line, x_start, y_start, text_w, cur_font, theme, t, width, height
             )
-        else:
+        elif lyric_break is None:
             draw.text(
                 (width // 2, lyric_center_y),
                 "( Instrumental )",
@@ -1081,9 +1027,6 @@ class HZ3_YuE2_KaraokeVisualizer:
                 draw.line(pts, fill=theme["lyrics_glow"], width=6)
                 draw.line(pts, fill=theme["bar_low"], width=3)
                 draw.line(pts, fill=(255, 255, 255, 220), width=1)
-
-        # 5. Bottom Progress Bar & Timecodes
-        self._render_progress_bar(draw, t, timeline["duration"], width, height, theme, font_hud)
 
         return frame_img
 

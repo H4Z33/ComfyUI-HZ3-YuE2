@@ -482,6 +482,19 @@ def extend_abc_to_lyrics(abc_text: str, lyrics_text: str):
     return align_and_repair_abc(extended_raw, lyrics_text=lyrics_text)
 
 
+def _compact_abc_rests(bar: str) -> str:
+    """Merge adjacent rests without moving chords or changing supported ABC durations."""
+    def merge(match):
+        remaining = sum(int(duration or "1") for duration in re.findall(r"z([0-9]*)", match.group()))
+        rests = []
+        for duration in (48, 32, 24, 16, 12, 8, 6, 4, 3, 2, 1):
+            count, remaining = divmod(remaining, duration)
+            rests.extend([f"z{duration}"] * count)
+        return "".join(rests)
+
+    return re.sub(r"(?:z[0-9]*){2,}", merge, bar)
+
+
 def vocal_bar_to_chords_only(vocal_bar: str) -> str:
     """Convert vocal bar to rests while preserving chord symbols at their exact offsets."""
     def replace_note(match):
@@ -489,7 +502,7 @@ def vocal_bar_to_chords_only(vocal_bar: str) -> str:
             return "z" + match.group("duration")
         return match.group(0)
 
-    return TOKEN.sub(replace_note, vocal_bar).strip() or "Z"
+    return _compact_abc_rests(TOKEN.sub(replace_note, vocal_bar).strip()) or "Z"
 
 
 def vocal_bar_to_ins_melody(vocal_bar: str) -> str:
@@ -693,7 +706,7 @@ def convert_abc_to_karaoke(abc_text: str, lyrics_text: str = "") -> str:
                                     for match in TOKEN.finditer(melody) if match.group("note"))
                     new_v_bars.append(vocal_bar_to_chords_only(vocal_bar))
                     original_ins = instrumental_bars[bar_index] if bar_index < len(instrumental_bars) else "Z"
-                    new_i_bars.append(melody if has_notes else original_ins)
+                    new_i_bars.append(_compact_abc_rests(melody if has_notes else original_ins))
                 new_v_line = "|".join(new_v_bars) + "|"
                 new_i_line = "|".join(new_i_bars) + "|"
             else:

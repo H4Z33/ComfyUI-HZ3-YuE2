@@ -142,7 +142,7 @@ syllable-to-note anchors. The JSON output records that limitation and preserves
 the measurements used by the agent.
 # Fetch lyrics from an audio input
 
-The **HZ3 YuE2 · Fetch Lyrics from Audio** node takes a ComfyUI `AUDIO` input, creates a local Chromaprint fingerprint with `fpcalc`, identifies the recording through AcoustID, and retrieves plain or synchronized lyrics from LRCLIB. Its `lyrics` output prefers synchronized LRC text and can be connected directly to MixMash; `synced_lyrics` is also available separately, along with the matched title, artist, album, confidence, and status.
+The **HZ3 YuE2 · Fetch Lyrics from Audio** node takes a ComfyUI `AUDIO` input, creates a local Chromaprint fingerprint with `fpcalc`, identifies the recording through AcoustID, and retrieves plain or synchronized lyrics from LRCLIB. Its `lyrics` output is clean plain text that can be connected directly to MixMash; `synced_lyrics` preserves LRC timestamps separately, along with the matched title, artist, album, confidence, and status.
 
 Setup:
 

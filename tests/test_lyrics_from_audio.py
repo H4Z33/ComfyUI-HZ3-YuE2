@@ -64,7 +64,17 @@ class LyricsFromAudioTests(unittest.TestCase):
         ]
         self.assertEqual(
             lyrics_node._select_lyrics(results, "Song", "Singer", "Album", 200),
-            ("[00:01]right version", "[00:01]right version", "Song", "Singer", "Album", "210"),
+            ("right version", "[00:01]right version", "Song", "Singer", "Album", "210"),
+        )
+
+    def test_extracts_plain_lines_from_synced_lrc_when_plain_text_is_missing(self):
+        results = [{
+            "trackName": "Song", "artistName": "Singer", "albumName": "Album", "duration": 200,
+            "syncedLyrics": "[ar:Singer]\n[00:01.20]First line\n[00:04.50][00:08.50]Repeated line",
+        }]
+        self.assertEqual(
+            lyrics_node._select_lyrics(results, "Song", "Singer", "Album", 200)[:2],
+            ("First line\nRepeated line", "[ar:Singer]\n[00:01.20]First line\n[00:04.50][00:08.50]Repeated line"),
         )
 
     def test_node_uses_audio_lookup_and_exposes_plain_lyrics_output(self):
@@ -81,7 +91,7 @@ class LyricsFromAudioTests(unittest.TestCase):
                 result = lyrics_node.HZ3_YuE2_LyricsFromAudio().find_lyrics(
                     {"waveform": object(), "sample_rate": 44100}, "client-id", 0.65
                 )
-        self.assertEqual(result[0], "[00:01.00]Verse")
+        self.assertEqual(result[0], "Verse")
         self.assertEqual(result[1], "[00:01.00]Verse")
         self.assertEqual(result[2:5], ("Song", "Singer", "Album"))
         self.assertEqual(result[5], 0.98)

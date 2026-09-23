@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -140,6 +141,15 @@ def _normalise_name(value):
     return " ".join("".join(char.casefold() if char.isalnum() else " " for char in value).split())
 
 
+def _plain_from_lrc(synced_lyrics):
+    lines = []
+    for raw_line in synced_lyrics.splitlines():
+        line = re.sub(r"^\s*(?:\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]\s*)+", "", raw_line).strip()
+        if line and not re.fullmatch(r"\[[a-z]{2,3}:[^]]*\]", line, flags=re.IGNORECASE):
+            lines.append(line)
+    return "\n".join(lines)
+
+
 def _select_lyrics(search_results, title, artist, album, duration):
     if not isinstance(search_results, list) or not search_results:
         raise RuntimeError(f"No lyrics were found in LRCLIB for {title} — {artist}.")
@@ -180,7 +190,8 @@ def _select_lyrics(search_results, title, artist, album, duration):
         raise RuntimeError(f"LRCLIB had no usable lyric record matching {title} — {artist}.")
     ranked.sort(key=lambda row: row[0], reverse=True)
     _, item, synced, plain = ranked[0]
-    lyrics = synced or plain
+    plain = plain or _plain_from_lrc(synced)
+    lyrics = plain or synced
     return (
         lyrics,
         synced,
@@ -198,8 +209,8 @@ class HZ3_YuE2_LyricsFromAudio:
     RETURN_NAMES = ("lyrics", "synced_lyrics", "title", "artist", "album", "match_score", "status")
     DESCRIPTION = (
         "Identify a released recording from AUDIO with AcoustID/Chromaprint, then fetch its lyrics "
-        "from LRCLIB. Sends an audio fingerprint rather than the raw audio. AcoustID requires a "
-        "registered client ID and is for non-commercial use. fpcalc must be installed locally."
+        "from LRCLIB. The lyrics output is plain text for MixMash; synced LRC is separate. Sends "
+        "an audio fingerprint rather than raw audio. Requires an AcoustID client ID and local fpcalc."
     )
 
     @classmethod

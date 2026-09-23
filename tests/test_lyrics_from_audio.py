@@ -7,6 +7,7 @@ import sys
 import types
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 
@@ -18,6 +19,26 @@ lyrics_node = importlib.import_module(f"{PACKAGE}.lyrics_from_audio")
 
 
 class LyricsFromAudioTests(unittest.TestCase):
+    def test_acoustid_meta_fields_use_documented_space_encoding(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b'{"status":"ok"}'
+
+        with patch.object(lyrics_node, "urlopen", return_value=FakeResponse()) as urlopen:
+            lyrics_node._request_json(
+                lyrics_node.ACOUSTID_LOOKUP_URL,
+                {"meta": "recordings releasegroups"},
+            )
+        request = urlopen.call_args.args[0]
+        query = parse_qs(urlsplit(request.full_url).query)
+        self.assertEqual(query["meta"], ["recordings releasegroups"])
+
     def test_audio_tensor_is_written_to_wav_and_fingerprinted(self):
         waveform = np.zeros((1, 2, 44100), dtype=np.float32)
         completed = types.SimpleNamespace(stdout=json.dumps({"duration": 1, "fingerprint": "abc123"}))

@@ -101,7 +101,22 @@ def _request_json(url, params, timeout=20):
         with urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        raise RuntimeError(f"Lyrics lookup service returned HTTP {exc.code}.") from exc
+        try:
+            error_body = exc.read().decode("utf-8", errors="replace").strip()
+            error_data = json.loads(error_body) if error_body else {}
+            service_error = error_data.get("error", error_data) if isinstance(error_data, dict) else {}
+            if isinstance(service_error, dict):
+                detail = str(service_error.get("message") or service_error.get("description") or "")
+            else:
+                detail = str(service_error)
+            if not detail:
+                detail = error_body[:240]
+        except (OSError, ValueError, AttributeError):
+            detail = ""
+        message = f"Lyrics lookup service returned HTTP {exc.code}"
+        if detail:
+            message += f": {detail}"
+        raise RuntimeError(message + ".") from exc
     except URLError as exc:
         raise RuntimeError(f"Could not reach the lyrics lookup service: {exc.reason}") from exc
     except (TimeoutError, OSError) as exc:
@@ -248,7 +263,9 @@ class HZ3_YuE2_LyricsFromAudio:
                 "client": client_id,
                 "duration": round(duration),
                 "fingerprint": fingerprint,
-                "meta": "recordings+releasegroups",
+                # AcoustID's API represents multiple meta fields as spaces.
+                # urlencode turns them into '+' as shown in its documented URLs.
+                "meta": "recordings releasegroups",
             },
         )
         score, title, artist, album = _best_recording(lookup, minimum_match_score)

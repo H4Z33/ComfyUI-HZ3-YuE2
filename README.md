@@ -65,6 +65,14 @@ phrasing and need alignment before mixing. Start with a short chorus to audition
 
 Run isolated checks with `python -m unittest discover -s tests -v`.
 
+`workflows/HZ3-YuE2_Karaoke_Harmonies.json` extends the existing cover workflow
+with tenor, baritone, and bass generation branches. The lead vocal remains the
+alignment reference; only the three harmony stems are mixed into the instrumental
+soundtrack. Each sampler uses its own generator's actual `seconds`; the final
+mix retains the instrumental length. Harmony stems and the mix are saved as FLAC,
+and the Rolling Mode visualizer saves the karaoke MP4. Initial harmony levels are
+-12, -14, and -12 dB; audition phrasing alignment before a final render.
+
 ## Karaoke & Audio Visualizer
 
 `Karaoke & Audio Visualizer` is a single node: it times the clean lyrics against the

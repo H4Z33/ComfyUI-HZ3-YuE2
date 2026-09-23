@@ -8,6 +8,7 @@ Independent ComfyUI node pack for YuE2 workflow preparation.
 - HZ3 YuE2 · Procedural Prosody
 - HZ3 YuE2 · Lyrics Prosody (Ollama)
 - HZ3 YuE2 · MixMash Style (Ollama)
+- HZ3 YuE2 · Vocal Harmony
 - HZ3 YuE2 · ABC Piano Roll
 - HZ3 YuE2 · Save Audio
 - HZ3 YuE2 · Load Generation
@@ -29,6 +30,40 @@ Independent ComfyUI node pack for YuE2 workflow preparation.
 The audio classifier expects `discogs-effnet-bsdynamic-1.onnx` and its matching
 JSON metadata under `models/audio_classifiers/discogs_effnet`. The Ollama nodes
 expect a locally reachable Ollama server.
+
+## Vocal Harmony
+
+Connect `MixMash.abc_repaired` to `Vocal Harmony.score_abc`. The node creates
+`abc_lead`, `abc_tenor`, `abc_baritone`, and `abc_bass`: separate native two-track
+ABCs with one singing part in `Vocal` and silence in `Ins`. The lead melody is
+preserved. Chord annotations guide harmonization but are omitted from the solo
+outputs, like MixMash's vocals-only output. No model calls or extra dependencies.
+
+`close_harmony` balances chord coverage and smooth movement; `barbershop_inspired`
+favors compact upper voices and complete existing seventh chords. It does not
+reharmonize the song into a traditional barbershop arrangement. All supported
+native chord qualities, slash chords, accidentals, ties, and key/meter changes
+are handled. Missing chords are inferred from the active key and melody and
+flagged in `report`.
+
+Leave `active_sections` blank (or `all`) for the whole song. Use `chorus, outro`
+to limit the harmonies; `chorus` matches numbered choruses, while `chorus 2`
+selects just that section. Excluded sections and lead rests remain silent.
+Ranges use MIDI note numbers (`C4 = 60`); the report lists actual ranges and any
+voicing compromises. Harmonies follow the lead's attacks and rests, adapting at
+chord/key boundaries during held notes. Sustained wordless backing is not included.
+
+Route each ABC to a separate vocal generation branch with the corresponding solo
+voice style. For full-song harmonies, reuse the same lyrics. For selected sections,
+provide only those sections' sung words in the harmony branches, retaining the
+other section markers without words. The node does not rewrite lyrics.
+`duration_seconds` is the exact score duration as a float; use it wherever the
+workflow accepts a duration, observing that sampler latents must still match the
+actual conditioning length. All four scores retain the source's measures, section
+boundaries, tempo, and duration; separate audio generations can still differ in
+phrasing and need alignment before mixing. Start with a short chorus to audition.
+
+Run isolated checks with `python -m unittest discover -s tests -v`.
 
 ## Karaoke & Audio Visualizer
 

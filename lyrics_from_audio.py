@@ -21,6 +21,10 @@ LRCLIB_SEARCH_URL = "https://lrclib.net/api/search"
 USER_AGENT = "ComfyUI-HZ3-YuE2/0.1 (audio lyrics lookup)"
 
 
+class _NoCatalogMatch(RuntimeError):
+    """The request worked, but no matching recording/lyrics were found."""
+
+
 def _audio_to_fingerprint(audio, fpcalc_path=""):
     """Convert ComfyUI AUDIO tensor data to a Chromaprint fingerprint."""
     if not isinstance(audio, dict) or "waveform" not in audio or "sample_rate" not in audio:
@@ -57,7 +61,7 @@ def _audio_to_fingerprint(audio, fpcalc_path=""):
         if bundled_candidates:
             binary = str(bundled_candidates[-1])
     if not binary:
-        raise RuntimeError(
+        raise _NoCatalogMatch(
             "Chromaprint's fpcalc was not found. Install Chromaprint (fpcalc) and add it to PATH, "
             "or provide its executable path in this node."
         )
@@ -152,11 +156,11 @@ def _best_recording(lookup, min_score):
                 album = str(releases[0].get("title", "")).strip()
             return score, title, artist, album
     if candidates:
-        raise RuntimeError(
+        raise _NoCatalogMatch(
             f"AcoustID found a possible match ({candidates[0][2]} by {candidates[0][3]}), "
             f"but its confidence {candidates[0][0]:.2f} is below the {min_score:.2f} threshold."
         )
-    raise RuntimeError("AcoustID did not recognize this audio. This works best for released recordings.")
+    raise _NoCatalogMatch("AcoustID did not recognize this audio. This works best for released recordings.")
 
 
 def _normalise_name(value):
@@ -174,7 +178,7 @@ def _plain_from_lrc(synced_lyrics):
 
 def _select_lyrics(search_results, title, artist, album, duration):
     if not isinstance(search_results, list) or not search_results:
-        raise RuntimeError(f"No lyrics were found in LRCLIB for {title} — {artist}.")
+        raise _NoCatalogMatch(f"No lyrics were found in LRCLIB for {title} — {artist}.")
 
     title_key = _normalise_name(title)
     artist_key = _normalise_name(artist)
@@ -209,7 +213,7 @@ def _select_lyrics(search_results, title, artist, album, duration):
         rank = (int(album_match), -duration_delta, int(bool(synced)))
         ranked.append((rank, item, synced, plain))
     if not ranked:
-        raise RuntimeError(f"LRCLIB had no usable lyric record matching {title} — {artist}.")
+        raise _NoCatalogMatch(f"LRCLIB had no usable lyric record matching {title} — {artist}.")
     ranked.sort(key=lambda row: row[0], reverse=True)
     _, item, synced, plain = ranked[0]
     plain = plain or _plain_from_lrc(synced)
@@ -227,12 +231,14 @@ def _select_lyrics(search_results, title, artist, album, duration):
 class HZ3_YuE2_LyricsFromAudio:
     CATEGORY = "HZ3 YuE2/Lyrics"
     FUNCTION = "find_lyrics"
+    OUTPUT_NODE = True
     RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING", "FLOAT", "STRING")
     RETURN_NAMES = ("lyrics", "synced_lyrics", "title", "artist", "album", "match_score", "status")
     DESCRIPTION = (
         "Identify a released recording from AUDIO with AcoustID/Chromaprint, then fetch its lyrics "
         "from LRCLIB. The lyrics output is plain text for MixMash; synced LRC is separate. Sends "
-        "an audio fingerprint rather than raw audio. Requires an AcoustID client ID and local fpcalc."
+        "an audio fingerprint rather than raw audio; requires an AcoustID client ID and local fpcalc. "
+        "Catalog misses finish with a visible WARNING and empty lyric outputs."
     )
 
     @classmethod
@@ -268,18 +274,25 @@ class HZ3_YuE2_LyricsFromAudio:
                 "meta": "recordings releasegroups",
             },
         )
-        score, title, artist, album = _best_recording(lookup, minimum_match_score)
-        search = _request_json(
-            LRCLIB_SEARCH_URL,
-            {"track_name": title, "artist_name": artist},
-        )
-        lyrics, synced, found_title, found_artist, found_album, found_duration = _select_lyrics(
-            search, title, artist, album, duration
-        )
+        try:
+            score, title, artist, album = _best_recording(lookup, minimum_match_score)
+            search = _request_json(
+                LRCLIB_SEARCH_URL,
+                {"track_name": title, "artist_name": artist},
+            )
+            lyrics, synced, found_title, found_artist, found_album, found_duration = _select_lyrics(
+                search, title, artist, album, duration
+            )
+        except _NoCatalogMatch as exc:
+            status = f"WARNING: {exc} No catalog lyrics were returned."
+            return {"ui": {"text": [status]}, "result": ("", "", "", "", "", 0.0, status)}
         status = f"Found LRCLIB lyrics ({'synced' if synced else 'plain'}); AcoustID match {score:.2f}."
         if found_duration:
             status += f" Catalog duration: {found_duration}s."
-        return lyrics, synced, found_title, found_artist, found_album, score, status
+        return {
+            "ui": {"text": [status]},
+            "result": (lyrics, synced, found_title, found_artist, found_album, score, status),
+        }
 
 
 NODE_CLASS_MAPPINGS = {"HZ3_YuE2_LyricsFromAudio": HZ3_YuE2_LyricsFromAudio}

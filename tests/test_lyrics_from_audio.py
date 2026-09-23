@@ -112,15 +112,42 @@ class LyricsFromAudioTests(unittest.TestCase):
                 result = lyrics_node.HZ3_YuE2_LyricsFromAudio().find_lyrics(
                     {"waveform": object(), "sample_rate": 44100}, "client-id", 0.65
                 )
-        self.assertEqual(result[0], "Verse")
-        self.assertEqual(result[1], "[00:01.00]Verse")
-        self.assertEqual(result[2:5], ("Song", "Singer", "Album"))
-        self.assertEqual(result[5], 0.98)
-        self.assertIn("Found LRCLIB lyrics (synced)", result[6])
+        outputs = result["result"]
+        self.assertEqual(outputs[0], "Verse")
+        self.assertEqual(outputs[1], "[00:01.00]Verse")
+        self.assertEqual(outputs[2:5], ("Song", "Singer", "Album"))
+        self.assertEqual(outputs[5], 0.98)
+        self.assertIn("Found LRCLIB lyrics (synced)", outputs[6])
+        self.assertEqual(result["ui"]["text"], [outputs[6]])
         fingerprint.assert_called_once()
         self.assertEqual(request.call_count, 2)
         self.assertEqual(lyrics_node.NODE_CLASS_MAPPINGS["HZ3_YuE2_LyricsFromAudio"],
                          lyrics_node.HZ3_YuE2_LyricsFromAudio)
+
+    def test_unrecognized_audio_returns_visible_warning_without_failing(self):
+        no_match = {"status": "ok", "results": []}
+        with patch.object(lyrics_node, "_audio_to_fingerprint", return_value=(200.0, "fingerprint")):
+            with patch.object(lyrics_node, "_request_json", return_value=no_match):
+                result = lyrics_node.HZ3_YuE2_LyricsFromAudio().find_lyrics(
+                    {"waveform": object(), "sample_rate": 44100}, "client-id"
+                )
+        outputs = result["result"]
+        self.assertEqual(outputs[:6], ("", "", "", "", "", 0.0))
+        self.assertTrue(outputs[6].startswith("WARNING:"))
+        self.assertEqual(result["ui"]["text"], [outputs[6]])
+
+    def test_missing_lrclib_text_returns_visible_warning(self):
+        match = {"status": "ok", "results": [{
+            "score": 0.98,
+            "recordings": [{"title": "Song", "artists": [{"name": "Singer"}]}],
+        }]}
+        with patch.object(lyrics_node, "_audio_to_fingerprint", return_value=(200.0, "fingerprint")):
+            with patch.object(lyrics_node, "_request_json", side_effect=[match, []]):
+                result = lyrics_node.HZ3_YuE2_LyricsFromAudio().find_lyrics(
+                    {"waveform": object(), "sample_rate": 44100}, "client-id"
+                )
+        self.assertTrue(result["result"][6].startswith("WARNING:"))
+        self.assertIn("No lyrics were found in LRCLIB", result["result"][6])
 
     def test_requires_client_id(self):
         with self.assertRaisesRegex(ValueError, "client ID"):

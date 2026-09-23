@@ -152,4 +152,6 @@ Setup:
 
 This lookup depends on the recording being present in AcoustID and its lyrics being present in LRCLIB. It is intended for identifying released recordings; original or substantially rearranged AI-generated songs may not be recognized. For those, provide the lyrics directly or transcribe the vocal track separately.
 
+When either service returns no catalog match or no lyric record, the node completes with empty lyric outputs and a visible `WARNING` in its UI and `status` output. Authentication, network, and service errors still fail explicitly.
+
 References: [AcoustID API](https://acoustid.org/webservice), [LRCLIB API](https://lrclib.net/docs), [Chromaprint](https://github.com/acoustid/chromaprint).

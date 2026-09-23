@@ -191,7 +191,7 @@ class _RenderResources:
         self.background = background
         self.font = lru_cache(maxsize=128)(_get_font)
         unit_circle = [(math.cos(i * math.tau / 120), math.sin(i * math.tau / 120)) for i in range(121)]
-        rotations = {angle: (math.cos(math.radians(angle)), math.sin(math.radians(angle))) for angle in (-15, 15)}
+        rotations = {angle: (math.cos(math.radians(angle)), math.sin(math.radians(angle))) for angle in (-30, 30)}
 
         @lru_cache(maxsize=512)
         def ellipse(cx, cy, rx, ry, angle):
@@ -625,12 +625,12 @@ class HZ3_YuE2_KaraokeVisualizer:
         """Render mirrored waves expanding from lower audio-reactive centers."""
         xl = int(width * 0.105)
         ys = int(height * 0.73)
-        base_rx = max(30, int(width * 0.052))
-        base_ry = max(50, int(height * 0.105))
+        base_rx = max(26, int(width * 0.045))
+        base_ry = max(60, int(height * 0.125))
         energy = max(0.0, min(1.0, float(energies[0])))
         color = theme["bar_low"]
 
-        for cx, angle in ((xl, -15), (width - xl, 15)):
+        for cx, angle in ((xl, -30), (width - xl, 30)):
             if bass_pulse > 0.01:
                 scale = 0.35 + 0.75 * bass_pulse
                 points = render_resources.ellipse(cx, ys, base_rx * scale, base_ry * scale, angle)
@@ -875,18 +875,24 @@ class HZ3_YuE2_KaraokeVisualizer:
         label, countdown = lyric_break
         next_line = next((line for line in timeline["lines"] if line["start"] > t), None)
         shift = 0.0
+        rise = 0.0
         if next_line is not None:
             remaining = next_line["start"] - t
             progress = max(0.0, min(1.0, 1.0 - remaining / 0.45))
             shift = progress * progress * (3.0 - 2.0 * progress)
-        self._draw_rolling_line(draw, f"({label})", -1.0 - shift, width, height,
+            if countdown is not None:
+                # The section tag only leaves the center once the countdown starts.
+                approach = max(0.0, min(1.0, (3.0 - remaining) / 0.45))
+                rise = approach * approach * (3.0 - 2.0 * approach)
+
+        self._draw_rolling_line(draw, f"({label})", -rise - shift, width, height,
                                 theme, font_main, render_resources)
         if countdown is not None:
             self._draw_rolling_line(draw, str(countdown), -shift, width, height,
                                     theme, font_main, render_resources, highlight=True)
-        if next_line is not None:
-            self._draw_rolling_line(draw, next_line["text"], 1.0 - shift, width, height,
-                                    theme, font_main, render_resources)
+            if next_line is not None:
+                self._draw_rolling_line(draw, next_line["text"], 1.0 - shift, width, height,
+                                        theme, font_main, render_resources)
 
     def _render_progress_frame(self, draw, t, duration, width, height, theme):
         inset = max(8, int(min(width, height) * 0.018))

@@ -33,7 +33,8 @@ style.textContent = `
 .hz3-section-editor .lyric-item{border-color:#d99cff;white-space:pre-wrap;min-height:32px;outline:none}.hz3-section-editor .lyric-item:focus{box-shadow:0 0 0 1px #d99cff}.hz3-section-editor .abc-item{font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
 .hz3-section-editor .abc-bar-head{display:flex;justify-content:space-between;color:#9fb3c4;font:10px system-ui;margin-bottom:3px}.hz3-section-editor .abc-voice{white-space:pre-wrap;overflow-wrap:anywhere}.hz3-section-editor .abc-vocal{color:#e5bdff}.hz3-section-editor .abc-ins{color:#83ead3}
 .hz3-section-editor .drop-slot{height:8px;margin:0 -2px;position:relative;border-radius:4px;transition:background .12s}.hz3-section-editor .drop-slot.drag-over{height:20px;background:#1c6055}
-.hz3-section-editor .boundary{display:flex;align-items:center;justify-content:center;width:100%;min-height:25px;margin:1px 0;background:#203c46!important;border:1px dashed #55cbb1!important;color:#c4fff0!important;font-size:10px;padding:4px 6px!important;cursor:grab!important;touch-action:none}
+.hz3-section-editor .drop-slot.has-boundary{height:auto;min-height:33px;margin:2px -2px}.hz3-section-editor .drop-slot.has-boundary.drag-over{min-height:35px}
+.hz3-section-editor .boundary{display:flex;align-items:center;justify-content:center;width:100%;min-height:33px;margin:0;background:#203c46!important;border:1px dashed #55cbb1!important;color:#c4fff0!important;font-size:10px;line-height:1.25;padding:5px 7px!important;white-space:normal;cursor:grab!important;touch-action:none}
 .hz3-section-editor .boundary:active{cursor:grabbing!important}.hz3-section-editor .empty{padding:7px;color:#8499ab;font-style:italic}
 .hz3-section-editor .panel-foot{font-size:10px;color:#8195a8;padding:4px 8px 7px}.hz3-section-editor .widget-hidden{display:none!important}
 .hz3-section-editor-expanded{position:fixed!important;inset:2vh 2vw!important;width:96vw!important;height:96vh!important;z-index:10000!important;box-shadow:0 0 0 4vh #000a}
@@ -49,9 +50,12 @@ class ABCSectionEditor {
         this.panels = element("div", null, this.root, "panels");
         this.lyricPanel = this.makePanel("LYRICS", this.panels);
         this.abcPanel = this.makePanel("ABC · measures", this.panels);
+        this.syncingPanels = false;
+        this.lyricPanel.content.addEventListener("scroll", () => this.syncPanelScroll(this.lyricPanel, this.abcPanel));
+        this.abcPanel.content.addEventListener("scroll", () => this.syncPanelScroll(this.abcPanel, this.lyricPanel));
         this.status = element("span", "Run this node to load the inputs.", this.toolbar, "status");
         this.expanded = false;
-        this.observer = new ResizeObserver(() => this.layout());
+        this.observer = new ResizeObserver(() => { this.alignSectionHeights(); this.layout(); });
         this.observer.observe(this.root);
     }
 
@@ -61,6 +65,26 @@ class ABCSectionEditor {
         const content = element("div", null, panel, "panel-content");
         const foot = element("div", "Drag a divider onto a line/bar position to change this panel's section range.", panel, "panel-foot");
         return {panel, heading, content, foot};
+    }
+
+    syncPanelScroll(source, target) {
+        if (this.syncingPanels) return;
+        this.syncingPanels = true;
+        target.content.scrollTop = source.content.scrollTop;
+        requestAnimationFrame(() => { this.syncingPanels = false; });
+    }
+
+    alignSectionHeights() {
+        const left = this.lyricPanel.cells || [];
+        const right = this.abcPanel.cells || [];
+        for (const cell of [...left, ...right]) cell.style.minHeight = "";
+        const count = Math.min(left.length, right.length);
+        for (let index = 0; index < count; index++) {
+            const height = Math.ceil(Math.max(left[index].getBoundingClientRect().height,
+                right[index].getBoundingClientRect().height));
+            left[index].style.minHeight = `${height}px`;
+            right[index].style.minHeight = `${height}px`;
+        }
     }
 
     bindStateWidget() {
@@ -142,6 +166,7 @@ class ABCSectionEditor {
 
     renderPanel(side, target) {
         target.content.replaceChildren();
+        target.cells = [];
         if (!this.state) return;
         const isLyrics = side === "lyrics";
         const rows = isLyrics ? this.state.lyric_lines : this.data.bars;
@@ -151,6 +176,7 @@ class ABCSectionEditor {
         this.state.sections.forEach((section, sectionIndex) => {
             const end = Math.max(start, Math.min(rows.length, section[endField]));
             const cell = element("article", null, target.content, "cell");
+            target.cells.push(cell);
             const head = element("div", null, cell, "cell-head");
             element("span", `CELL ${String(sectionIndex + 1).padStart(2, "0")}`, head, "cell-index");
             const title = element("input", null, head, "cell-title");
@@ -185,6 +211,7 @@ class ABCSectionEditor {
 
             const addBoundaryIfHere = (slot, position) => {
                 if (sectionIndex >= this.state.sections.length - 1 || position !== end) return;
+                slot.classList.add("has-boundary");
                 const nextName = this.state.sections[sectionIndex + 1].name;
                 const handle = button(slot, `↕ Drag boundary · next: ${nextName}`, () => {}, "boundary");
                 handle.draggable = true;
@@ -209,6 +236,7 @@ class ABCSectionEditor {
                         line.oninput = () => {
                             this.state.lyric_lines[rowIndex] = line.innerText.replace(/[\r\n]+/g, " ");
                             this.writeState();
+                            requestAnimationFrame(() => this.alignSectionHeights());
                         };
                     } else {
                         const bar = this.data.bars[rowIndex];
@@ -234,6 +262,7 @@ class ABCSectionEditor {
 
     render() {
         if (!this.data || !this.state) return;
+        const previousScroll = Math.max(this.lyricPanel.content.scrollTop, this.abcPanel.content.scrollTop);
         this.toolbar.replaceChildren();
         button(this.toolbar, "+ Add section", () => this.addSection());
         this.expandButton = button(this.toolbar, this.expanded ? "Close expanded" : "Expand editor", () => this.expand(!this.expanded), "secondary");
@@ -243,6 +272,9 @@ class ABCSectionEditor {
             : "Starting cuts use the existing section labels. Drag each divider independently in Lyrics and ABC. No syllable-to-note alignment is assumed.";
         this.renderPanel("lyrics", this.lyricPanel);
         this.renderPanel("abc", this.abcPanel);
+        this.alignSectionHeights();
+        this.lyricPanel.content.scrollTop = previousScroll;
+        this.abcPanel.content.scrollTop = previousScroll;
         this.layout();
     }
 

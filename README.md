@@ -146,7 +146,7 @@ The **HZ3 YuE2 · Fetch Lyrics from Audio** node takes a ComfyUI `AUDIO` input, 
 
 Setup:
 
-1. Install Chromaprint so `fpcalc` is available on `PATH`, or enter the full executable path in the node's optional `fpcalc_path` field. On Windows, MusicBrainz Picard installs `fpcalc` with Chromaprint.
+1. The Windows x64 install on this machine includes Chromaprint `fpcalc` under the node's local `vendor` folder, which the node detects automatically. On other systems, install Chromaprint and add `fpcalc` to `PATH`, or enter its full executable path in the optional `fpcalc_path` field. The local binary is ignored by Git so it is not added to source commits.
 2. Register a free AcoustID application and enter its client ID in the node. AcoustID's public service is limited to non-commercial usage and asks clients to stay below three requests per second.
 3. Connect your input audio. The node sends the fingerprint and duration to AcoustID, not the raw audio. LRCLIB does not require an API key.
 

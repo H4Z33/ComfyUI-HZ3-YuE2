@@ -50,6 +50,13 @@ def _audio_to_fingerprint(audio, fpcalc_path=""):
 
     binary = (fpcalc_path or "").strip() or shutil.which("fpcalc")
     if not binary:
+        bundled_root = Path(__file__).resolve().parent / "vendor"
+        bundled_candidates = sorted(bundled_root.glob("chromaprint-*/**/fpcalc.exe"))
+        if not bundled_candidates:
+            bundled_candidates = sorted(bundled_root.glob("chromaprint-*/**/fpcalc"))
+        if bundled_candidates:
+            binary = str(bundled_candidates[-1])
+    if not binary:
         raise RuntimeError(
             "Chromaprint's fpcalc was not found. Install Chromaprint (fpcalc) and add it to PATH, "
             "or provide its executable path in this node."

@@ -1,61 +1,313 @@
-from .abc_score import parse
-from .score_analysis import inspect_score
+"""Manual visual section editor for native YuE2 ABC and lyric text."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+
+try:
+    from .abc_score import parse
+    from .score_analysis import inspect_score
+except (ImportError, ValueError):
+    from abc_score import parse
+    from score_analysis import inspect_score
 
 
-def _tick(value):
-    return int(value * 256)
+_REST_BARS = re.compile(r"Z([2-4])?")
+_LYRIC_HEADER = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+_MAX_STATE_CHARS = 300_000
+_MAX_SECTIONS = 64
 
 
-def viewer_data(score_abc, lyrics=""):
-    info = inspect_score(score_abc, lyrics)
+def _raw_bars(music_line: str) -> list[str]:
+    """Split a native music line into actual measures, expanding Z2-Z4."""
+    measures = []
+    for part in music_line[:-1].split("|"):
+        part = part.strip()
+        rest = _REST_BARS.fullmatch(part)
+        measures.extend(["Z"] * int(rest.group(1) or "1") if rest else [part])
+    return measures
+
+
+def _extract_abc(score_abc: str):
+    info = inspect_score(score_abc)
     score = parse(info["abc"])
-    bars = [
-        {
-            "number": index + 1,
-            "start": _tick(start),
-            "duration": _tick(duration),
-            "meter": f"{meter[0]}/{meter[1]}",
-        }
-        for index, (start, duration, meter) in enumerate(score.voices["Vocal"].bars)
-    ]
+    lines = info["abc"].splitlines()
+    bars = [{"number": i + 1, "vocal": "Z", "ins": "Z", "meter": ""}
+            for i in range(len(score.voices["Vocal"].bars))]
+    directives: dict[int, dict[str, list[str]]] = {}
+    seen = {"Vocal": 0, "Ins": 0}
+
+    for line_index, voice in sorted(score.music_lines.items()):
+        measures = _raw_bars(lines[line_index])
+        voice_line = max(i for i in range(line_index) if lines[i] == f"V: {voice}")
+        fields = [line for line in lines[voice_line + 1:line_index]
+                  if line.startswith(("M:", "K:"))]
+        if fields:
+            directives.setdefault(seen[voice], {})[voice] = fields
+        for offset, measure in enumerate(measures):
+            index = seen[voice] + offset
+            bars[index]["vocal" if voice == "Vocal" else "ins"] = measure
+            if voice == "Vocal":
+                bars[index]["meter"] = f"{score.voices[voice].bars[index][2][0]}/{score.voices[voice].bars[index][2][1]}"
+        seen[voice] += len(measures)
+
+    markers = []
+    pending_marker = None
+    vocal_bar_index = 0
+    for line_index, line in enumerate(lines):
+        if line.startswith("% "):
+            pending_marker = line[2:].strip()
+        if score.music_lines.get(line_index) == "Vocal":
+            if pending_marker:
+                markers.append({"name": pending_marker, "start": vocal_bar_index})
+            pending_marker = None
+            vocal_bar_index += len(_raw_bars(line))
+
+    return info, bars, directives, markers
+
+
+def _parse_lyrics(lyrics: str):
+    rows, markers = [], []
+    for raw_line in str(lyrics or "").replace("\r\n", "\n").replace("\r", "\n").splitlines():
+        match = _LYRIC_HEADER.fullmatch(raw_line)
+        if match:
+            name = match.group(1).strip()
+            if name and not re.fullmatch(r"\d{1,2}:\d{2}(?:\.\d+)?", name):
+                markers.append({"name": name, "start": len(rows)})
+            continue
+        if raw_line.strip():
+            rows.append(raw_line.strip())
+    return rows, markers
+
+
+def _name_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+
+def _seed_starts(markers, section_names, total):
+    """Use matching source labels as anchors and interpolate only missing cuts."""
+    count = len(section_names)
+    if count <= 1:
+        return [0]
+    anchors = {0: 0, count: total}
+    search_from = 0
+    for marker in markers:
+        key = _name_key(marker["name"])
+        section_index = next((i for i in range(search_from, count)
+                              if _name_key(section_names[i]) == key), None)
+        if section_index is None:
+            continue
+        search_from = section_index + 1
+        if section_index > 0:
+            anchors[section_index] = max(0, min(total, int(marker["start"])))
+    ordered = sorted(anchors.items())
+    starts = [0] * (count + 1)
+    for (left_i, left_pos), (right_i, right_pos) in zip(ordered, ordered[1:]):
+        right_pos = max(left_pos, right_pos)
+        for index in range(left_i, right_i + 1):
+            fraction = (index - left_i) / (right_i - left_i)
+            starts[index] = round(left_pos + (right_pos - left_pos) * fraction)
+    return starts[:-1]
+
+
+def _initial_sections(lyric_markers, abc_markers, lyric_count, bar_count):
+    # Prefer the richer labeled source; use labels from the other source to seed
+    # missing names, but never compute lyric-to-note/syllable alignment.
+    primary = lyric_markers if len(lyric_markers) >= len(abc_markers) else abc_markers
+    secondary = abc_markers if primary is lyric_markers else lyric_markers
+    names = [marker["name"] for marker in primary]
+    if not names:
+        names = [marker["name"] for marker in secondary]
+    if not names:
+        names = ["Section 1"]
+    for marker in secondary:
+        if len(names) >= max(len(lyric_markers), len(abc_markers)):
+            break
+        if _name_key(marker["name"]) not in {_name_key(name) for name in names}:
+            names.append(marker["name"])
+    desired = max(1, len(names), len(lyric_markers), len(abc_markers))
+    while len(names) < desired:
+        names.append(f"Section {len(names) + 1}")
+
+    lyric_starts = _seed_starts(lyric_markers, names, lyric_count)
+    abc_starts = _seed_starts(abc_markers, names, bar_count)
     sections = []
-    for section in info["roll"]["sections"]:
-        first = section["start"]
-        last = first + section["bars"]
-        start_tick = bars[first]["start"]
-        final_bar = bars[last - 1]
-        end_tick = final_bar["start"] + final_bar["duration"]
+    for index, name in enumerate(names):
         sections.append({
-            **section,
-            "start_bar": first + 1,
-            "end_bar": last,
-            "start_tick": start_tick,
-            "end_tick": end_tick,
+            "id": f"section-{index + 1}",
+            "name": name,
+            "lyrics_end": lyric_starts[index + 1] if index + 1 < len(names) else lyric_count,
+            "abc_end": abc_starts[index + 1] if index + 1 < len(names) else bar_count,
         })
-    info["roll"]["bars"] = bars
-    info["roll"]["sections"] = sections
-    info["roll"]["total_ticks"] = bars[-1]["start"] + bars[-1]["duration"]
-    return info
+    return sections
+
+
+def _normalize_state(state_text, source_hash, lyric_lines, bars, lyric_markers, abc_markers):
+    state = None
+    if isinstance(state_text, str) and len(state_text) <= _MAX_STATE_CHARS:
+        try:
+            candidate = json.loads(state_text)
+            if isinstance(candidate, dict) and candidate.get("source_hash") == source_hash:
+                state = candidate
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    if state is None:
+        sections = _initial_sections(lyric_markers, abc_markers, len(lyric_lines), len(bars))
+        return {"source_hash": source_hash, "sections": sections, "lyric_lines": lyric_lines}
+
+    edited_lines = state.get("lyric_lines", lyric_lines)
+    if not isinstance(edited_lines, list) or len(edited_lines) > 20_000:
+        edited_lines = lyric_lines
+    edited_lines = [str(line).replace("\r", " ").replace("\n", " ")[:2_000] for line in edited_lines]
+    raw_sections = state.get("sections")
+    if not isinstance(raw_sections, list) or not raw_sections or len(raw_sections) > _MAX_SECTIONS:
+        raw_sections = _initial_sections(lyric_markers, abc_markers, len(edited_lines), len(bars))
+
+    sections, prev_lyrics, prev_abc = [], 0, 0
+    for index, raw in enumerate(raw_sections):
+        if not isinstance(raw, dict):
+            continue
+        name = re.sub(r"[\r\n\[\]]+", " ", str(raw.get("name") or f"Section {index + 1}")).strip()[:100]
+        name = name or f"Section {index + 1}"
+        try:
+            lyric_end = max(prev_lyrics, min(len(edited_lines), int(raw.get("lyrics_end", len(edited_lines)))))
+        except (TypeError, ValueError):
+            lyric_end = len(edited_lines)
+        try:
+            abc_end = max(prev_abc, min(len(bars), int(raw.get("abc_end", len(bars)))))
+        except (TypeError, ValueError):
+            abc_end = len(bars)
+        sections.append({"id": str(raw.get("id") or f"section-{index + 1}")[:100],
+                         "name": name, "lyrics_end": lyric_end, "abc_end": abc_end})
+        prev_lyrics, prev_abc = lyric_end, abc_end
+
+    if not sections:
+        sections = _initial_sections(lyric_markers, abc_markers, len(edited_lines), len(bars))
+    sections[-1]["lyrics_end"] = len(edited_lines)
+    sections[-1]["abc_end"] = len(bars)
+    return {"source_hash": source_hash, "sections": sections, "lyric_lines": edited_lines}
+
+
+def _build_abc(score_abc, bars, directives, sections):
+    header = score_abc.replace("\r\n", "\n").replace("\r", "\n").strip().splitlines()[:8]
+    out = list(header)
+    start = 0
+    for section in sections:
+        end = max(start, min(len(bars), section["abc_end"]))
+        if end == start:
+            continue
+        label = section["name"].replace("\n", " ").replace("\r", " ").strip() or "Section"
+        out.append(f"% {label}")
+        cursor = start
+        while cursor < end:
+            next_change = min((index for index in directives if cursor < index < end), default=end)
+            chunk_end = min(end, cursor + 4, next_change)
+            if chunk_end <= cursor:
+                chunk_end = min(end, cursor + 1)
+            fields = directives.get(cursor, {})
+            out.append("V: Vocal")
+            out.extend(fields.get("Vocal", []))
+            out.append("|".join(bar["vocal"] for bar in bars[cursor:chunk_end]) + "|")
+            out.append("V: Ins")
+            out.extend(fields.get("Ins", []))
+            out.append("|".join(bar["ins"] for bar in bars[cursor:chunk_end]) + "|")
+            cursor = chunk_end
+        start = end
+    return "\n".join(out) + "\n"
+
+
+def _build_lyrics(lyric_lines, sections):
+    if not lyric_lines:
+        return ""
+    out, start = [], 0
+    for section in sections:
+        end = max(start, min(len(lyric_lines), section["lyrics_end"]))
+        name = section["name"].replace("\n", " ").replace("\r", " ").replace("]", " ").strip()
+        out.append(f"[{name or 'Section'}]")
+        out.extend(lyric_lines[start:end])
+        start = end
+    return "\n".join(out) + "\n"
+
+
+def _state_json(state):
+    return json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+
+
+def viewer_data(score_abc, lyrics="", editor_state=""):
+    info, bars, directives, abc_markers = _extract_abc(score_abc)
+    lyric_lines, lyric_markers = _parse_lyrics(lyrics)
+    source_hash = hashlib.sha256((info["abc"] + "\0" + str(lyrics or "")).encode("utf-8")).hexdigest()[:20]
+    state = _normalize_state(editor_state, source_hash, lyric_lines, bars, lyric_markers, abc_markers)
+
+    ranges = {"lyrics": [], "abc": []}
+    lyric_start = abc_start = 0
+    for section in state["sections"]:
+        ranges["lyrics"].append({"start": lyric_start, "end": section["lyrics_end"]})
+        ranges["abc"].append({"start": abc_start, "end": section["abc_end"]})
+        lyric_start, abc_start = section["lyrics_end"], section["abc_end"]
+
+    edited_abc = _build_abc(info["abc"], bars, directives, state["sections"])
+    # Reparse the result so boundary placement cannot silently damage valid ABC.
+    parse(edited_abc)
+    edited_lyrics = _build_lyrics(state["lyric_lines"], state["sections"])
+    report = {
+        "sections": [{
+            "name": section["name"],
+            "lyrics_lines": ranges["lyrics"][index],
+            "abc_bars": ranges["abc"][index],
+        } for index, section in enumerate(state["sections"])],
+        "note": "Section boundaries are manual. The starting layout uses source labels when available; unmatched cuts are rough estimates.",
+    }
+    return {
+        "abc": info["abc"],
+        "lyrics": str(lyrics or ""),
+        "summary": info["summary"],
+        "bpm": info["bpm"],
+        "meter": info["meter"],
+        "key": info["key"],
+        "bars": bars,
+        "lyric_lines": state["lyric_lines"],
+        "sections": state["sections"],
+        "ranges": ranges,
+        "source_hash": source_hash,
+        "editor_state": _state_json(state),
+        "edited_abc": edited_abc,
+        "edited_lyrics": edited_lyrics,
+        "section_report": json.dumps(report, ensure_ascii=False, indent=2),
+        "rough_layout": not (len(lyric_markers) == len(abc_markers) and
+                              [_name_key(item["name"]) for item in lyric_markers] ==
+                              [_name_key(item["name"]) for item in abc_markers]),
+    }
 
 
 class HZ3_YuE2_ABCViewer:
     CATEGORY = "HZ3 YuE2/Score"
     FUNCTION = "view"
-    RETURN_TYPES = ()
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("abc_with_sections", "lyrics_with_sections", "section_map")
     OUTPUT_NODE = True
-    DESCRIPTION = "Inspect the complete YuE2 ABC as a read-only piano roll and play Vocal, Ins, or both as a MIDI-style preview."
+    DESCRIPTION = "Manually align section boundaries between lyrics and ABC in two editable, independently adjustable panels."
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {"score_abc": ("STRING", {"forceInput": True})},
-            "optional": {"lyrics": ("STRING", {"forceInput": True})},
+            "optional": {
+                "lyrics": ("STRING", {"forceInput": True}),
+                "editor_state": ("STRING", {"default": "", "multiline": True}),
+            },
         }
 
-    def view(self, score_abc, lyrics=""):
-        data = viewer_data(score_abc, lyrics)
-        return {"ui": {"abc_viewer": [data]}, "result": ()}
+    def view(self, score_abc, lyrics="", editor_state=""):
+        data = viewer_data(score_abc, lyrics, editor_state)
+        return {
+            "ui": {"abc_viewer": [data]},
+            "result": (data["edited_abc"], data["edited_lyrics"], data["section_report"]),
+        }
 
 
 NODE_CLASS_MAPPINGS = {"HZ3_YuE2_ABCViewer": HZ3_YuE2_ABCViewer}
-NODE_DISPLAY_NAME_MAPPINGS = {"HZ3_YuE2_ABCViewer": "HZ3 YuE2 · ABC Piano Roll"}
+NODE_DISPLAY_NAME_MAPPINGS = {"HZ3_YuE2_ABCViewer": "HZ3 YuE2 · Lyrics ↔ ABC Section Editor"}

@@ -50,6 +50,9 @@ def _extract_abc(score_abc: str):
             index = seen[voice] + offset
             bars[index]["vocal" if voice == "Vocal" else "ins"] = measure
             if voice == "Vocal":
+                bar_start, bar_duration, bar_meter = score.voices[voice].bars[index]
+                bars[index]["start"] = int(bar_start * 256)
+                bars[index]["duration"] = int(bar_duration * 256)
                 bars[index]["meter"] = f"{score.voices[voice].bars[index][2][0]}/{score.voices[voice].bars[index][2][1]}"
         seen[voice] += len(measures)
 
@@ -65,7 +68,15 @@ def _extract_abc(score_abc: str):
             pending_marker = None
             vocal_bar_index += len(_raw_bars(line))
 
-    return info, bars, directives, markers
+    tracks = {
+        name: [{"start": int(start * 256), "pitch": int(pitch), "duration": int(duration * 256)}
+               for start, pitch, duration in voice.notes]
+        for name, voice in score.voices.items()
+    }
+    chords = [{"start": int(start * 256), "symbol": symbol}
+              for start, symbol in score.voices["Vocal"].chords]
+    total_ticks = int(score.voices["Vocal"].time * 256)
+    return info, bars, directives, markers, tracks, chords, total_ticks
 
 
 def _parse_lyrics(lyrics: str):
@@ -237,7 +248,7 @@ def _state_json(state):
 
 
 def viewer_data(score_abc, lyrics="", editor_state=""):
-    info, bars, directives, abc_markers = _extract_abc(score_abc)
+    info, bars, directives, abc_markers, tracks, chords, total_ticks = _extract_abc(score_abc)
     lyric_lines, lyric_markers = _parse_lyrics(lyrics)
     source_hash = hashlib.sha256((info["abc"] + "\0" + str(lyrics or "")).encode("utf-8")).hexdigest()[:20]
     state = _normalize_state(editor_state, source_hash, lyric_lines, bars, lyric_markers, abc_markers)
@@ -269,6 +280,9 @@ def viewer_data(score_abc, lyrics="", editor_state=""):
         "meter": info["meter"],
         "key": info["key"],
         "bars": bars,
+        "tracks": tracks,
+        "chords": chords,
+        "total_ticks": total_ticks,
         "lyric_lines": state["lyric_lines"],
         "sections": state["sections"],
         "ranges": ranges,

@@ -85,6 +85,26 @@ Z3|
         self.assertIn('"lyrics_lines": {\n        "start": 0,\n        "end": 2', result["section_report"])
         self.assertEqual(result["ranges"]["abc"], [{"start": 0, "end": 1}, {"start": 1, "end": 4}])
 
+    def test_viewer_supplies_resolved_abc_notes_and_timing_for_playback(self):
+        source = HEADER + '''% verse
+V: Vocal
+^F32|G32|
+V: Ins
+z32|A32|
+'''
+        result = editor.viewer_data(source)
+        parsed = abc.parse(source)
+        self.assertEqual(result["tracks"]["Vocal"], [
+            {"start": int(start * 256), "pitch": pitch, "duration": int(duration * 256)}
+            for start, pitch, duration in parsed.voices["Vocal"].notes
+        ])
+        self.assertEqual(result["tracks"]["Ins"], [
+            {"start": int(start * 256), "pitch": pitch, "duration": int(duration * 256)}
+            for start, pitch, duration in parsed.voices["Ins"].notes
+        ])
+        self.assertEqual(result["bars"][1]["start"], 4 * 256)
+        self.assertEqual(result["total_ticks"], 8 * 256)
+
     def test_can_split_inside_original_group_and_preserve_meter_changes(self):
         source = HEADER + '''% intro
 V: Vocal

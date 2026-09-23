@@ -51,7 +51,7 @@ G32|
             self.assertEqual(abc.parse(output).voices["Vocal"].bars, original.voices["Vocal"].bars)
             self.assertIn("% verse", output)
 
-    def test_sections_can_be_moved_independently_and_output_stays_valid(self):
+    def test_saved_range_state_migrates_to_section_start_boxes(self):
         source = HEADER + '''% intro
 V: Vocal
 "C"E32-|
@@ -82,8 +82,39 @@ Z3|
         self.assertIn("% Intro", result["edited_abc"])
         self.assertIn("% Verse", result["edited_abc"])
         self.assertEqual(result["edited_lyrics"], "[Intro]\nfirst lyric\nsecond lyric\n[Verse]\nlast lyric\n")
-        self.assertIn('"lyrics_lines": {\n        "start": 0,\n        "end": 2', result["section_report"])
-        self.assertEqual(result["ranges"]["abc"], [{"start": 0, "end": 1}, {"start": 1, "end": 4}])
+        report = json.loads(result["section_report"])
+        self.assertEqual([section["start_bar"] for section in report["sections"]], [0, 1])
+        self.assertEqual([section["lyrics"] for section in report["sections"]],
+                         ["first lyric\nsecond lyric", "last lyric"])
+
+    def test_section_start_and_editable_box_text_are_saved_independently(self):
+        source = HEADER + '''% intro
+V: Vocal
+"C"E32-|E32|G32|A32|
+V: Ins
+Z4|
+'''
+        first = editor.viewer_data(source, "[Intro]\nopening\n[Verse]\nold verse\n")
+        state = {
+            "source_hash": first["source_hash"],
+            "editor_version": 2,
+            "sections": [
+                {"id": "intro", "name": "Intro", "start_bar": 0, "lyrics": "opening"},
+                {"id": "verse", "name": "Verse", "start_bar": 2, "lyrics": "new verse\nsecond line"},
+            ],
+        }
+        result = editor.viewer_data(source, "[Intro]\nopening\n[Verse]\nold verse\n", json.dumps(state))
+
+        original = abc.parse(source)
+        rebuilt = abc.parse(result["edited_abc"])
+        self.assertEqual(rebuilt.voices["Vocal"].notes, original.voices["Vocal"].notes)
+        self.assertEqual([section["start_bar"] for section in result["sections"]], [0, 2])
+        self.assertEqual(result["sections"][1]["lyrics"], "new verse\nsecond line")
+        self.assertEqual(result["edited_lyrics"], "[Intro]\nopening\n[Verse]\nnew verse\nsecond line\n")
+        _info, _bars, _directives, markers, *_timing = editor._extract_abc(result["edited_abc"])
+        self.assertEqual([(marker["name"], marker["start"]) for marker in markers], [("Intro", 0), ("Verse", 2)])
+        reparsed_state = editor.viewer_data(source, "[Intro]\nopening\n[Verse]\nold verse\n", result["editor_state"])
+        self.assertEqual(reparsed_state["sections"], result["sections"])
 
     def test_viewer_supplies_resolved_abc_notes_and_timing_for_playback(self):
         source = HEADER + '''% verse

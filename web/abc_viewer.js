@@ -8,6 +8,13 @@ function element(tag, text, parent, className = "") {
     return node;
 }
 
+function svgElement(tag, parent, attrs = {}) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
+    parent?.append(node);
+    return node;
+}
+
 function button(parent, label, action, className = "") {
     const node = element("button", label, parent, className);
     node.type = "button";
@@ -50,32 +57,44 @@ function chordPitches(symbol) {
     return [...new Set(pitches)];
 }
 
+const BAR_WIDTH = 120;
+const AXIS_WIDTH = 52;
+const NOTE_ROW_HEIGHT = 13;
+const LYRIC_CARD_WIDTH = 340;
+const LYRIC_CARD_HEIGHT = 138;
 const style = document.createElement("style");
-style.textContent = `
-.hz3-section-editor{height:100%;min-height:540px;padding:8px;box-sizing:border-box;background:#111827;color:#edf7f5;font:13px system-ui;border:1px solid #25a98e;border-radius:8px;display:flex;flex-direction:column;overflow:hidden}
-.hz3-section-editor *{box-sizing:border-box}.hz3-section-editor .toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;flex:0 0 auto}
-.hz3-section-editor button{background:#16816d;color:#fff;border:1px solid #28b89c;border-radius:5px;padding:7px 10px;cursor:pointer}.hz3-section-editor button.secondary{background:#263548;border-color:#486174}.hz3-section-editor button:disabled{opacity:.45;cursor:default}
-.hz3-section-editor .control-label{display:flex;align-items:center;gap:5px;color:#b7c9d6;font-size:11px}.hz3-section-editor .control-select{max-width:180px;background:#1e293b;color:#f8fafc;border:1px solid #486174;border-radius:5px;padding:6px 8px}
-.hz3-section-editor .hint{color:#b6c7d6;font-size:11px;line-height:1.3;padding:5px 7px;border-left:3px solid #4ee0bd;background:#162234;margin-bottom:6px;flex:0 0 auto}
-.hz3-section-editor .status{color:#8fe3d0;margin-left:auto;min-width:180px}.hz3-section-editor .panel-heads{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-bottom:5px;flex:0 0 auto}
-.hz3-section-editor .panel-title{background:#192638;color:#d8f5ee;padding:7px 10px;font-weight:700;letter-spacing:.05em;border:1px solid #405368;border-radius:5px}
-.hz3-section-editor .workspace{overflow:auto;min-height:0;flex:1;padding:5px 8px;border:1px solid #405368;border-radius:7px;background:#0d1522;overscroll-behavior:contain;scrollbar-gutter:stable}
-.hz3-section-editor .section-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:start;padding-bottom:1px}
-.hz3-section-editor .section-column{min-width:0;align-self:start}
-.hz3-section-editor .cell{border:1px solid #354c60;border-radius:7px;background:#141f2e;margin:2px 0 10px;overflow:hidden}
-.hz3-section-editor .cell-head{display:flex;align-items:center;gap:7px;padding:7px 8px;background:#1b2b3d;border-bottom:1px solid #354c60}
-.hz3-section-editor .cell-index{font-size:11px;color:#9fb3c4;white-space:nowrap}.hz3-section-editor .cell-title{min-width:0;flex:1;background:#101827;color:#e7f4f1;border:1px solid #405368;border-radius:4px;padding:5px 7px;font:600 12px system-ui}
-.hz3-section-editor .cell-remove{padding:4px 7px!important;background:#54343b!important;border-color:#8e5961!important}.hz3-section-editor .cell-body{padding:3px 7px 7px}
-.hz3-section-editor .item{border-left:2px solid #4ee0bd;background:#0f1a28;color:#dce7ef;margin:3px 0;padding:6px 8px;border-radius:3px;line-height:1.45;overflow-wrap:anywhere}
-.hz3-section-editor .lyric-item{border-color:#d99cff;white-space:pre-wrap;min-height:32px;outline:none}.hz3-section-editor .lyric-item:focus{box-shadow:0 0 0 1px #d99cff}.hz3-section-editor .abc-item{font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
-.hz3-section-editor .abc-item{display:grid;grid-template-columns:52px minmax(0,1fr);gap:5px;padding:3px 5px;margin:2px 0;align-items:start}.hz3-section-editor .abc-bar-index{font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;color:#9fb3c4;text-align:right;white-space:nowrap;padding-top:1px}.hz3-section-editor .abc-bar-content{min-width:0;overflow-x:auto;scrollbar-width:thin}.hz3-section-editor .abc-voice{font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;overflow-wrap:normal}.hz3-section-editor .abc-vocal{color:#e5bdff}.hz3-section-editor .abc-ins{color:#83ead3}
-.hz3-section-editor .drop-slot{height:8px;margin:0 -2px;position:relative;border-radius:4px;transition:background .12s}.hz3-section-editor .drop-slot.drag-over{height:20px;background:#1c6055}
-.hz3-section-editor .drop-slot.has-boundary{height:auto;min-height:33px;margin:2px -2px}.hz3-section-editor .drop-slot.has-boundary.drag-over{min-height:35px}
-.hz3-section-editor .boundary{display:flex;align-items:center;justify-content:center;width:100%;min-height:33px;margin:0;background:#203c46!important;border:1px dashed #55cbb1!important;color:#c4fff0!important;font-size:10px;line-height:1.25;padding:5px 7px!important;white-space:normal;cursor:grab!important;touch-action:none}
-.hz3-section-editor .boundary:active{cursor:grabbing!important}.hz3-section-editor .empty{padding:7px;color:#8499ab;font-style:italic}
-.hz3-section-editor .widget-hidden{display:none!important}
-.hz3-section-editor-expanded{position:fixed!important;inset:2vh 2vw!important;width:96vw!important;height:96vh!important;z-index:10000!important;box-shadow:0 0 0 4vh #000a}
-`;
+style.textContent = [
+    ".hz3-section-editor{height:100%;min-height:540px;padding:8px;box-sizing:border-box;background:#111827;color:#edf7f5;font:13px system-ui;border:1px solid #25a98e;border-radius:8px;display:flex;flex-direction:column;overflow:hidden}",
+    ".hz3-section-editor *{box-sizing:border-box}.hz3-section-editor .toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:5px;flex:0 0 auto}",
+    ".hz3-section-editor button{background:#16816d;color:#fff;border:1px solid #28b89c;border-radius:5px;padding:6px 9px;cursor:pointer}.hz3-section-editor button.secondary{background:#263548;border-color:#486174}.hz3-section-editor button.danger{background:#54343b;border-color:#8e5961}.hz3-section-editor button:disabled{opacity:.4;cursor:default}",
+    ".hz3-section-editor .control-label{display:flex;align-items:center;gap:5px;color:#b7c9d6;font-size:11px}.hz3-section-editor .control-select{max-width:180px;background:#1e293b;color:#f8fafc;border:1px solid #486174;border-radius:5px;padding:6px 8px}",
+    ".hz3-section-editor .hint{color:#b6c7d6;font-size:11px;line-height:1.3;padding:5px 7px;border-left:3px solid #4ee0bd;background:#162234;margin-bottom:5px;flex:0 0 auto}",
+    ".hz3-section-editor .legend{display:flex;align-items:center;gap:14px;color:#b6c7d6;font-size:11px;margin:0 0 5px 4px;flex:0 0 auto}.hz3-section-editor .legend-item{display:flex;align-items:center;gap:5px}.hz3-section-editor .legend-swatch{width:10px;height:10px;border-radius:2px}",
+    ".hz3-section-editor .status{color:#8fe3d0;margin-left:auto;min-width:150px;font-size:11px}",
+    ".hz3-section-editor .timeline-scroll{overflow:auto;min-height:0;flex:1;border:1px solid #405368;border-radius:7px;background:#0d1522;overscroll-behavior:contain;scrollbar-gutter:stable}",
+    ".hz3-section-editor .timeline-canvas{position:relative;min-height:100%}",
+    ".hz3-section-editor .bar-ruler{display:flex;height:44px;position:sticky;top:0;z-index:4;background:#111c2b;border-bottom:1px solid #405368}",
+    ".hz3-section-editor .roll-axis{position:sticky;left:0;z-index:3;flex:0 0 " + AXIS_WIDTH + "px;width:" + AXIS_WIDTH + "px;background:#172436;border-right:1px solid #405368}",
+    ".hz3-section-editor .ruler-axis{z-index:5;display:flex;align-items:center;justify-content:center;color:#91a7b8;font:10px ui-monospace,SFMono-Regular,Consolas,monospace}",
+    ".hz3-section-editor .bar-ruler-cell{position:relative;flex:0 0 " + BAR_WIDTH + "px;width:" + BAR_WIDTH + "px;border-right:1px solid #34475a;text-align:center}",
+    ".hz3-section-editor .section-tag{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:3px 3px 0;padding:2px 3px;height:18px;background:#6b4d1e;color:#fff0bd;border:1px solid #b78b3b;border-radius:3px;font-size:9px;font-weight:700}",
+    ".hz3-section-editor .bar-number{display:block;padding-top:3px;color:#9fb3c4;font:10px ui-monospace,SFMono-Regular,Consolas,monospace}",
+    ".hz3-section-editor .piano-row{display:flex;align-items:flex-start;border-bottom:1px solid #405368}",
+    ".hz3-section-editor .pitch-axis{flex:none;background:#172436;border-right:1px solid #405368}",
+    ".hz3-section-editor .piano-svg{display:block;flex:none;background:#101a28}",
+    ".hz3-section-editor .lyrics-row{display:flex;align-items:stretch;min-height:" + LYRIC_CARD_HEIGHT + "px}",
+    ".hz3-section-editor .lyrics-axis{display:flex;align-items:flex-start;justify-content:center;padding-top:9px;color:#d2a7ee;font:10px ui-monospace,SFMono-Regular,Consolas,monospace;z-index:3}",
+    ".hz3-section-editor .lyrics-track{position:relative;flex:none}",
+    ".hz3-section-editor .lyric-card{position:absolute;overflow:hidden;border:1px solid #70538a;border-radius:6px;background:#191d30;box-shadow:0 3px 10px #0005}",
+    ".hz3-section-editor .lyric-card.selected{border-color:#d99cff;box-shadow:0 0 0 1px #d99cff,0 3px 10px #0006}",
+    ".hz3-section-editor .lyric-card-head{height:34px;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#29223a;border-bottom:1px solid #59476b}",
+    ".hz3-section-editor .lyric-card-title{min-width:40px;flex:1;background:#111827;color:#fff;border:1px solid #59476b;border-radius:4px;padding:4px 5px;font:600 11px system-ui}",
+    ".hz3-section-editor .lyric-card-bar{white-space:nowrap;color:#dfc7ef;font:9px ui-monospace,SFMono-Regular,Consolas,monospace}",
+    ".hz3-section-editor .move-button{padding:4px 5px!important;font-size:10px}.hz3-section-editor .remove-button{padding:4px 6px!important}",
+    ".hz3-section-editor .lyric-text{display:block;width:100%;height:102px;resize:none;overflow:auto;background:#101827;color:#f3eafa;border:0;padding:7px;font:12px/1.4 system-ui;outline:none}.hz3-section-editor .lyric-text:focus{box-shadow:inset 0 0 0 1px #d99cff}",
+    ".hz3-section-editor .widget-hidden{display:none!important}",
+    ".hz3-section-editor-expanded{position:fixed!important;inset:2vh 2vw!important;width:96vw!important;height:96vh!important;z-index:10000!important;box-shadow:0 0 0 4vh #000a}"
+].join("\n");
 document.head.append(style);
 
 class ABCSectionEditor {
@@ -83,19 +102,17 @@ class ABCSectionEditor {
         this.node = node;
         this.root = element("div", null, null, "hz3-section-editor");
         this.toolbar = element("div", null, this.root, "toolbar");
-        this.hint = element("div", "Existing section labels provide a rough starting point. Drag each divider separately in Lyrics and ABC; no syllable-to-note alignment is assumed.", this.root, "hint");
-        this.panelHeads = element("div", null, this.root, "panel-heads");
-        this.lyricHeading = element("div", "LYRICS", this.panelHeads, "panel-title");
-        this.abcHeading = element("div", "ABC · measures", this.panelHeads, "panel-title");
-        this.workspace = element("div", null, this.root, "workspace");
-        this.lyricPanel = {cells: []};
-        this.abcPanel = {cells: []};
-        this.track = "Both";
+        this.hint = element("div", "Use the piano roll to see ABC notes. Each lyric box is pinned to its section's starting bar.", this.root, "hint");
+        this.legend = element("div", null, this.root, "legend");
+        this.timelineScroll = element("div", null, this.root, "timeline-scroll");
+        this.timelineCanvas = element("div", null, this.timelineScroll, "timeline-canvas");
         this.selectedSection = "all";
-        this.position = 0;
+        this.track = "Both";
         this.chords = true;
-        this.status = element("span", "Run this node to load the inputs.", this.toolbar, "status");
+        this.position = 0;
+        this.zoom = 1;
         this.expanded = false;
+        this.status = element("span", "Run this node to load the ABC.", this.toolbar, "status");
         this.observer = new ResizeObserver(() => this.layout());
         this.observer.observe(this.root);
     }
@@ -107,18 +124,19 @@ class ABCSectionEditor {
         this.stateWidget.options = {...(this.stateWidget.options || {}), serialize: true};
         this.stateWidget.element?.classList.add("widget-hidden");
         this.stateWidget.element?.setAttribute("aria-hidden", "true");
-        this.node.setSize([Math.max(1020, this.node.size[0]), 640]);
+        this.node.setSize([Math.max(1000, this.node.size[0]), 640]);
     }
 
     receive(data) {
         this.stop();
         this.data = typeof data === "string" ? JSON.parse(data) : data;
+        this.hasEdits = false;
         this.selectedSection = "all";
         this.position = 0;
         this.state = {
             source_hash: this.data.source_hash,
+            editor_version: 2,
             sections: this.data.sections.map(section => ({...section})),
-            lyric_lines: [...this.data.lyric_lines],
         };
         this.writeState(false);
         this.render();
@@ -131,85 +149,100 @@ class ABCSectionEditor {
             this.stateWidget.value = value;
             this.stateWidget.callback?.(value);
         }
-        if (showQueuedHint) this.status.textContent = "Changes saved here · queue this node to refresh its outputs.";
+        if (showQueuedHint) this.hasEdits = true;
+        if (showQueuedHint && this.status) this.status.textContent = "Edits saved · queue this node to update its outputs.";
         this.node.graph?.setDirtyCanvas(true, true);
     }
 
-    setName(index, value) {
-        const name = value.replace(/[\r\n\[\]]+/g, " ").trim().slice(0, 100) || `Section ${index + 1}`;
-        this.state.sections[index].name = name;
-        this.writeState();
-        this.render();
-    }
-
-    addSection() {
-        if (!this.state || this.state.sections.length >= 64) return;
-        this.stop();
-        const lyricEnd = this.state.lyric_lines.length;
-        const abcEnd = this.data.bars.length;
-        this.state.sections[this.state.sections.length - 1].lyrics_end = lyricEnd;
-        this.state.sections[this.state.sections.length - 1].abc_end = abcEnd;
-        const index = this.state.sections.length + 1;
-        this.state.sections.push({id: `section-${Date.now()}-${index}`, name: `Section ${index}`, lyrics_end: lyricEnd, abc_end: abcEnd});
-        this.selectedSection = String(index - 1);
-        this.writeState();
-        this.render();
-    }
-
-    removeSection(index) {
-        const sections = this.state.sections;
-        if (sections.length <= 1) return;
-        this.stop();
-        if (index > 0) {
-            sections[index - 1].lyrics_end = sections[index].lyrics_end;
-            sections[index - 1].abc_end = sections[index].abc_end;
-        }
-        sections.splice(index, 1);
-        sections.forEach((section, i) => { section.id = section.id || `section-${i + 1}`; });
-        sections[sections.length - 1].lyrics_end = this.state.lyric_lines.length;
-        sections[sections.length - 1].abc_end = this.data.bars.length;
-        if (this.selectedSection !== "all") {
-            const selected = Number(this.selectedSection);
-            this.selectedSection = selected === index ? String(Math.max(0, index - 1))
-                : String(selected > index ? selected - 1 : selected);
-        }
-        this.writeState();
-        this.render();
-    }
-
-    moveBoundary(side, sectionIndex, target) {
-        const sections = this.state.sections;
-        if (sectionIndex < 0 || sectionIndex >= sections.length - 1) return;
-        this.stop();
-        const field = side === "lyrics" ? "lyrics_end" : "abc_end";
-        const lower = sectionIndex === 0 ? 0 : sections[sectionIndex - 1][field];
-        const upper = sections[sectionIndex + 1][field];
-        sections[sectionIndex][field] = Math.max(lower, Math.min(upper, target));
-        this.writeState();
-        this.render();
-    }
-
     playbackRange() {
+        if (!this.data?.bars?.length) return {start: 0, end: 0};
         if (this.selectedSection === "all") return {start: 0, end: this.data.total_ticks};
         const index = Number(this.selectedSection);
-        const startBar = index === 0 ? 0 : this.state.sections[index - 1].abc_end;
-        const endBar = this.state.sections[index].abc_end;
-        const start = startBar < this.data.bars.length ? this.data.bars[startBar].start : this.data.total_ticks;
-        const end = endBar < this.data.bars.length ? this.data.bars[endBar].start : this.data.total_ticks;
+        const section = this.state.sections[index];
+        const next = this.state.sections[index + 1];
+        const start = this.data.bars[section.start_bar]?.start ?? this.data.total_ticks;
+        const end = next ? (this.data.bars[next.start_bar]?.start ?? this.data.total_ticks) : this.data.total_ticks;
         return {start, end};
     }
 
-    focusSection(index) {
-        if (index === "all") {
-            this.workspace.scrollTo({top: 0, behavior: "smooth"});
+    addSection() {
+        if (!this.data || this.state.sections.length >= Math.min(64, this.data.bars.length)) return;
+        const used = new Set(this.state.sections.map(section => section.start_bar));
+        const selected = this.selectedSection === "all" ? 0 : this.state.sections[Number(this.selectedSection)].start_bar;
+        let startBar = -1;
+        for (let bar = Math.max(1, selected + 1); bar < this.data.bars.length; bar++) {
+            if (!used.has(bar)) { startBar = bar; break; }
+        }
+        if (startBar < 0) {
+            for (let bar = 1; bar < this.data.bars.length; bar++) {
+                if (!used.has(bar)) { startBar = bar; break; }
+            }
+        }
+        if (startBar < 0) {
+            this.status.textContent = "Every bar already has a section start.";
             return;
         }
-        const cell = this.lyricPanel.cells?.[Number(index)] || this.abcPanel.cells?.[Number(index)];
-        const row = cell?.closest(".section-row");
-        if (!row) return;
-        const workspaceTop = this.workspace.getBoundingClientRect().top;
-        const rowTop = row.getBoundingClientRect().top;
-        this.workspace.scrollTo({top: this.workspace.scrollTop + rowTop - workspaceTop, behavior: "smooth"});
+        this.stop();
+        this.state.sections.push({
+            id: "section-" + Date.now(),
+            name: "Section " + (this.state.sections.length + 1),
+            start_bar: startBar,
+            lyrics: "",
+        });
+        this.state.sections.sort((a, b) => a.start_bar - b.start_bar);
+        this.selectedSection = String(this.state.sections.findIndex(section => section.start_bar === startBar));
+        this.position = this.playbackRange().start;
+        this.writeState();
+        this.render();
+        this.focusSection(this.selectedSection);
+    }
+
+    removeSection(index) {
+        if (this.state.sections.length <= 1) return;
+        this.stop();
+        this.state.sections.splice(index, 1);
+        if (this.state.sections[0].start_bar !== 0) this.state.sections[0].start_bar = 0;
+        this.selectedSection = String(Math.max(0, Math.min(index, this.state.sections.length - 1)));
+        this.position = this.playbackRange().start;
+        this.writeState();
+        this.render();
+        this.focusSection(this.selectedSection);
+    }
+
+    moveSection(index, delta) {
+        const section = this.state.sections[index];
+        if (!section) return;
+        const previous = this.state.sections[index - 1];
+        const next = this.state.sections[index + 1];
+        const minBar = previous ? previous.start_bar + 1 : 0;
+        const maxBar = next ? next.start_bar - 1 : this.data.bars.length - 1;
+        const startBar = Math.max(minBar, Math.min(maxBar, section.start_bar + delta));
+        if (startBar === section.start_bar) return;
+        this.stop();
+        section.start_bar = startBar;
+        this.selectedSection = String(index);
+        this.position = this.playbackRange().start;
+        this.writeState();
+        this.render();
+        this.focusSection(this.selectedSection);
+    }
+
+    focusSection(index) {
+        if (!this.data) return;
+        const section = index === "all" ? null : this.state.sections[Number(index)];
+        const left = section ? section.start_bar * BAR_WIDTH * this.zoom : 0;
+        this.timelineScroll.scrollTo({left: Math.max(0, left - AXIS_WIDTH), behavior: "smooth"});
+    }
+
+    selectSection(index) {
+        if (this.audio) this.stop();
+        this.selectedSection = String(index);
+        if (this.playRangeSelect) this.playRangeSelect.value = String(index);
+        this.timelineCanvas.querySelectorAll(".lyric-card").forEach((card, cardIndex) => {
+            card.classList.toggle("selected", cardIndex === Number(index));
+        });
+        this.position = this.playbackRange().start;
+        this.updatePlaybackStatus();
     }
 
     visibleTracks() {
@@ -222,9 +255,12 @@ class ABCSectionEditor {
         const gain = context.createGain();
         oscillator.type = track === "Vocal" ? "sine" : "triangle";
         oscillator.frequency.value = 440 * 2 ** ((pitch - 69) / 12);
+        const duration = end - start;
+        const attack = Math.min(.008, duration * .3);
+        const release = Math.min(.02, duration * .3);
         gain.gain.setValueAtTime(0, start);
-        gain.gain.linearRampToValueAtTime(volume, start + Math.min(.012, Math.max(.002, (end - start) / 3)));
-        gain.gain.setValueAtTime(volume, Math.max(start + .014, end - .025));
+        gain.gain.linearRampToValueAtTime(volume, start + attack);
+        gain.gain.setValueAtTime(volume, Math.max(start + attack, end - release));
         gain.gain.exponentialRampToValueAtTime(.0001, end);
         oscillator.connect(gain);
         gain.connect(destination);
@@ -244,7 +280,12 @@ class ABCSectionEditor {
             return;
         }
         if (this.position < range.start || this.position >= range.end) this.position = range.start;
-        const context = new AudioContext();
+        const AudioContextType = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextType) {
+            this.status.textContent = "Audio playback is not supported in this browser.";
+            return;
+        }
+        const context = new AudioContextType();
         this.audio = context;
         await context.resume();
         if (this.audio !== context) return;
@@ -256,7 +297,7 @@ class ABCSectionEditor {
         const now = context.currentTime + .05;
         const from = this.position;
         for (const track of this.visibleTracks()) {
-            for (const note of this.data.tracks[track]) {
+            for (const note of this.data.tracks[track] || []) {
                 const startTick = Math.max(from, range.start, note.start);
                 const endTick = Math.min(range.end, note.start + note.duration);
                 if (endTick <= startTick) continue;
@@ -267,7 +308,7 @@ class ABCSectionEditor {
             }
         }
         if (this.chords && this.track !== "Vocal") {
-            const chords = [...this.data.chords].sort((a, b) => a.start - b.start);
+            const chords = [...(this.data.chords || [])].sort((a, b) => a.start - b.start);
             for (let index = 0; index < chords.length; index++) {
                 const chord = chords[index];
                 const next = chords[index + 1]?.start ?? range.end;
@@ -327,140 +368,239 @@ class ABCSectionEditor {
         }
         const barNumber = this.data.bars.length ? String(barIndex + 1).padStart(3, "0") : "000";
         const seconds = this.position / 256 * 60 / this.data.bpm;
-        const clock = `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
-        const state = this.audio ? `Playing ABC · bar ${barNumber} · ${clock}` : `${this.data.bars.length} bars · ${this.data.bpm} BPM · ${this.data.key}`;
+        const clock = Math.floor(seconds / 60) + ":" + String(Math.floor(seconds % 60)).padStart(2, "0");
+        const state = this.audio
+            ? "Playing ABC · bar " + barNumber + " · " + clock
+            : this.hasEdits
+                ? "Edits saved · queue this node to update its outputs."
+                : this.data.bars.length + " bars · " + this.data.bpm + " BPM · " + this.data.key;
         this.status.textContent = state;
+        if (this.playhead && this.data.bars.length) {
+            const x = this.tickToX(this.position);
+            this.playhead.setAttribute("x1", x);
+            this.playhead.setAttribute("x2", x);
+            this.playhead.setAttribute("visibility", this.audio ? "visible" : "hidden");
+        }
     }
 
-    renderSectionCell(side, parent, sectionIndex, start) {
-        const isLyrics = side === "lyrics";
-        const rows = isLyrics ? this.state.lyric_lines : this.data.bars;
-        const endField = isLyrics ? "lyrics_end" : "abc_end";
-        const section = this.state.sections[sectionIndex];
-        const end = Math.max(start, Math.min(rows.length, section[endField]));
-        const cell = element("article", null, parent, "cell");
-        (isLyrics ? this.lyricPanel : this.abcPanel).cells[sectionIndex] = cell;
-        const head = element("div", null, cell, "cell-head");
-        element("span", `SECTION ${String(sectionIndex + 1).padStart(2, "0")}`, head, "cell-index");
-        const title = element("input", null, head, "cell-title");
-        title.value = section.name;
-        title.setAttribute("aria-label", `Section ${sectionIndex + 1} name`);
-        title.onchange = () => this.setName(sectionIndex, title.value);
-        if (this.state.sections.length > 1) {
-            button(head, "×", () => this.removeSection(sectionIndex), "cell-remove").title = "Remove and merge section";
-        }
-        const body = element("div", null, cell, "cell-body");
-
-        const makeSlot = rowIndex => {
-            const slot = element("div", null, body, "drop-slot");
-            slot.dataset.index = String(rowIndex);
-            slot.ondragover = event => {
-                if (Array.from(event.dataTransfer?.types || []).includes("application/x-hz3-section-boundary")) {
-                    event.preventDefault();
-                    slot.classList.add("drag-over");
-                }
-            };
-            slot.ondragleave = () => slot.classList.remove("drag-over");
-            slot.ondrop = event => {
-                event.preventDefault();
-                slot.classList.remove("drag-over");
-                try {
-                    const payload = JSON.parse(event.dataTransfer.getData("application/x-hz3-section-boundary"));
-                    if (payload.side === side) this.moveBoundary(side, payload.section, Number(slot.dataset.index));
-                } catch (_) { /* Ignore unrelated drag data. */ }
-            };
-            return slot;
-        };
-
-        const addBoundaryIfHere = (slot, position) => {
-            if (sectionIndex >= this.state.sections.length - 1 || position !== end) return;
-            slot.classList.add("has-boundary");
-            const nextName = this.state.sections[sectionIndex + 1].name;
-            const handle = button(slot, `↕ Drag boundary · next: ${nextName}`, () => {}, "boundary");
-            handle.draggable = true;
-            handle.ondragstart = event => {
-                event.dataTransfer.setData("application/x-hz3-section-boundary", JSON.stringify({side, section: sectionIndex}));
-                event.dataTransfer.effectAllowed = "move";
-                this.selectedSection = String(sectionIndex);
-            };
-        };
-
-        if (start === end) {
-            const slot = makeSlot(start);
-            addBoundaryIfHere(slot, start);
-            element("div", rows.length ? "Empty section · drag its boundary to assign content." : "No lines supplied.", body, "empty");
-        } else {
-            for (let rowIndex = start; rowIndex < end; rowIndex++) {
-                if (rowIndex === start) makeSlot(rowIndex);
-                if (isLyrics) {
-                    const line = element("div", this.state.lyric_lines[rowIndex], body, "item lyric-item");
-                    line.contentEditable = "true";
-                    line.spellcheck = false;
-                    line.dataset.index = String(rowIndex);
-                    line.oninput = () => {
-                        this.state.lyric_lines[rowIndex] = line.innerText.replace(/[\r\n]+/g, " ");
-                        this.writeState();
-                    };
-                } else {
-                    const bar = this.data.bars[rowIndex];
-                    const box = element("div", null, body, "item abc-item");
-                    element("span", `${String(bar.number).padStart(3, "0")} →`, box, "abc-bar-index");
-                    const content = element("div", null, box, "abc-bar-content");
-                    element("div", `V  ${bar.vocal}`, content, "abc-voice abc-vocal");
-                    element("div", `I   ${bar.ins}`, content, "abc-voice abc-ins");
-                }
-                const slot = makeSlot(rowIndex + 1);
-                addBoundaryIfHere(slot, rowIndex + 1);
+    tickToX(tick) {
+        const bars = this.data.bars;
+        for (let index = 0; index < bars.length; index++) {
+            const bar = bars[index];
+            const end = bar.start + bar.duration;
+            if (tick <= end || index === bars.length - 1) {
+                const fraction = Math.max(0, Math.min(1, (tick - bar.start) / bar.duration));
+                return (index + fraction) * BAR_WIDTH * this.zoom;
             }
+        }
+        return bars.length * BAR_WIDTH * this.zoom;
+    }
+
+    renderTimeline() {
+        const bars = this.data.bars || [];
+        const sections = this.state.sections;
+        const barWidth = BAR_WIDTH * this.zoom;
+        const scoreWidth = Math.max(1, bars.length * barWidth);
+        const boxWidth = LYRIC_CARD_WIDTH;
+        const lastSectionX = sections.length ? sections[sections.length - 1].start_bar * barWidth : 0;
+        const timelineWidth = Math.max(scoreWidth, lastSectionX + boxWidth + 12);
+        const notes = [...(this.data.tracks.Vocal || []), ...(this.data.tracks.Ins || [])];
+        let lowPitch = notes.length ? Math.min(...notes.map(note => note.pitch)) - 2 : 48;
+        let highPitch = notes.length ? Math.max(...notes.map(note => note.pitch)) + 2 : 72;
+        lowPitch = Math.max(0, lowPitch);
+        highPitch = Math.min(127, highPitch);
+        if (highPitch - lowPitch < 23) {
+            const middle = (highPitch + lowPitch) / 2;
+            lowPitch = Math.max(0, Math.floor(middle - 12));
+            highPitch = Math.min(127, lowPitch + 23);
+        }
+        const rowHeight = NOTE_ROW_HEIGHT;
+        const rollHeight = (highPitch - lowPitch + 1) * rowHeight;
+        this.timelineCanvas.replaceChildren();
+        this.timelineCanvas.style.width = (AXIS_WIDTH + timelineWidth) + "px";
+
+        const sectionAtBar = new Map(sections.map((section, index) => [section.start_bar, {section, index}]));
+        const ruler = element("div", null, this.timelineCanvas, "bar-ruler");
+        element("div", "PITCH", ruler, "roll-axis ruler-axis");
+        for (const bar of bars) {
+            const cell = element("div", null, ruler, "bar-ruler-cell");
+            cell.style.width = barWidth + "px";
+            cell.style.flexBasis = barWidth + "px";
+            const tagged = sectionAtBar.get(bar.number - 1);
+            if (tagged) {
+                const tag = element("span", tagged.section.name, cell, "section-tag");
+                tag.title = tagged.section.name + " · starts at bar " + String(bar.number).padStart(3, "0");
+                tag.onclick = () => {
+                    this.selectSection(tagged.index);
+                    this.render();
+                    this.focusSection(this.selectedSection);
+                };
+            } else {
+                element("span", "", cell, "section-tag");
+            }
+            element("span", String(bar.number).padStart(3, "0"), cell, "bar-number");
+        }
+        if (timelineWidth > scoreWidth) {
+            const tail = element("div", null, ruler, "bar-ruler-cell");
+            tail.style.width = (timelineWidth - scoreWidth) + "px";
+            tail.style.flexBasis = (timelineWidth - scoreWidth) + "px";
+        }
+
+        const pianoRow = element("div", null, this.timelineCanvas, "piano-row");
+        const pitchAxis = svgElement("svg", pianoRow, {class: "roll-axis pitch-axis", width: AXIS_WIDTH, height: rollHeight, viewBox: "0 0 " + AXIS_WIDTH + " " + rollHeight});
+        const roll = svgElement("svg", pianoRow, {class: "piano-svg", width: scoreWidth, height: rollHeight, viewBox: "0 0 " + scoreWidth + " " + rollHeight});
+        this.playhead = null;
+
+        const blackKeys = new Set([1, 3, 6, 8, 10]);
+        for (let pitch = lowPitch; pitch <= highPitch; pitch++) {
+            const y = (highPitch - pitch) * rowHeight;
+            const black = blackKeys.has(pitch % 12);
+            const fill = black ? "#172333" : (pitch % 12 === 0 ? "#243144" : "#1d2939");
+            svgElement("rect", roll, {x: 0, y, width: scoreWidth, height: rowHeight, fill});
+            svgElement("line", roll, {x1: 0, y1: y + rowHeight, x2: scoreWidth, y2: y + rowHeight, stroke: "#34475a", "stroke-width": .5});
+            if (pitch % 12 === 0) {
+                const octave = Math.floor(pitch / 12) - 1;
+                const label = svgElement("text", pitchAxis, {x: AXIS_WIDTH - 5, y: y + rowHeight - 3, "text-anchor": "end", fill: "#d0dce6", "font-size": 9, "font-family": "monospace"});
+                label.textContent = "C" + octave;
+            }
+        }
+
+        for (let index = 0; index < bars.length; index++) {
+            const bar = bars[index];
+            const x = index * barWidth;
+            const beats = Math.max(1, Math.round(bar.duration / 256));
+            for (let beat = 1; beat < beats; beat++) {
+                const beatX = x + beat * barWidth / beats;
+                svgElement("line", roll, {x1: beatX, y1: 0, x2: beatX, y2: rollHeight, stroke: "#53657a", "stroke-width": .7, "stroke-dasharray": "2 4"});
+            }
+            svgElement("line", roll, {x1: x, y1: 0, x2: x, y2: rollHeight, stroke: "#71849a", "stroke-width": 1});
+        }
+        svgElement("line", roll, {x1: scoreWidth - 1, y1: 0, x2: scoreWidth - 1, y2: rollHeight, stroke: "#71849a", "stroke-width": 1});
+
+        for (const section of sections) {
+            const x = section.start_bar * barWidth;
+            svgElement("line", roll, {x1: x, y1: 0, x2: x, y2: rollHeight, stroke: "#ffc857", "stroke-width": 2, "stroke-dasharray": "5 3", opacity: .85});
+        }
+
+        const trackColors = {Vocal: "#d99cff", Ins: "#58dfc4"};
+        for (const track of ["Vocal", "Ins"]) {
+            for (const note of this.data.tracks[track] || []) {
+                const x1 = this.tickToX(note.start);
+                const x2 = this.tickToX(note.start + note.duration);
+                const y = (highPitch - note.pitch) * rowHeight + 2;
+                const rect = svgElement("rect", roll, {
+                    x: x1 + .7, y, width: Math.max(2, x2 - x1 - 1.4), height: rowHeight - 4,
+                    rx: 2, fill: trackColors[track], opacity: track === "Vocal" ? .95 : .78,
+                    stroke: "#0b1220", "stroke-width": .6,
+                });
+                const title = svgElement("title", rect);
+                title.textContent = track + " · MIDI " + note.pitch;
+            }
+        }
+
+        this.playhead = svgElement("line", roll, {
+            x1: 0, y1: 0, x2: 0, y2: rollHeight, stroke: "#ffffff", "stroke-width": 2,
+            visibility: "hidden", "pointer-events": "none",
+        });
+
+        const lyricsRow = element("div", null, this.timelineCanvas, "lyrics-row");
+        element("div", "LYRICS", lyricsRow, "roll-axis lyrics-axis");
+        const lyricsTrack = element("div", null, lyricsRow, "lyrics-track");
+        lyricsTrack.style.width = timelineWidth + "px";
+        const lanes = [];
+        for (let index = 0; index < sections.length; index++) {
+            const section = sections[index];
+            const left = section.start_bar * barWidth;
+            let lane = lanes.findIndex(end => left >= end + 8);
+            if (lane < 0) lane = lanes.length;
+            lanes[lane] = left + boxWidth;
+            const card = element("article", null, lyricsTrack, "lyric-card" + (String(index) === this.selectedSection ? " selected" : ""));
+            card.style.left = left + "px";
+            card.style.top = (lane * LYRIC_CARD_HEIGHT) + "px";
+            card.style.width = boxWidth + "px";
+            card.style.height = LYRIC_CARD_HEIGHT + "px";
+            card.onclick = () => this.selectSection(index);
+
+            const head = element("div", null, card, "lyric-card-head");
+            const title = element("input", null, head, "lyric-card-title");
+            title.value = section.name;
+            title.setAttribute("aria-label", "Section name");
+            title.onclick = event => { event.stopPropagation(); this.selectSection(index); };
+            title.onchange = () => {
+                section.name = title.value.replace(/[\r\n\[\]]+/g, " ").trim().slice(0, 100) || "Section " + (index + 1);
+                this.writeState();
+                this.render();
+                this.focusSection(String(index));
+            };
+            element("span", "BAR " + String(section.start_bar + 1).padStart(3, "0"), head, "lyric-card-bar");
+            const previous = button(head, "← bar", event => { event.stopPropagation(); this.moveSection(index, -1); }, "secondary move-button");
+            previous.title = "Move section start to the previous bar";
+            previous.disabled = index === 0 || section.start_bar <= sections[index - 1].start_bar + 1;
+            const next = button(head, "bar →", event => { event.stopPropagation(); this.moveSection(index, 1); }, "secondary move-button");
+            next.title = "Move section start to the next bar";
+            next.disabled = index + 1 < sections.length
+                ? section.start_bar >= sections[index + 1].start_bar - 1
+                : section.start_bar >= bars.length - 1;
+            if (index > 0) {
+                const remove = button(head, "×", event => { event.stopPropagation(); this.removeSection(index); }, "danger remove-button");
+                remove.title = "Remove this section and its lyric box";
+            }
+
+            const textarea = element("textarea", null, card, "lyric-text");
+            textarea.value = section.lyrics;
+            textarea.setAttribute("aria-label", "Lyrics for " + section.name);
+            textarea.spellcheck = false;
+            textarea.onclick = event => { event.stopPropagation(); this.selectSection(index); };
+            textarea.oninput = () => {
+                section.lyrics = textarea.value;
+                this.writeState();
+            };
+        }
+        lyricsTrack.style.height = (Math.max(1, lanes.length) * LYRIC_CARD_HEIGHT) + "px";
+
+        this.legend.replaceChildren();
+        element("span", "PIANO ROLL", this.legend, "legend-item");
+        for (const [name, color] of [["Vocal", trackColors.Vocal], ["Ins", trackColors.Ins]]) {
+            const item = element("span", null, this.legend, "legend-item");
+            const swatch = element("span", null, item, "legend-swatch");
+            swatch.style.background = color;
+            element("span", name, item);
         }
     }
 
     render() {
         if (!this.data || !this.state) return;
-        if (this.selectedSection !== "all" && Number(this.selectedSection) >= this.state.sections.length) {
-            this.selectedSection = "all";
-        }
+        if (this.selectedSection !== "all" && Number(this.selectedSection) >= this.state.sections.length) this.selectedSection = "all";
         this.toolbar.replaceChildren();
-        button(this.toolbar, "+ Add section", () => this.addSection());
-        select(this.toolbar, "Align section", [["all", "All sections"],
-            ...this.state.sections.map((section, index) => [String(index), `${String(index + 1).padStart(2, "0")} · ${section.name}`])],
+        const add = button(this.toolbar, "+ Add lyric section", () => this.addSection());
+        add.disabled = this.state.sections.length >= Math.min(64, this.data.bars.length);
+        this.playRangeSelect = select(this.toolbar, "Play", [["all", "Full ABC"],
+            ...this.state.sections.map((section, index) => [String(index), "BAR " + String(section.start_bar + 1).padStart(3, "0") + " · " + section.name])],
         this.selectedSection, value => {
             this.stop();
             this.selectedSection = value;
             this.position = this.playbackRange().start;
+            this.render();
             this.focusSection(value);
             this.updatePlaybackStatus();
         });
         select(this.toolbar, "Track", [["Both", "Vocal + Ins"], ["Vocal", "Vocal"], ["Ins", "Ins"]], this.track,
-            value => { this.stop(); this.track = value; });
+            value => { this.stop(); this.track = value; this.render(); });
         const chordLabel = element("label", "Chords", this.toolbar, "control-label");
         const chordToggle = element("input", null, chordLabel);
         chordToggle.type = "checkbox";
         chordToggle.checked = this.chords;
         chordToggle.onchange = () => { this.chords = chordToggle.checked; };
+        select(this.toolbar, "Zoom", [["0.7", "70%"], ["0.85", "85%"], ["1", "100%"], ["1.2", "120%"], ["1.5", "150%"]],
+            String(this.zoom), value => { this.zoom = Number(value); this.render(); });
         this.playButton = button(this.toolbar, this.audio ? "❚❚ Pause ABC" : "▶ Play ABC", () => this.togglePlayback());
         button(this.toolbar, "■ Stop", () => this.stop(), "secondary");
         this.expandButton = button(this.toolbar, this.expanded ? "Close expanded" : "Expand editor", () => this.expand(!this.expanded), "secondary");
         this.status = element("span", "", this.toolbar, "status");
         this.hint.textContent = this.data.rough_layout
-            ? "Los cortes iniciales son aproximados. Arrastra cada límite por separado en Lyrics y ABC."
-            : "Arrastra cada límite por separado en Lyrics y ABC para ajustar el inicio y fin de las secciones.";
-        this.lyricHeading.textContent = `LYRICS · ${this.state.lyric_lines.length} lines`;
-        this.abcHeading.textContent = `ABC · ${this.data.bars.length} bars`;
-        this.workspace.replaceChildren();
-        this.lyricPanel.cells = [];
-        this.abcPanel.cells = [];
-        let lyricStart = 0;
-        let abcStart = 0;
-        this.state.sections.forEach((section, sectionIndex) => {
-            const row = element("div", null, this.workspace, "section-row");
-            const lyrics = element("div", null, row, "section-column");
-            const abc = element("div", null, row, "section-column");
-            this.renderSectionCell("lyrics", lyrics, sectionIndex, lyricStart);
-            this.renderSectionCell("abc", abc, sectionIndex, abcStart);
-            lyricStart = section.lyrics_end;
-            abcStart = section.abc_end;
-        });
+            ? "Section labels are starting estimates. Each lyric box belongs to its tagged starting bar; move the start with ← bar / bar →."
+            : "Each lyric box belongs to its tagged starting bar. Move its start one bar at a time with ← bar / bar →.";
+        this.renderTimeline();
         this.focusSection(this.selectedSection);
         this.updatePlaybackStatus();
         this.layout();
@@ -483,8 +623,8 @@ class ABCSectionEditor {
 
     layout() {
         if (!this.expanded && this.node.size) {
-            const height = Math.max(540, Math.min(700, this.root.scrollHeight + 20));
-            if (this.node.size[1] < height + 55) this.node.setSize([Math.max(1020, this.node.size[0]), height + 55]);
+            const height = Math.max(540, Math.min(760, this.root.scrollHeight + 18));
+            if (this.node.size[1] < height + 55) this.node.setSize([Math.max(1000, this.node.size[0]), height + 55]);
         }
         this.node.graph?.setDirtyCanvas(true, true);
     }
@@ -510,13 +650,13 @@ app.registerExtension({
                 getMinHeight: () => 540,
                 getHeight: () => Math.max(540, this.hz3SectionEditor.root.scrollHeight),
             });
-            widget.computeSize = () => [1020, 560];
-            this.setSize([Math.max(1020, this.size[0]), 640]);
+            widget.computeSize = () => [1000, 560];
+            this.setSize([Math.max(1000, this.size[0]), 640]);
         };
         const resized = nodeType.prototype.onResize;
         nodeType.prototype.onResize = function (size) {
             resized?.apply(this, arguments);
-            size[0] = this.size[0] = Math.max(1020, size[0]);
+            size[0] = this.size[0] = Math.max(1000, size[0]);
             this.hz3SectionEditor?.layout();
         };
         const executed = nodeType.prototype.onExecuted;

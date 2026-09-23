@@ -1,4 +1,4 @@
-"""Manual visual section editor for native YuE2 ABC and lyric text."""
+"""ABC piano roll with editable lyrics pinned to manually chosen section bars."""
 
 from __future__ import annotations
 
@@ -123,7 +123,7 @@ def _seed_starts(markers, section_names, total):
     return starts[:-1]
 
 
-def _initial_sections(lyric_markers, abc_markers, lyric_count, bar_count):
+def _initial_sections(lyric_markers, abc_markers, lyric_lines, bar_count):
     # Prefer the richer labeled source; use labels from the other source to seed
     # missing names, but never compute lyric-to-note/syllable alignment.
     primary = lyric_markers if len(lyric_markers) >= len(abc_markers) else abc_markers
@@ -138,19 +138,28 @@ def _initial_sections(lyric_markers, abc_markers, lyric_count, bar_count):
             break
         if _name_key(marker["name"]) not in {_name_key(name) for name in names}:
             names.append(marker["name"])
-    desired = max(1, len(names), len(lyric_markers), len(abc_markers))
+    desired = min(max(1, bar_count), max(1, len(names), len(lyric_markers), len(abc_markers)))
+    names = names[:desired]
     while len(names) < desired:
         names.append(f"Section {len(names) + 1}")
 
-    lyric_starts = _seed_starts(lyric_markers, names, lyric_count)
+    lyric_starts = _seed_starts(lyric_markers, names, len(lyric_lines))
     abc_starts = _seed_starts(abc_markers, names, bar_count)
+    if names:
+        abc_starts[0] = 0
+        for index in range(1, len(names)):
+            lower = abc_starts[index - 1] + 1
+            upper = bar_count - (len(names) - index)
+            abc_starts[index] = max(lower, min(upper, abc_starts[index]))
     sections = []
     for index, name in enumerate(names):
+        lyric_start = lyric_starts[index]
+        lyric_end = lyric_starts[index + 1] if index + 1 < len(names) else len(lyric_lines)
         sections.append({
             "id": f"section-{index + 1}",
             "name": name,
-            "lyrics_end": lyric_starts[index + 1] if index + 1 < len(names) else lyric_count,
-            "abc_end": abc_starts[index + 1] if index + 1 < len(names) else bar_count,
+            "start_bar": abc_starts[index],
+            "lyrics": "\n".join(lyric_lines[lyric_start:lyric_end]),
         })
     return sections
 
@@ -166,80 +175,108 @@ def _normalize_state(state_text, source_hash, lyric_lines, bars, lyric_markers, 
             pass
 
     if state is None:
-        sections = _initial_sections(lyric_markers, abc_markers, len(lyric_lines), len(bars))
-        return {"source_hash": source_hash, "sections": sections, "lyric_lines": lyric_lines}
+        sections = _initial_sections(lyric_markers, abc_markers, lyric_lines, len(bars))
+        return {"source_hash": source_hash, "editor_version": 2, "sections": sections}
 
-    edited_lines = state.get("lyric_lines", lyric_lines)
-    if not isinstance(edited_lines, list) or len(edited_lines) > 20_000:
-        edited_lines = lyric_lines
-    edited_lines = [str(line).replace("\r", " ").replace("\n", " ")[:2_000] for line in edited_lines]
     raw_sections = state.get("sections")
     if not isinstance(raw_sections, list) or not raw_sections or len(raw_sections) > _MAX_SECTIONS:
-        raw_sections = _initial_sections(lyric_markers, abc_markers, len(edited_lines), len(bars))
+        raw_sections = _initial_sections(lyric_markers, abc_markers, lyric_lines, len(bars))
 
-    sections, prev_lyrics, prev_abc = [], 0, 0
+    # Migrate saved state from the old independent lyrics/ABC range editor.
+    is_new_state = all(isinstance(raw, dict) and "start_bar" in raw and "lyrics" in raw
+                       for raw in raw_sections)
+    if not is_new_state:
+        old_lines = state.get("lyric_lines", lyric_lines)
+        if not isinstance(old_lines, list) or len(old_lines) > 20_000:
+            old_lines = lyric_lines
+        old_lines = [str(line).replace("\r", " ").replace("\n", " ")[:2_000] for line in old_lines]
+        migrated, lyric_cursor, bar_cursor = [], 0, 0
+        for index, raw in enumerate(raw_sections):
+            if not isinstance(raw, dict):
+                continue
+            try:
+                lyric_end = max(lyric_cursor, min(len(old_lines), int(raw.get("lyrics_end", len(old_lines)))))
+            except (TypeError, ValueError):
+                lyric_end = len(old_lines)
+            try:
+                old_end = max(bar_cursor, min(len(bars), int(raw.get("abc_end", len(bars)))))
+            except (TypeError, ValueError):
+                old_end = len(bars)
+            migrated.append({
+                "id": str(raw.get("id") or f"section-{index + 1}")[:100],
+                "name": raw.get("name") or f"Section {index + 1}",
+                "start_bar": bar_cursor,
+                "lyrics": "\n".join(old_lines[lyric_cursor:lyric_end]),
+            })
+            lyric_cursor, bar_cursor = lyric_end, old_end
+        raw_sections = migrated or _initial_sections(lyric_markers, abc_markers, lyric_lines, len(bars))
+
+    raw_sections = [raw for raw in raw_sections if isinstance(raw, dict)]
+    if not raw_sections:
+        raw_sections = _initial_sections(lyric_markers, abc_markers, lyric_lines, len(bars))
+    raw_sections.sort(key=lambda raw: _safe_int(raw.get("start_bar"), 0))
+    raw_sections = raw_sections[:min(_MAX_SECTIONS, len(bars))]
+    sections, last_start = [], -1
     for index, raw in enumerate(raw_sections):
         if not isinstance(raw, dict):
             continue
         name = re.sub(r"[\r\n\[\]]+", " ", str(raw.get("name") or f"Section {index + 1}")).strip()[:100]
         name = name or f"Section {index + 1}"
-        try:
-            lyric_end = max(prev_lyrics, min(len(edited_lines), int(raw.get("lyrics_end", len(edited_lines)))))
-        except (TypeError, ValueError):
-            lyric_end = len(edited_lines)
-        try:
-            abc_end = max(prev_abc, min(len(bars), int(raw.get("abc_end", len(bars)))))
-        except (TypeError, ValueError):
-            abc_end = len(bars)
+        start_bar = max(0, min(len(bars) - 1, _safe_int(raw.get("start_bar"), 0)))
+        if not sections:
+            start_bar = 0
+        else:
+            upper = len(bars) - (len(raw_sections) - index)
+            start_bar = max(last_start + 1, min(upper, start_bar))
+        text = str(raw.get("lyrics") or "").replace("\r\n", "\n").replace("\r", "\n")[:50_000]
         sections.append({"id": str(raw.get("id") or f"section-{index + 1}")[:100],
-                         "name": name, "lyrics_end": lyric_end, "abc_end": abc_end})
-        prev_lyrics, prev_abc = lyric_end, abc_end
+                         "name": name, "start_bar": start_bar, "lyrics": text})
+        last_start = start_bar
 
     if not sections:
-        sections = _initial_sections(lyric_markers, abc_markers, len(edited_lines), len(bars))
-    sections[-1]["lyrics_end"] = len(edited_lines)
-    sections[-1]["abc_end"] = len(bars)
-    return {"source_hash": source_hash, "sections": sections, "lyric_lines": edited_lines}
+        sections = _initial_sections(lyric_markers, abc_markers, lyric_lines, len(bars))
+    return {"source_hash": source_hash, "editor_version": 2, "sections": sections}
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _build_abc(score_abc, bars, directives, sections):
     header = score_abc.replace("\r\n", "\n").replace("\r", "\n").strip().splitlines()[:8]
     out = list(header)
-    start = 0
-    for section in sections:
-        end = max(start, min(len(bars), section["abc_end"]))
-        if end == start:
-            continue
-        label = section["name"].replace("\n", " ").replace("\r", " ").strip() or "Section"
-        out.append(f"% {label}")
-        cursor = start
-        while cursor < end:
-            next_change = min((index for index in directives if cursor < index < end), default=end)
-            chunk_end = min(end, cursor + 4, next_change)
-            if chunk_end <= cursor:
-                chunk_end = min(end, cursor + 1)
-            fields = directives.get(cursor, {})
-            out.append("V: Vocal")
-            out.extend(fields.get("Vocal", []))
-            out.append("|".join(bar["vocal"] for bar in bars[cursor:chunk_end]) + "|")
-            out.append("V: Ins")
-            out.extend(fields.get("Ins", []))
-            out.append("|".join(bar["ins"] for bar in bars[cursor:chunk_end]) + "|")
-            cursor = chunk_end
-        start = end
+    sections_by_start = {section["start_bar"]: section for section in sections}
+    cursor = 0
+    while cursor < len(bars):
+        section = sections_by_start.get(cursor)
+        if section:
+            label = section["name"].replace("\n", " ").replace("\r", " ").strip() or "Section"
+            out.append(f"% {label}")
+        next_section = min((start for start in sections_by_start if start > cursor), default=len(bars))
+        next_change = min((index for index in directives if index > cursor), default=len(bars))
+        chunk_end = min(len(bars), cursor + 4, next_section, next_change)
+        fields = directives.get(cursor, {})
+        out.append("V: Vocal")
+        out.extend(fields.get("Vocal", []))
+        out.append("|".join(bar["vocal"] for bar in bars[cursor:chunk_end]) + "|")
+        out.append("V: Ins")
+        out.extend(fields.get("Ins", []))
+        out.append("|".join(bar["ins"] for bar in bars[cursor:chunk_end]) + "|")
+        cursor = chunk_end
     return "\n".join(out) + "\n"
 
 
-def _build_lyrics(lyric_lines, sections):
-    if not lyric_lines:
-        return ""
-    out, start = [], 0
+def _build_lyrics(sections):
+    out = []
     for section in sections:
-        end = max(start, min(len(lyric_lines), section["lyrics_end"]))
         name = section["name"].replace("\n", " ").replace("\r", " ").replace("]", " ").strip()
         out.append(f"[{name or 'Section'}]")
-        out.extend(lyric_lines[start:end])
-        start = end
+        text = section["lyrics"].strip()
+        if text:
+            out.extend(text.splitlines())
     return "\n".join(out) + "\n"
 
 
@@ -253,24 +290,17 @@ def viewer_data(score_abc, lyrics="", editor_state=""):
     source_hash = hashlib.sha256((info["abc"] + "\0" + str(lyrics or "")).encode("utf-8")).hexdigest()[:20]
     state = _normalize_state(editor_state, source_hash, lyric_lines, bars, lyric_markers, abc_markers)
 
-    ranges = {"lyrics": [], "abc": []}
-    lyric_start = abc_start = 0
-    for section in state["sections"]:
-        ranges["lyrics"].append({"start": lyric_start, "end": section["lyrics_end"]})
-        ranges["abc"].append({"start": abc_start, "end": section["abc_end"]})
-        lyric_start, abc_start = section["lyrics_end"], section["abc_end"]
-
     edited_abc = _build_abc(info["abc"], bars, directives, state["sections"])
     # Reparse the result so boundary placement cannot silently damage valid ABC.
     parse(edited_abc)
-    edited_lyrics = _build_lyrics(state["lyric_lines"], state["sections"])
+    edited_lyrics = _build_lyrics(state["sections"])
     report = {
         "sections": [{
             "name": section["name"],
-            "lyrics_lines": ranges["lyrics"][index],
-            "abc_bars": ranges["abc"][index],
-        } for index, section in enumerate(state["sections"])],
-        "note": "Section boundaries are manual. The starting layout uses source labels when available; unmatched cuts are rough estimates.",
+            "start_bar": section["start_bar"],
+            "lyrics": section["lyrics"],
+        } for section in state["sections"]],
+        "note": "Each section has one manually adjustable starting bar. Lyrics belong to the section box at that bar.",
     }
     return {
         "abc": info["abc"],
@@ -283,9 +313,7 @@ def viewer_data(score_abc, lyrics="", editor_state=""):
         "tracks": tracks,
         "chords": chords,
         "total_ticks": total_ticks,
-        "lyric_lines": state["lyric_lines"],
         "sections": state["sections"],
-        "ranges": ranges,
         "source_hash": source_hash,
         "editor_state": _state_json(state),
         "edited_abc": edited_abc,
@@ -303,7 +331,7 @@ class HZ3_YuE2_ABCViewer:
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("abc_with_sections", "lyrics_with_sections", "section_map")
     OUTPUT_NODE = True
-    DESCRIPTION = "Manually align section boundaries between lyrics and ABC in two editable, independently adjustable panels."
+    DESCRIPTION = "View resolved ABC notes in a piano roll and edit one lyric box at each section's starting bar."
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -324,4 +352,4 @@ class HZ3_YuE2_ABCViewer:
 
 
 NODE_CLASS_MAPPINGS = {"HZ3_YuE2_ABCViewer": HZ3_YuE2_ABCViewer}
-NODE_DISPLAY_NAME_MAPPINGS = {"HZ3_YuE2_ABCViewer": "HZ3 YuE2 · Lyrics ↔ ABC Section Editor"}
+NODE_DISPLAY_NAME_MAPPINGS = {"HZ3_YuE2_ABCViewer": "HZ3 YuE2 · ABC Piano Roll + Section Lyrics"}

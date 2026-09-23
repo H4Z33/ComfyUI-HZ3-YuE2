@@ -155,10 +155,12 @@ def _initial_sections(lyric_markers, abc_markers, lyric_lines, bar_count):
     for index, name in enumerate(names):
         lyric_start = lyric_starts[index]
         lyric_end = lyric_starts[index + 1] if index + 1 < len(names) else len(lyric_lines)
+        end_bar = abc_starts[index + 1] - 1 if index + 1 < len(names) else bar_count - 1
         sections.append({
             "id": f"section-{index + 1}",
             "name": name,
             "start_bar": abc_starts[index],
+            "end_bar": end_bar,
             "lyrics": "\n".join(lyric_lines[lyric_start:lyric_end]),
         })
     return sections
@@ -176,7 +178,7 @@ def _normalize_state(state_text, source_hash, lyric_lines, bars, lyric_markers, 
 
     if state is None:
         sections = _initial_sections(lyric_markers, abc_markers, lyric_lines, len(bars))
-        return {"source_hash": source_hash, "editor_version": 2, "sections": sections}
+        return {"source_hash": source_hash, "editor_version": 3, "sections": sections}
 
     raw_sections = state.get("sections")
     if not isinstance(raw_sections, list) or not raw_sections or len(raw_sections) > _MAX_SECTIONS:
@@ -206,6 +208,7 @@ def _normalize_state(state_text, source_hash, lyric_lines, bars, lyric_markers, 
                 "id": str(raw.get("id") or f"section-{index + 1}")[:100],
                 "name": raw.get("name") or f"Section {index + 1}",
                 "start_bar": bar_cursor,
+                "end_bar": max(bar_cursor, old_end - 1),
                 "lyrics": "\n".join(old_lines[lyric_cursor:lyric_end]),
             })
             lyric_cursor, bar_cursor = lyric_end, old_end
@@ -216,26 +219,28 @@ def _normalize_state(state_text, source_hash, lyric_lines, bars, lyric_markers, 
         raw_sections = _initial_sections(lyric_markers, abc_markers, lyric_lines, len(bars))
     raw_sections.sort(key=lambda raw: _safe_int(raw.get("start_bar"), 0))
     raw_sections = raw_sections[:min(_MAX_SECTIONS, len(bars))]
-    sections, last_start = [], -1
+    starts, previous_start = [], -1
     for index, raw in enumerate(raw_sections):
-        if not isinstance(raw, dict):
-            continue
+        requested = max(0, min(len(bars) - 1, _safe_int(raw.get("start_bar"), 0)))
+        upper = len(bars) - (len(raw_sections) - index)
+        start_bar = max(0, min(upper, requested)) if index == 0 else max(previous_start + 1, min(upper, requested))
+        starts.append(start_bar)
+        previous_start = start_bar
+
+    sections = []
+    for index, raw in enumerate(raw_sections):
         name = re.sub(r"[\r\n\[\]]+", " ", str(raw.get("name") or f"Section {index + 1}")).strip()[:100]
         name = name or f"Section {index + 1}"
-        start_bar = max(0, min(len(bars) - 1, _safe_int(raw.get("start_bar"), 0)))
-        if not sections:
-            start_bar = 0
-        else:
-            upper = len(bars) - (len(raw_sections) - index)
-            start_bar = max(last_start + 1, min(upper, start_bar))
+        start_bar = starts[index]
+        end_limit = starts[index + 1] - 1 if index + 1 < len(starts) else len(bars) - 1
+        end_bar = max(start_bar, min(end_limit, _safe_int(raw.get("end_bar"), end_limit)))
         text = str(raw.get("lyrics") or "").replace("\r\n", "\n").replace("\r", "\n")[:50_000]
         sections.append({"id": str(raw.get("id") or f"section-{index + 1}")[:100],
-                         "name": name, "start_bar": start_bar, "lyrics": text})
-        last_start = start_bar
+                         "name": name, "start_bar": start_bar, "end_bar": end_bar, "lyrics": text})
 
     if not sections:
         sections = _initial_sections(lyric_markers, abc_markers, lyric_lines, len(bars))
-    return {"source_hash": source_hash, "editor_version": 2, "sections": sections}
+    return {"source_hash": source_hash, "editor_version": 3, "sections": sections}
 
 
 def _safe_int(value, default=0):
@@ -298,9 +303,10 @@ def viewer_data(score_abc, lyrics="", editor_state=""):
         "sections": [{
             "name": section["name"],
             "start_bar": section["start_bar"],
+            "end_bar": section["end_bar"],
             "lyrics": section["lyrics"],
         } for section in state["sections"]],
-        "note": "Each section has one manually adjustable starting bar. Lyrics belong to the section box at that bar.",
+        "note": "Each section has manually adjustable starting and ending bars. Lyrics belong to the color-coded section range.",
     }
     return {
         "abc": info["abc"],
@@ -331,7 +337,7 @@ class HZ3_YuE2_ABCViewer:
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("abc_with_sections", "lyrics_with_sections", "section_map")
     OUTPUT_NODE = True
-    DESCRIPTION = "View resolved ABC notes in a piano roll and edit one lyric box at each section's starting bar."
+    DESCRIPTION = "View resolved ABC notes in a piano roll and edit lyrics with explicit section bar ranges."
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -340,11 +346,16 @@ class HZ3_YuE2_ABCViewer:
             "optional": {
                 "lyrics": ("STRING", {"forceInput": True}),
                 "editor_state": ("STRING", {"default": "", "multiline": True}),
+                "loaded_abc": ("STRING", {"default": "", "multiline": True}),
+                "loaded_lyrics": ("STRING", {"default": "", "multiline": True}),
             },
         }
 
-    def view(self, score_abc, lyrics="", editor_state=""):
-        data = viewer_data(score_abc, lyrics, editor_state)
+    def view(self, score_abc, lyrics="", editor_state="", loaded_abc="", loaded_lyrics=""):
+        # A pair loaded in the editor takes precedence until cleared by the user.
+        effective_abc = loaded_abc or score_abc
+        effective_lyrics = loaded_lyrics if loaded_abc else lyrics
+        data = viewer_data(effective_abc, effective_lyrics, editor_state)
         return {
             "ui": {"abc_viewer": [data]},
             "result": (data["edited_abc"], data["edited_lyrics"], data["section_report"]),
@@ -353,3 +364,38 @@ class HZ3_YuE2_ABCViewer:
 
 NODE_CLASS_MAPPINGS = {"HZ3_YuE2_ABCViewer": HZ3_YuE2_ABCViewer}
 NODE_DISPLAY_NAME_MAPPINGS = {"HZ3_YuE2_ABCViewer": "HZ3 YuE2 · ABC Piano Roll + Section Lyrics"}
+
+
+# The editor uses this route to preview imported ABC/lyrics pairs and to export
+# current edits without requiring a workflow execution first.
+try:
+    from server import PromptServer
+    from aiohttp import web
+
+    @PromptServer.instance.routes.post("/hz3/yue2/abc_viewer/data")
+    async def _api_abc_viewer_data(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            score_abc = payload.get("abc", "")
+            lyrics = payload.get("lyrics", "")
+            if not isinstance(score_abc, str) or not score_abc.strip():
+                return web.json_response({"error": "The ABC file is empty or invalid."}, status=400)
+            if not isinstance(lyrics, str):
+                return web.json_response({"error": "The lyrics must be text."}, status=400)
+
+            editor_state = payload.get("editor_state", "")
+            sections = payload.get("sections")
+            if isinstance(sections, list):
+                base = viewer_data(score_abc, lyrics)
+                editor_state = _state_json({
+                    "source_hash": base["source_hash"],
+                    "editor_version": 3,
+                    "sections": sections,
+                })
+            result = viewer_data(score_abc, lyrics, editor_state)
+            return web.json_response(result)
+        except Exception as error:
+            return web.json_response({"error": str(error)}, status=400)
+except (ImportError, AttributeError):
+    # Unit tests and non-ComfyUI imports do not have the server API available.
+    pass

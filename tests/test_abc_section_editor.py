@@ -116,6 +116,32 @@ Z4|
         reparsed_state = editor.viewer_data(source, "[Intro]\nopening\n[Verse]\nold verse\n", result["editor_state"])
         self.assertEqual(reparsed_state["sections"], result["sections"])
 
+    def test_section_bar_ranges_are_explicit_and_first_section_can_start_later(self):
+        source = HEADER + '''% verse
+V: Vocal
+"C"E32|E32|G32|A32|
+V: Ins
+z32|z32|z32|z32|
+'''
+        initial = editor.viewer_data(source, "one\ntwo\n")
+        state = {
+            "source_hash": initial["source_hash"],
+            "editor_version": 2,
+            "sections": [
+                {"id": "a", "name": "Part A", "start_bar": 1, "end_bar": 2, "lyrics": "one"},
+                {"id": "b", "name": "Part B", "start_bar": 3, "end_bar": 3, "lyrics": "two"},
+            ],
+        }
+        result = editor.viewer_data(source, "one\ntwo\n", json.dumps(state))
+
+        self.assertEqual([(section["start_bar"], section["end_bar"]) for section in result["sections"]],
+                         [(1, 2), (3, 3)])
+        self.assertIn("% Part A", result["edited_abc"])
+        self.assertIn("% Part B", result["edited_abc"])
+        report = json.loads(result["section_report"])
+        self.assertEqual([(section["start_bar"], section["end_bar"]) for section in report["sections"]],
+                         [(1, 2), (3, 3)])
+
     def test_viewer_supplies_resolved_abc_notes_and_timing_for_playback(self):
         source = HEADER + '''% verse
 V: Vocal
@@ -135,6 +161,17 @@ z32|A32|
         ])
         self.assertEqual(result["bars"][1]["start"], 4 * 256)
         self.assertEqual(result["total_ticks"], 8 * 256)
+
+    def test_loaded_abc_and_lyrics_pair_overrides_connected_inputs(self):
+        connected = HEADER + 'V: Vocal\n"C"C32|\nV: Ins\nz32|\n'
+        loaded = HEADER + 'V: Vocal\n"G"G32|\nV: Ins\nz32|\n'
+        result = editor.HZ3_YuE2_ABCViewer().view(
+            connected, lyrics="connected lyric", loaded_abc=loaded, loaded_lyrics="loaded lyric")
+
+        data = result["ui"]["abc_viewer"][0]
+        self.assertEqual(data["abc"], loaded)
+        self.assertEqual(data["lyrics"], "loaded lyric")
+        self.assertEqual(result["result"][1], "[Section 1]\nloaded lyric\n")
 
     def test_can_split_inside_original_group_and_preserve_meter_changes(self):
         source = HEADER + '''% intro

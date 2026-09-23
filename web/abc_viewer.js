@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 
 function element(tag, text, parent, className = "") {
     const node = document.createElement(tag);
@@ -34,6 +35,19 @@ function select(parent, label, options, value, action) {
     return input;
 }
 
+function numberInput(parent, label, value, min, max, action) {
+    const wrapper = element("label", label, parent, "control-label numeric-control");
+    const input = element("input", null, wrapper, "bar-input");
+    input.type = "number";
+    input.step = "1";
+    input.min = String(min);
+    input.max = String(max);
+    input.value = String(value);
+    input.setAttribute("aria-label", label + " BAR");
+    input.onchange = () => action(Number(input.value));
+    return input;
+}
+
 function pitchClass(name) {
     let value = {C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11}[name[0]];
     for (const accidental of name.slice(1)) value += accidental === "#" ? 1 : -1;
@@ -60,14 +74,25 @@ function chordPitches(symbol) {
 const BAR_WIDTH = 120;
 const AXIS_WIDTH = 52;
 const NOTE_ROW_HEIGHT = 13;
-const LYRIC_CARD_WIDTH = 340;
-const LYRIC_CARD_HEIGHT = 138;
+const SECTION_COLORS = ["#45d6b0", "#f3a64a", "#a78bfa", "#60a5fa", "#fb7185", "#a3e635", "#22d3ee", "#f472b6"];
+
+function sectionColor(index) { return SECTION_COLORS[index % SECTION_COLORS.length]; }
+
+function hexRgb(hex) {
+    const value = hex.slice(1);
+    return [0, 2, 4].map(offset => parseInt(value.slice(offset, offset + 2), 16));
+}
+
+function rgba(hex, alpha) {
+    return "rgba(" + hexRgb(hex).join(",") + "," + alpha + ")";
+}
+
 const style = document.createElement("style");
 style.textContent = [
     ".hz3-section-editor{height:100%;min-height:540px;padding:8px;box-sizing:border-box;background:#111827;color:#edf7f5;font:13px system-ui;border:1px solid #25a98e;border-radius:8px;display:flex;flex-direction:column;overflow:hidden}",
     ".hz3-section-editor *{box-sizing:border-box}.hz3-section-editor .toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:5px;flex:0 0 auto}",
     ".hz3-section-editor button{background:#16816d;color:#fff;border:1px solid #28b89c;border-radius:5px;padding:6px 9px;cursor:pointer}.hz3-section-editor button.secondary{background:#263548;border-color:#486174}.hz3-section-editor button.danger{background:#54343b;border-color:#8e5961}.hz3-section-editor button:disabled{opacity:.4;cursor:default}",
-    ".hz3-section-editor .control-label{display:flex;align-items:center;gap:5px;color:#b7c9d6;font-size:11px}.hz3-section-editor .control-select{max-width:180px;background:#1e293b;color:#f8fafc;border:1px solid #486174;border-radius:5px;padding:6px 8px}",
+    ".hz3-section-editor .control-label{display:flex;align-items:center;gap:5px;color:#b7c9d6;font-size:11px}.hz3-section-editor .control-select{max-width:180px;background:#1e293b;color:#f8fafc;border:1px solid #486174;border-radius:5px;padding:6px 8px}.hz3-section-editor .bar-input{width:62px;background:#1e293b;color:#f8fafc;border:1px solid #486174;border-radius:5px;padding:5px 6px;font:11px ui-monospace,SFMono-Regular,Consolas,monospace}.hz3-section-editor .numeric-control{font-size:10px}",
     ".hz3-section-editor .hint{color:#b6c7d6;font-size:11px;line-height:1.3;padding:5px 7px;border-left:3px solid #4ee0bd;background:#162234;margin-bottom:5px;flex:0 0 auto}",
     ".hz3-section-editor .legend{display:flex;align-items:center;gap:14px;color:#b6c7d6;font-size:11px;margin:0 0 5px 4px;flex:0 0 auto}.hz3-section-editor .legend-item{display:flex;align-items:center;gap:5px}.hz3-section-editor .legend-swatch{width:10px;height:10px;border-radius:2px}",
     ".hz3-section-editor .status{color:#8fe3d0;margin-left:auto;min-width:150px;font-size:11px}",
@@ -78,20 +103,21 @@ style.textContent = [
     ".hz3-section-editor .ruler-axis{z-index:5;display:flex;align-items:center;justify-content:center;color:#91a7b8;font:10px ui-monospace,SFMono-Regular,Consolas,monospace}",
     ".hz3-section-editor .bar-ruler-cell{position:relative;flex:0 0 " + BAR_WIDTH + "px;width:" + BAR_WIDTH + "px;border-right:1px solid #34475a;text-align:center}",
     ".hz3-section-editor .section-tag{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:3px 3px 0;padding:2px 3px;height:18px;background:#6b4d1e;color:#fff0bd;border:1px solid #b78b3b;border-radius:3px;font-size:9px;font-weight:700}",
-    ".hz3-section-editor .bar-number{display:block;padding-top:3px;color:#9fb3c4;font:10px ui-monospace,SFMono-Regular,Consolas,monospace}",
+    ".hz3-section-editor .bar-number{display:block;margin:2px auto 0;padding:1px 4px;background:transparent;border:0;color:#9fb3c4;font:10px ui-monospace,SFMono-Regular,Consolas,monospace;cursor:pointer}.hz3-section-editor .bar-number:hover{color:#fff;background:#263548;border-radius:3px}",
     ".hz3-section-editor .piano-row{display:flex;align-items:flex-start;border-bottom:1px solid #405368}",
     ".hz3-section-editor .pitch-axis{flex:none;background:#172436;border-right:1px solid #405368}",
     ".hz3-section-editor .piano-svg{display:block;flex:none;background:#101a28}",
-    ".hz3-section-editor .lyrics-row{display:flex;align-items:stretch;min-height:" + LYRIC_CARD_HEIGHT + "px}",
+    ".hz3-section-editor .lyrics-row{display:flex;align-items:stretch}",
     ".hz3-section-editor .lyrics-axis{display:flex;align-items:flex-start;justify-content:center;padding-top:9px;color:#d2a7ee;font:10px ui-monospace,SFMono-Regular,Consolas,monospace;z-index:3}",
     ".hz3-section-editor .lyrics-track{position:relative;flex:none}",
-    ".hz3-section-editor .lyric-card{position:absolute;overflow:hidden;border:1px solid #70538a;border-radius:6px;background:#191d30;box-shadow:0 3px 10px #0005}",
-    ".hz3-section-editor .lyric-card.selected{border-color:#d99cff;box-shadow:0 0 0 1px #d99cff,0 3px 10px #0006}",
-    ".hz3-section-editor .lyric-card-head{height:34px;display:flex;align-items:center;gap:4px;padding:3px 5px;background:#29223a;border-bottom:1px solid #59476b}",
-    ".hz3-section-editor .lyric-card-title{min-width:40px;flex:1;background:#111827;color:#fff;border:1px solid #59476b;border-radius:4px;padding:4px 5px;font:600 11px system-ui}",
-    ".hz3-section-editor .lyric-card-bar{white-space:nowrap;color:#dfc7ef;font:9px ui-monospace,SFMono-Regular,Consolas,monospace}",
-    ".hz3-section-editor .move-button{padding:4px 5px!important;font-size:10px}.hz3-section-editor .remove-button{padding:4px 6px!important}",
-    ".hz3-section-editor .lyric-text{display:block;width:100%;height:102px;resize:none;overflow:auto;background:#101827;color:#f3eafa;border:0;padding:7px;font:12px/1.4 system-ui;outline:none}.hz3-section-editor .lyric-text:focus{box-shadow:inset 0 0 0 1px #d99cff}",
+    ".hz3-section-editor .lyric-card{position:absolute;overflow:hidden;border:1px solid var(--section-color);border-radius:6px;box-shadow:0 3px 10px #0005}",
+    ".hz3-section-editor .lyric-card.selected{box-shadow:0 0 0 1px var(--section-color),0 3px 10px #0006}",
+    ".hz3-section-editor .lyric-card-head{height:34px;display:flex;align-items:center;gap:4px;padding:3px 5px;background:var(--section-tint);border-bottom:1px solid var(--section-color)}",
+    ".hz3-section-editor .lyric-card-title{min-width:0;flex:1;background:#111827;color:#fff;border:1px solid var(--section-color);border-radius:4px;padding:4px 5px;font:600 11px system-ui}",
+    ".hz3-section-editor .lyric-card-bar{white-space:nowrap;color:#e7edf4;font:9px ui-monospace,SFMono-Regular,Consolas,monospace}",
+    ".hz3-section-editor .remove-button{padding:4px 6px!important}",
+    ".hz3-section-editor .lyric-text{display:block;width:100%;height:112px;min-height:88px;resize:vertical;overflow:auto;background:#101827;color:#f3eafa;border:0;padding:7px;font:12px/1.4 system-ui;outline:none}.hz3-section-editor .lyric-text:focus{box-shadow:inset 0 0 0 1px var(--section-color)}",
+    ".hz3-section-editor .file-input{display:none!important}",
     ".hz3-section-editor .widget-hidden{display:none!important}",
     ".hz3-section-editor-expanded{position:fixed!important;inset:2vh 2vw!important;width:96vw!important;height:96vh!important;z-index:10000!important;box-shadow:0 0 0 4vh #000a}"
 ].join("\n");
@@ -106,13 +132,19 @@ class ABCSectionEditor {
         this.legend = element("div", null, this.root, "legend");
         this.timelineScroll = element("div", null, this.root, "timeline-scroll");
         this.timelineCanvas = element("div", null, this.timelineScroll, "timeline-canvas");
-        this.selectedSection = "all";
+        this.selectedSection = "0";
+        this.playbackSection = "all";
         this.track = "Both";
         this.chords = true;
         this.position = 0;
         this.zoom = 1;
         this.expanded = false;
         this.status = element("span", "Run this node to load the ABC.", this.toolbar, "status");
+        this.fileInput = element("input", null, this.root, "file-input");
+        this.fileInput.type = "file";
+        this.fileInput.accept = ".json,.abc,.txt,.lrc";
+        this.fileInput.multiple = true;
+        this.fileInput.onchange = () => this.loadFiles([...this.fileInput.files]);
         this.observer = new ResizeObserver(() => this.layout());
         this.observer.observe(this.root);
     }
@@ -124,6 +156,15 @@ class ABCSectionEditor {
         this.stateWidget.options = {...(this.stateWidget.options || {}), serialize: true};
         this.stateWidget.element?.classList.add("widget-hidden");
         this.stateWidget.element?.setAttribute("aria-hidden", "true");
+        for (const name of ["loaded_abc", "loaded_lyrics"]) {
+            const widget = this.node.widgets?.find(item => item.name === name);
+            if (!widget) continue;
+            widget.computeSize = () => [0, -4];
+            widget.options = {...(widget.options || {}), serialize: true};
+            widget.element?.classList.add("widget-hidden");
+            widget.element?.setAttribute("aria-hidden", "true");
+            this[name + "Widget"] = widget;
+        }
         this.node.setSize([Math.max(1000, this.node.size[0]), 640]);
     }
 
@@ -131,11 +172,12 @@ class ABCSectionEditor {
         this.stop();
         this.data = typeof data === "string" ? JSON.parse(data) : data;
         this.hasEdits = false;
-        this.selectedSection = "all";
+        this.selectedSection = this.data.sections.length ? "0" : "all";
+        this.playbackSection = "all";
         this.position = 0;
         this.state = {
             source_hash: this.data.source_hash,
-            editor_version: 2,
+            editor_version: 3,
             sections: this.data.sections.map(section => ({...section})),
         };
         this.writeState(false);
@@ -156,12 +198,12 @@ class ABCSectionEditor {
 
     playbackRange() {
         if (!this.data?.bars?.length) return {start: 0, end: 0};
-        if (this.selectedSection === "all") return {start: 0, end: this.data.total_ticks};
-        const index = Number(this.selectedSection);
+        if (this.playbackSection === "all") return {start: 0, end: this.data.total_ticks};
+        const index = Number(this.playbackSection);
         const section = this.state.sections[index];
-        const next = this.state.sections[index + 1];
+        if (!section) return {start: 0, end: this.data.total_ticks};
         const start = this.data.bars[section.start_bar]?.start ?? this.data.total_ticks;
-        const end = next ? (this.data.bars[next.start_bar]?.start ?? this.data.total_ticks) : this.data.total_ticks;
+        const end = this.data.bars[section.end_bar + 1]?.start ?? this.data.total_ticks;
         return {start, end};
     }
 
@@ -187,10 +229,17 @@ class ABCSectionEditor {
             id: "section-" + Date.now(),
             name: "Section " + (this.state.sections.length + 1),
             start_bar: startBar,
+            end_bar: this.data.bars.length - 1,
             lyrics: "",
         });
         this.state.sections.sort((a, b) => a.start_bar - b.start_bar);
-        this.selectedSection = String(this.state.sections.findIndex(section => section.start_bar === startBar));
+        const newIndex = this.state.sections.findIndex(section => section.start_bar === startBar);
+        const previous = this.state.sections[newIndex - 1];
+        const next = this.state.sections[newIndex + 1];
+        if (previous) previous.end_bar = Math.min(previous.end_bar, startBar - 1);
+        this.state.sections[newIndex].end_bar = (next?.start_bar ?? this.data.bars.length) - 1;
+        this.selectedSection = String(newIndex);
+        this.playbackSection = this.selectedSection;
         this.position = this.playbackRange().start;
         this.writeState();
         this.render();
@@ -200,27 +249,37 @@ class ABCSectionEditor {
     removeSection(index) {
         if (this.state.sections.length <= 1) return;
         this.stop();
+        const removed = this.state.sections[index];
         this.state.sections.splice(index, 1);
-        if (this.state.sections[0].start_bar !== 0) this.state.sections[0].start_bar = 0;
+        const previous = this.state.sections[index - 1];
+        const next = this.state.sections[index];
+        if (previous && removed) previous.end_bar = Math.min(next ? next.start_bar - 1 : removed.end_bar, removed.end_bar);
         this.selectedSection = String(Math.max(0, Math.min(index, this.state.sections.length - 1)));
+        this.playbackSection = "all";
         this.position = this.playbackRange().start;
         this.writeState();
         this.render();
         this.focusSection(this.selectedSection);
     }
 
-    moveSection(index, delta) {
+    setSectionBar(index, field, displayedValue) {
         const section = this.state.sections[index];
-        if (!section) return;
+        if (!section || !Number.isFinite(displayedValue)) return;
         const previous = this.state.sections[index - 1];
         const next = this.state.sections[index + 1];
-        const minBar = previous ? previous.start_bar + 1 : 0;
-        const maxBar = next ? next.start_bar - 1 : this.data.bars.length - 1;
-        const startBar = Math.max(minBar, Math.min(maxBar, section.start_bar + delta));
-        if (startBar === section.start_bar) return;
         this.stop();
-        section.start_bar = startBar;
+        if (field === "start_bar") {
+            const minBar = previous ? previous.start_bar + 1 : 0;
+            const maxBar = next ? next.start_bar - 1 : this.data.bars.length - 1;
+            section.start_bar = Math.max(minBar, Math.min(maxBar, Math.round(displayedValue) - 1));
+            section.end_bar = Math.max(section.start_bar, Math.min(section.end_bar, (next?.start_bar ?? this.data.bars.length) - 1));
+            if (previous) previous.end_bar = Math.min(previous.end_bar, section.start_bar - 1);
+        } else {
+            const maxBar = (next?.start_bar ?? this.data.bars.length) - 1;
+            section.end_bar = Math.max(section.start_bar, Math.min(maxBar, Math.round(displayedValue) - 1));
+        }
         this.selectedSection = String(index);
+        this.playbackSection = this.selectedSection;
         this.position = this.playbackRange().start;
         this.writeState();
         this.render();
@@ -235,14 +294,46 @@ class ABCSectionEditor {
     }
 
     selectSection(index) {
-        if (this.audio) this.stop();
         this.selectedSection = String(index);
-        if (this.playRangeSelect) this.playRangeSelect.value = String(index);
+        if (this.editSectionSelect) this.editSectionSelect.value = String(index);
         this.timelineCanvas.querySelectorAll(".lyric-card").forEach((card, cardIndex) => {
             card.classList.toggle("selected", cardIndex === Number(index));
         });
-        this.position = this.playbackRange().start;
+        this.syncRangeInputs();
+    }
+
+    syncRangeInputs() {
+        const index = this.selectedSection === "all" ? -1 : Number(this.selectedSection);
+        const section = this.state?.sections?.[index];
+        if (!section || !this.data?.bars?.length) {
+            this.startBarInput && (this.startBarInput.disabled = true);
+            this.endBarInput && (this.endBarInput.disabled = true);
+            return;
+        }
+        const previous = this.state.sections[index - 1];
+        const next = this.state.sections[index + 1];
+        if (this.startBarInput) {
+            this.startBarInput.value = String(section.start_bar + 1);
+            this.startBarInput.min = String((previous?.start_bar ?? -1) + 2);
+            this.startBarInput.max = String((next?.start_bar ?? this.data.bars.length) );
+            this.startBarInput.disabled = false;
+        }
+        if (this.endBarInput) {
+            this.endBarInput.value = String(section.end_bar + 1);
+            this.endBarInput.min = String(section.start_bar + 1);
+            this.endBarInput.max = String((next?.start_bar ?? this.data.bars.length));
+            this.endBarInput.disabled = false;
+        }
+    }
+
+    playFromBar(barIndex) {
+        if (!this.data?.bars?.[barIndex]) return;
+        this.stop();
+        this.playbackSection = "all";
+        if (this.playRangeSelect) this.playRangeSelect.value = "all";
+        this.position = this.data.bars[barIndex].start;
         this.updatePlaybackStatus();
+        this.play();
     }
 
     visibleTracks() {
@@ -401,9 +492,7 @@ class ABCSectionEditor {
         const sections = this.state.sections;
         const barWidth = BAR_WIDTH * this.zoom;
         const scoreWidth = Math.max(1, bars.length * barWidth);
-        const boxWidth = LYRIC_CARD_WIDTH;
-        const lastSectionX = sections.length ? sections[sections.length - 1].start_bar * barWidth : 0;
-        const timelineWidth = Math.max(scoreWidth, lastSectionX + boxWidth + 12);
+        const timelineWidth = scoreWidth;
         const notes = [...(this.data.tracks.Vocal || []), ...(this.data.tracks.Ins || [])];
         let lowPitch = notes.length ? Math.min(...notes.map(note => note.pitch)) - 2 : 48;
         let highPitch = notes.length ? Math.max(...notes.map(note => note.pitch)) + 2 : 72;
@@ -416,6 +505,7 @@ class ABCSectionEditor {
         }
         const rowHeight = NOTE_ROW_HEIGHT;
         const rollHeight = (highPitch - lowPitch + 1) * rowHeight;
+        this.rollHeight = rollHeight;
         this.timelineCanvas.replaceChildren();
         this.timelineCanvas.style.width = (AXIS_WIDTH + timelineWidth) + "px";
 
@@ -429,6 +519,10 @@ class ABCSectionEditor {
             const tagged = sectionAtBar.get(bar.number - 1);
             if (tagged) {
                 const tag = element("span", tagged.section.name, cell, "section-tag");
+                const color = sectionColor(tagged.index);
+                tag.style.background = rgba(color, .22);
+                tag.style.borderColor = color;
+                tag.style.color = "#f8fafc";
                 tag.title = tagged.section.name + " · starts at bar " + String(bar.number).padStart(3, "0");
                 tag.onclick = () => {
                     this.selectSection(tagged.index);
@@ -438,7 +532,11 @@ class ABCSectionEditor {
             } else {
                 element("span", "", cell, "section-tag");
             }
-            element("span", String(bar.number).padStart(3, "0"), cell, "bar-number");
+            const barButton = button(cell, String(bar.number).padStart(3, "0"), event => {
+                event.stopPropagation();
+                this.playFromBar(bar.number - 1);
+            }, "bar-number");
+            barButton.title = "Play from BAR " + String(bar.number).padStart(3, "0");
         }
         if (timelineWidth > scoreWidth) {
             const tail = element("div", null, ruler, "bar-ruler-cell");
@@ -477,9 +575,14 @@ class ABCSectionEditor {
         }
         svgElement("line", roll, {x1: scoreWidth - 1, y1: 0, x2: scoreWidth - 1, y2: rollHeight, stroke: "#71849a", "stroke-width": 1});
 
-        for (const section of sections) {
+        for (let index = 0; index < sections.length; index++) {
+            const section = sections[index];
             const x = section.start_bar * barWidth;
-            svgElement("line", roll, {x1: x, y1: 0, x2: x, y2: rollHeight, stroke: "#ffc857", "stroke-width": 2, "stroke-dasharray": "5 3", opacity: .85});
+            const width = (section.end_bar - section.start_bar + 1) * barWidth;
+            const color = sectionColor(index);
+            svgElement("rect", roll, {x, y: 0, width, height: rollHeight, fill: color, opacity: .09});
+            svgElement("line", roll, {x1: x, y1: 0, x2: x, y2: rollHeight, stroke: color, "stroke-width": 2, "stroke-dasharray": "5 3", opacity: .95});
+            svgElement("line", roll, {x1: x + width, y1: 0, x2: x + width, y2: rollHeight, stroke: color, "stroke-width": 1.5, opacity: .75});
         }
 
         const trackColors = {Vocal: "#d99cff", Ins: "#58dfc4"};
@@ -507,18 +610,20 @@ class ABCSectionEditor {
         element("div", "LYRICS", lyricsRow, "roll-axis lyrics-axis");
         const lyricsTrack = element("div", null, lyricsRow, "lyrics-track");
         lyricsTrack.style.width = timelineWidth + "px";
-        const lanes = [];
+        this.lyricsResizeObserver?.disconnect();
+        this.lyricsResizeObserver = new ResizeObserver(() => this.syncLyricsLayout(lyricsTrack));
         for (let index = 0; index < sections.length; index++) {
             const section = sections[index];
             const left = section.start_bar * barWidth;
-            let lane = lanes.findIndex(end => left >= end + 8);
-            if (lane < 0) lane = lanes.length;
-            lanes[lane] = left + boxWidth;
+            const width = Math.max(barWidth, (section.end_bar - section.start_bar + 1) * barWidth);
+            const color = sectionColor(index);
             const card = element("article", null, lyricsTrack, "lyric-card" + (String(index) === this.selectedSection ? " selected" : ""));
             card.style.left = left + "px";
-            card.style.top = (lane * LYRIC_CARD_HEIGHT) + "px";
-            card.style.width = boxWidth + "px";
-            card.style.height = LYRIC_CARD_HEIGHT + "px";
+            card.style.top = "0px";
+            card.style.width = width + "px";
+            card.style.setProperty("--section-color", color);
+            card.style.setProperty("--section-tint", rgba(color, .14));
+            card.style.background = rgba(color, .07);
             card.onclick = () => this.selectSection(index);
 
             const head = element("div", null, card, "lyric-card-head");
@@ -532,20 +637,7 @@ class ABCSectionEditor {
                 this.render();
                 this.focusSection(String(index));
             };
-            element("span", "BAR " + String(section.start_bar + 1).padStart(3, "0"), head, "lyric-card-bar");
-            const previous = button(head, "← bar", event => { event.stopPropagation(); this.moveSection(index, -1); }, "secondary move-button");
-            previous.title = "Move section start to the previous bar";
-            previous.disabled = index === 0 || section.start_bar <= sections[index - 1].start_bar + 1;
-            const next = button(head, "bar →", event => { event.stopPropagation(); this.moveSection(index, 1); }, "secondary move-button");
-            next.title = "Move section start to the next bar";
-            next.disabled = index + 1 < sections.length
-                ? section.start_bar >= sections[index + 1].start_bar - 1
-                : section.start_bar >= bars.length - 1;
-            if (index > 0) {
-                const remove = button(head, "×", event => { event.stopPropagation(); this.removeSection(index); }, "danger remove-button");
-                remove.title = "Remove this section and its lyric box";
-            }
-
+            element("span", String(section.start_bar + 1).padStart(3, "0") + "–" + String(section.end_bar + 1).padStart(3, "0"), head, "lyric-card-bar");
             const textarea = element("textarea", null, card, "lyric-text");
             textarea.value = section.lyrics;
             textarea.setAttribute("aria-label", "Lyrics for " + section.name);
@@ -553,10 +645,14 @@ class ABCSectionEditor {
             textarea.onclick = event => { event.stopPropagation(); this.selectSection(index); };
             textarea.oninput = () => {
                 section.lyrics = textarea.value;
+                textarea.style.height = "auto";
+                textarea.style.height = Math.max(88, textarea.scrollHeight) + "px";
+                this.syncLyricsLayout(lyricsTrack);
                 this.writeState();
             };
+            this.lyricsResizeObserver.observe(textarea);
         }
-        lyricsTrack.style.height = (Math.max(1, lanes.length) * LYRIC_CARD_HEIGHT) + "px";
+        this.syncLyricsLayout(lyricsTrack);
 
         this.legend.replaceChildren();
         element("span", "PIANO ROLL", this.legend, "legend-item");
@@ -568,20 +664,156 @@ class ABCSectionEditor {
         }
     }
 
+    syncLyricsLayout(lyricsTrack) {
+        if (!lyricsTrack) return;
+        let height = 0;
+        for (const card of lyricsTrack.querySelectorAll(".lyric-card")) {
+            const textarea = card.querySelector(".lyric-text");
+            const head = card.querySelector(".lyric-card-head");
+            card.style.height = (head.offsetHeight + textarea.offsetHeight) + "px";
+            height = Math.max(height, card.offsetTop + card.offsetHeight);
+        }
+        height = Math.max(112, height + 8);
+        lyricsTrack.style.height = height + "px";
+        this.lyricsHeight = height;
+        this.renderedTimelineHeight = 44 + this.rollHeight + height;
+        this.timelineScroll.style.height = this.renderedTimelineHeight + "px";
+        this.layout();
+    }
+
+    async requestViewerData(payload) {
+        const response = await fetch(api.fileURL("/hz3/yue2/abc_viewer/data"), {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Could not read this ABC and lyrics pair.");
+        return result;
+    }
+
+    setLoadedWidget(name, value) {
+        const widget = this[name + "Widget"] || this.node.widgets?.find(item => item.name === name);
+        if (!widget) return;
+        widget.value = value;
+        widget.callback?.(value);
+    }
+
+    async loadFiles(files) {
+        if (!files.length) return;
+        try {
+            let abcText = "";
+            let lyricsText = "";
+            let sections;
+            const jsonFile = files.find(file => file.name.toLowerCase().endsWith(".json"));
+            if (jsonFile) {
+                const bundle = JSON.parse(await jsonFile.text());
+                abcText = bundle.abc || bundle.abc_with_sections || "";
+                lyricsText = bundle.lyrics || bundle.lyrics_with_sections || "";
+                sections = Array.isArray(bundle.sections) ? bundle.sections : undefined;
+            } else {
+                const abcFile = files.find(file => file.name.toLowerCase().endsWith(".abc"));
+                const lyricFile = files.find(file => /\.(txt|lrc)$/i.test(file.name));
+                if (!abcFile) throw new Error("Select an .abc file, or an exported .json pair.");
+                abcText = await abcFile.text();
+                lyricsText = lyricFile ? await lyricFile.text() : "";
+            }
+            if (!abcText.trim()) throw new Error("The selected ABC file is empty.");
+            const data = await this.requestViewerData({abc: abcText, lyrics: lyricsText, sections});
+            this.stop();
+            this.data = data;
+            this.state = JSON.parse(data.editor_state);
+            this.selectedSection = this.state.sections.length ? "0" : "all";
+            this.playbackSection = "all";
+            this.position = 0;
+            this.setLoadedWidget("loaded_abc", abcText);
+            this.setLoadedWidget("loaded_lyrics", lyricsText);
+            this.writeState(false);
+            this.hasEdits = true;
+            this.render();
+            this.status.textContent = "ABC + lyrics loaded · queue this node to update its outputs.";
+        } catch (error) {
+            this.status.textContent = "Load failed · " + error.message;
+        } finally {
+            this.fileInput.value = "";
+        }
+    }
+
+    async exportPair() {
+        if (!this.data || !this.state) return;
+        try {
+            const rendered = await this.requestViewerData({
+                abc: this.data.abc,
+                lyrics: this.data.lyrics,
+                editor_state: JSON.stringify(this.state),
+            });
+            const bundle = {
+                format: "hz3-abc-lyrics-v1",
+                abc: rendered.edited_abc,
+                lyrics: rendered.edited_lyrics,
+                sections: rendered.sections.map(section => ({...section})),
+            };
+            const blob = new Blob([JSON.stringify(bundle, null, 2)], {type: "application/json"});
+            const url = URL.createObjectURL(blob);
+            const anchor = element("a", null, this.root);
+            anchor.href = url;
+            anchor.download = "abc-lyrics.json";
+            anchor.click();
+            anchor.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            this.status.textContent = "Exported ABC + lyrics.";
+        } catch (error) {
+            this.status.textContent = "Export failed · " + error.message;
+        }
+    }
+
+    clearImportedPair() {
+        this.setLoadedWidget("loaded_abc", "");
+        this.setLoadedWidget("loaded_lyrics", "");
+        this.hasEdits = true;
+        this.status.textContent = "Connected ABC + lyrics will be restored when you queue this node.";
+    }
+
     render() {
         if (!this.data || !this.state) return;
-        if (this.selectedSection !== "all" && Number(this.selectedSection) >= this.state.sections.length) this.selectedSection = "all";
+        if (this.selectedSection === "all" || Number(this.selectedSection) >= this.state.sections.length) {
+            this.selectedSection = this.state.sections.length ? "0" : "all";
+        }
         this.toolbar.replaceChildren();
         const add = button(this.toolbar, "+ Add lyric section", () => this.addSection());
         add.disabled = this.state.sections.length >= Math.min(64, this.data.bars.length);
-        this.playRangeSelect = select(this.toolbar, "Play", [["all", "Full ABC"],
-            ...this.state.sections.map((section, index) => [String(index), "BAR " + String(section.start_bar + 1).padStart(3, "0") + " · " + section.name])],
+        button(this.toolbar, "Load ABC + lyrics", () => this.fileInput.click(), "secondary");
+        button(this.toolbar, "Export ABC + lyrics", () => this.exportPair(), "secondary");
+        const hasLoadedPair = Boolean(this.loaded_abcWidget?.value);
+        if (hasLoadedPair) button(this.toolbar, "Use connected inputs", () => this.clearImportedPair(), "secondary");
+        this.editSectionSelect = select(this.toolbar, "Edit section", this.state.sections.map((section, index) =>
+            [String(index), "BAR " + String(section.start_bar + 1).padStart(3, "0") + " · " + section.name]),
         this.selectedSection, value => {
-            this.stop();
             this.selectedSection = value;
-            this.position = this.playbackRange().start;
             this.render();
             this.focusSection(value);
+        });
+        const selectedIndex = Number(this.selectedSection);
+        const selected = this.state.sections[selectedIndex];
+        if (selected) {
+            const previous = this.state.sections[selectedIndex - 1];
+            const next = this.state.sections[selectedIndex + 1];
+            this.startBarInput = numberInput(this.toolbar, "Start BAR", selected.start_bar + 1,
+                (previous?.start_bar ?? -1) + 2, next?.start_bar ?? this.data.bars.length,
+                value => this.setSectionBar(selectedIndex, "start_bar", value));
+            this.endBarInput = numberInput(this.toolbar, "End BAR", selected.end_bar + 1,
+                selected.start_bar + 1, next?.start_bar ?? this.data.bars.length,
+                value => this.setSectionBar(selectedIndex, "end_bar", value));
+            if (selectedIndex > 0) {
+                button(this.toolbar, "Remove section", () => this.removeSection(selectedIndex), "danger");
+            }
+        }
+        this.playRangeSelect = select(this.toolbar, "Play", [["all", "Full ABC"],
+            ...this.state.sections.map((section, index) => [String(index), "BAR " + String(section.start_bar + 1).padStart(3, "0") + " · " + section.name])],
+        this.playbackSection, value => {
+            this.stop();
+            this.playbackSection = value;
+            this.position = this.playbackRange().start;
             this.updatePlaybackStatus();
         });
         select(this.toolbar, "Track", [["Both", "Vocal + Ins"], ["Vocal", "Vocal"], ["Ins", "Ins"]], this.track,
@@ -598,9 +830,10 @@ class ABCSectionEditor {
         this.expandButton = button(this.toolbar, this.expanded ? "Close expanded" : "Expand editor", () => this.expand(!this.expanded), "secondary");
         this.status = element("span", "", this.toolbar, "status");
         this.hint.textContent = this.data.rough_layout
-            ? "Section labels are starting estimates. Each lyric box belongs to its tagged starting bar; move the start with ← bar / bar →."
-            : "Each lyric box belongs to its tagged starting bar. Move its start one bar at a time with ← bar / bar →.";
+            ? "Section positions are starting estimates. Set each start/end BAR in the number boxes; click any BAR number to play from there."
+            : "Set the start/end BAR numbers for each colored lyric section. Click any BAR number to play from there.";
         this.renderTimeline();
+        this.syncRangeInputs();
         this.focusSection(this.selectedSection);
         this.updatePlaybackStatus();
         this.layout();
@@ -623,8 +856,12 @@ class ABCSectionEditor {
 
     layout() {
         if (!this.expanded && this.node.size) {
-            const height = Math.max(540, Math.min(760, this.root.scrollHeight + 18));
-            if (this.node.size[1] < height + 55) this.node.setSize([Math.max(1000, this.node.size[0]), height + 55]);
+            const toolbarHeight = this.toolbar.getBoundingClientRect().height || 34;
+            const hintHeight = this.hint.getBoundingClientRect().height || 32;
+            const legendHeight = this.legend.getBoundingClientRect().height || 18;
+            const height = Math.max(540, toolbarHeight + hintHeight + legendHeight + (this.renderedTimelineHeight || 300) + 48);
+            this.root.style.height = height + "px";
+            if (Math.abs(this.node.size[1] - (height + 55)) > 4) this.node.setSize([Math.max(1000, this.node.size[0]), height + 55]);
         }
         this.node.graph?.setDirtyCanvas(true, true);
     }

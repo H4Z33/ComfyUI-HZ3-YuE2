@@ -1549,7 +1549,7 @@
       ],
       "size": [
         420,
-        650
+        830
       ],
       "flags": {},
       "order": 50,
@@ -1656,6 +1656,66 @@
           "link": null
         },
         {
+          "localized_name": "background_folder",
+          "name": "background_folder",
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "background_folder"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "background_interval",
+          "name": "background_interval",
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "background_interval"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "background_mode",
+          "name": "background_mode",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "background_mode"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "background_transition",
+          "name": "background_transition",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "background_transition"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "background_transition_duration",
+          "name": "background_transition_duration",
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "background_transition_duration"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "background_transparency",
+          "name": "background_transparency",
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "background_transparency"
+          },
+          "link": null
+        },
+        {
           "localized_name": "visualizer_mode",
           "name": "visualizer_mode",
           "shape": 7,
@@ -1692,16 +1752,6 @@
           "type": "BOOLEAN",
           "widget": {
             "name": "save_video"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "render_image_batch",
-          "name": "render_image_batch",
-          "shape": 7,
-          "type": "BOOLEAN",
-          "widget": {
-            "name": "render_image_batch"
           },
           "link": null
         },
@@ -1774,11 +1824,16 @@
         "854x480 (16:9 SD)",
         30,
         "Midnight Gold",
+        "",
+        8.0,
+        "Alphabetical",
+        "Crossfade",
+        1.0,
+        25.0,
         "Rolling Mode",
         50,
-        "video/HZ3-Karaoke-Harmonies",
+        "video/HZ3-Karaoke",
         true,
-        false,
         "Auto (NVENC / CPU)",
         0
       ],
@@ -1793,9 +1848,14 @@
         "font_size": 50,
         "filename_prefix": "video/HZ3-Karaoke",
         "save_video": true,
-        "render_image_batch": false,
         "encoder": "Auto (NVENC / CPU)",
-        "max_duration": 0
+        "max_duration": 0,
+        "background_folder": "",
+        "background_interval": 8.0,
+        "background_mode": "Alphabetical",
+        "background_transition": "Crossfade",
+        "background_transition_duration": 1.0,
+        "background_transparency": 25.0
       },
       "title": "Video karaoke: instrumental + tres armonias"
     },

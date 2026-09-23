@@ -3,7 +3,7 @@
 Single node: times the clean lyrics against the generated song (audio forced alignment,
 with Whisper-segment and ABC-score fallbacks) and renders a synchronized karaoke video
 with progressive word sweep, chords, song section HUD, and an audio-reactive spectrum or
-oscilloscope. Outputs the IMAGE batch, passthrough AUDIO, the saved MP4 path, and the
+oscilloscope. Outputs a preview IMAGE, passthrough AUDIO, the saved MP4 path, and the
 timed lyrics (JSON + LRC) plus an alignment report.
 """
 
@@ -13,14 +13,15 @@ import json
 import logging
 import math
 import os
+import random
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from functools import lru_cache
 from typing import Any
 
 import av
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 import torch
 
 try:
@@ -138,6 +139,103 @@ RESOLUTIONS: dict[str, tuple[int, int]] = {
     "1080x1920 (9:16 Shorts/Reels)": (1080, 1920),
 }
 
+BACKGROUND_TRANSITIONS = ["Cut", "Crossfade", "Fade Through Black", "Wipe Left"]
+
+
+class _BackgroundCarousel:
+    """Load, sequence, transition, and composite a folder of images for video frames."""
+
+    IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
+
+    def __init__(
+        self,
+        folder: str,
+        width: int,
+        height: int,
+        base: Image.Image,
+        interval: float,
+        mode: str,
+        transition: str,
+        transition_duration: float,
+        transparency: float,
+    ):
+        self.width = int(width)
+        self.height = int(height)
+        self.base = base
+        self.interval = max(0.1, float(interval))
+        self.transition = transition if transition in BACKGROUND_TRANSITIONS else "Crossfade"
+        self.transition_duration = min(self.interval, max(0.0, float(transition_duration)))
+        self.opacity = 1.0 - max(0.0, min(100.0, float(transparency))) / 100.0
+        self.paths = sorted(
+            (os.path.join(folder, name) for name in os.listdir(folder)
+             if os.path.splitext(name)[1].lower() in self.IMAGE_EXTENSIONS
+             and os.path.isfile(os.path.join(folder, name))),
+            key=lambda path: os.path.basename(path).casefold(),
+        )
+        if mode == "Random":
+            random.SystemRandom().shuffle(self.paths)
+            if len(self.paths) > 1 and self.paths[0] == self.paths[-1]:
+                self.paths[0], self.paths[1] = self.paths[1], self.paths[0]
+        self.cache: OrderedDict[str, Image.Image] = OrderedDict()
+        self.cache_limit = 3
+        self.black = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 255))
+
+    def _load(self, path: str) -> Image.Image:
+        cached = self.cache.get(path)
+        if cached is not None:
+            self.cache.move_to_end(path)
+            return cached
+        try:
+            with Image.open(path) as source:
+                image = ImageOps.exif_transpose(source).convert("RGBA")
+                image = ImageOps.fit(image, (self.width, self.height), method=Image.Resampling.LANCZOS)
+        except Exception as exc:
+            logger.warning("Could not load visualizer background image '%s': %s", path, exc)
+            image = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
+        self.cache[path] = image
+        self.cache.move_to_end(path)
+        while len(self.cache) > self.cache_limit:
+            self.cache.popitem(last=False)
+        return image
+
+    def frame(self, seconds: float) -> Image.Image:
+        if not self.paths or self.opacity <= 0.0:
+            return self.base.copy()
+
+        slot = max(0, int(max(0.0, float(seconds)) // self.interval))
+        current_index = slot % len(self.paths)
+        current = self._load(self.paths[current_index])
+        previous = None
+        phase = max(0.0, float(seconds)) % self.interval
+        in_transition = (
+            slot > 0
+            and self.transition != "Cut"
+            and self.transition_duration > 0.0
+            and phase < self.transition_duration
+        )
+        if in_transition:
+            previous = self._load(self.paths[(current_index - 1) % len(self.paths)])
+            amount = max(0.0, min(1.0, phase / self.transition_duration))
+            if self.transition == "Crossfade":
+                image = Image.blend(previous, current, amount)
+            elif self.transition == "Fade Through Black":
+                if amount < 0.5:
+                    image = Image.blend(previous, self.black, amount * 2.0)
+                else:
+                    image = Image.blend(self.black, current, (amount - 0.5) * 2.0)
+            else:  # Wipe Left
+                mask = Image.new("L", (self.width, self.height), 0)
+                ImageDraw.Draw(mask).rectangle((0, 0, int(self.width * amount), self.height), fill=255)
+                image = Image.composite(current, previous, mask)
+        else:
+            image = current
+
+        # The configured transparency is applied over the existing theme gradient.
+        alpha = image.getchannel("A").point(lambda value: round(value * self.opacity))
+        result = self.base.copy()
+        result.paste(image.convert("RGB"), (0, 0), alpha)
+        return result
+
 
 def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Load a crisp system TrueType font with fallbacks."""
@@ -216,7 +314,8 @@ class HZ3_YuE2_KaraokeVisualizer:
         "Time the clean lyrics against the generated song (forced alignment on the vocal stem/audio, "
         "with Whisper-segment and ABC-score fallbacks) and render a synchronized karaoke video with "
         "progressive word highlighting, chord tracking, section HUD, and an audio-reactive visualizer. "
-        "Also returns the timed lyrics as JSON and LRC."
+        "Cycles optional folder backgrounds with selectable timing, order, transparency, and transitions. "
+        "Returns a first-frame IMAGE preview, timed lyrics as JSON and LRC, and the rendered MP4."
     )
 
     @classmethod
@@ -272,6 +371,30 @@ class HZ3_YuE2_KaraokeVisualizer:
                 "resolution": (list(RESOLUTIONS.keys()), {"default": "1280x720 (16:9 HD)"}),
                 "fps": ("INT", {"default": 30, "min": 15, "max": 60, "step": 1}),
                 "theme": (list(THEMES.keys()), {"default": "Cyberpunk Neon"}),
+                "background_folder": (
+                    "STRING",
+                    {"default": "", "multiline": False, "tooltip": "Optional folder of background images. Images are listed alphabetically, or shuffled in Random mode."},
+                ),
+                "background_interval": (
+                    "FLOAT",
+                    {"default": 8.0, "min": 0.5, "max": 300.0, "step": 0.5, "tooltip": "Seconds between background changes."},
+                ),
+                "background_mode": (
+                    ["Alphabetical", "Random"],
+                    {"default": "Alphabetical", "tooltip": "Cycle through the folder alphabetically or use a shuffled order."},
+                ),
+                "background_transition": (
+                    BACKGROUND_TRANSITIONS,
+                    {"default": "Crossfade", "tooltip": "Transition between background images."},
+                ),
+                "background_transition_duration": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1, "tooltip": "Length of each transition in seconds (up to the change interval)."},
+                ),
+                "background_transparency": (
+                    "FLOAT",
+                    {"default": 25.0, "min": 0.0, "max": 100.0, "step": 1.0, "tooltip": "Transparency of the image over the visualizer's theme background (0 = opaque, 100 = invisible)."},
+                ),
                 "visualizer_mode": (
                     ["Spectrum Bars", "Mirrored Spectrum", "Waveform Oscilloscope", "Rolling Mode"],
                     {"default": "Spectrum Bars"},
@@ -279,13 +402,6 @@ class HZ3_YuE2_KaraokeVisualizer:
                 "font_size": ("INT", {"default": 38, "min": 20, "max": 72, "step": 2}),
                 "filename_prefix": ("STRING", {"default": "video/HZ3-Karaoke"}),
                 "save_video": ("BOOLEAN", {"default": True}),
-                "render_image_batch": (
-                    "BOOLEAN",
-                    {
-                        "default": False,
-                        "tooltip": "Output IMAGE tensor batch to ComfyUI. Default False (recommended to save RAM; the MP4 video is saved and previewed directly).",
-                    },
-                ),
                 "encoder": (
                     ["Auto (NVENC / CPU)", "h264_nvenc (GPU)", "libx264 (CPU)"],
                     {
@@ -934,11 +1050,16 @@ class HZ3_YuE2_KaraokeVisualizer:
         vocal_sample_rate: float = 1.0,
         render_resources: _RenderResources | None = None,
         bass_pulse: float = 0.0,
+        background_carousel: _BackgroundCarousel | None = None,
     ) -> Image.Image:
         """Render a single high-quality video frame with Pillow."""
         if render_resources is None:
             render_resources = _RenderResources(width, height, theme)
-        frame_img = render_resources.background.copy()
+        frame_img = (
+            background_carousel.frame(t)
+            if background_carousel is not None
+            else render_resources.background.copy()
+        )
         draw = ImageDraw.Draw(frame_img, "RGBA")
 
         # 2. Top HUD Bar
@@ -1129,11 +1250,16 @@ class HZ3_YuE2_KaraokeVisualizer:
         resolution: str = "1280x720 (16:9 HD)",
         fps: int = 30,
         theme: str = "Cyberpunk Neon",
+        background_folder: str = "",
+        background_interval: float = 8.0,
+        background_mode: str = "Alphabetical",
+        background_transition: str = "Crossfade",
+        background_transition_duration: float = 1.0,
+        background_transparency: float = 25.0,
         visualizer_mode: str = "Spectrum Bars",
         font_size: int = 38,
         filename_prefix: str = "video/HZ3-Karaoke",
         save_video: bool = True,
-        render_image_batch: bool = False,
         encoder: str = "Auto (NVENC / CPU)",
         max_duration: float = 0.0,
         **kwargs,
@@ -1203,6 +1329,31 @@ class HZ3_YuE2_KaraokeVisualizer:
         total_frames = max(1, int(total_duration * fps))
 
         render_resources = _RenderResources(width, height, theme_cfg)
+        background_carousel = None
+        background_folder = os.path.abspath(os.path.expandvars(os.path.expanduser(str(background_folder or "").strip())))
+        if background_folder:
+            if os.path.isdir(background_folder):
+                try:
+                    candidate = _BackgroundCarousel(
+                        background_folder,
+                        width,
+                        height,
+                        render_resources.background,
+                        background_interval,
+                        background_mode,
+                        background_transition,
+                        background_transition_duration,
+                        background_transparency,
+                    )
+                    if candidate.paths:
+                        background_carousel = candidate
+                        logger.info("Visualizer backgrounds: %d images from %s", len(candidate.paths), background_folder)
+                    else:
+                        logger.warning("No supported images found in visualizer background folder '%s'. Using theme background.", background_folder)
+                except Exception as exc:
+                    logger.warning("Could not read visualizer background folder '%s': %s. Using theme background.", background_folder, exc)
+            else:
+                logger.warning("Visualizer background folder does not exist: '%s'. Using theme background.", background_folder)
 
         # Fonts
         font_main = _get_font(font_size, bold=True)
@@ -1275,7 +1426,6 @@ class HZ3_YuE2_KaraokeVisualizer:
                 logger.warning(f"Could not initialize AAC audio stream: {e}")
 
         # 4. Render & Encode Loop
-        image_batch_list = []
         band_db_all = None
         db_floor, db_span = -50.0, 48.0
         if visualizer_mode != "Rolling Mode" and has_audio and waveform_mono is not None:
@@ -1360,6 +1510,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                 vocal_samples=vocal_samples,
                 vocal_sample_rate=vocal_sample_rate,
                 render_resources=render_resources,
+                background_carousel=background_carousel,
             )
 
             render_seconds += time.perf_counter() - render_start
@@ -1369,10 +1520,6 @@ class HZ3_YuE2_KaraokeVisualizer:
                 container.mux(p)
 
             encode_seconds += time.perf_counter() - encode_start
-
-            if render_image_batch and (total_frames <= 1200 or frame_idx % 2 == 0):
-                arr = np.array(frame_img, dtype=np.float32) / 255.0
-                image_batch_list.append(arr)
 
         encode_start = time.perf_counter()
         for p in v_stream.encode():
@@ -1415,27 +1562,25 @@ class HZ3_YuE2_KaraokeVisualizer:
         elapsed = time.time() - t_start
         fps_rendered = float(total_frames) / max(0.01, elapsed)
 
-        if image_batch_list:
-            images_tensor = torch.from_numpy(np.stack(image_batch_list, axis=0))
-        else:
-            first_frame = self._render_frame(
-                0.0,
-                timeline,
-                smooth_bars,
-                peaks,
-                width,
-                height,
-                theme_cfg,
-                visualizer_mode,
-                font_main,
-                font_sub,
-                font_hud,
-                speaker_energies=(0.0, 0.0),
-                vocal_samples=vocal_samples,
-                vocal_sample_rate=vocal_sample_rate,
-                render_resources=render_resources,
-            )
-            images_tensor = torch.from_numpy(np.array(first_frame, dtype=np.float32) / 255.0).unsqueeze(0)
+        first_frame = self._render_frame(
+            0.0,
+            timeline,
+            smooth_bars,
+            peaks,
+            width,
+            height,
+            theme_cfg,
+            visualizer_mode,
+            font_main,
+            font_sub,
+            font_hud,
+            speaker_energies=(0.0, 0.0),
+            vocal_samples=vocal_samples,
+            vocal_sample_rate=vocal_sample_rate,
+            render_resources=render_resources,
+            background_carousel=background_carousel,
+        )
+        images_tensor = torch.from_numpy(np.array(first_frame, dtype=np.float32) / 255.0).unsqueeze(0)
 
         if not has_audio:
             silent_wav = torch.zeros((1, 2, int(audio_sr * min(total_duration, 1.0))))

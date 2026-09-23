@@ -80,6 +80,13 @@ generated song and renders the karaoke video (word sweep, chords, section HUD, s
 It also returns `timed_lyrics` (JSON with per-word times), `lrc_text` and an alignment
 `report`.
 
+Optionally set `background_folder` to a directory of PNG, JPG, JPEG, WEBP, or BMP files.
+The visualizer cycles through them alphabetically or in a shuffled order every
+`background_interval` seconds. Choose `Cut`, `Crossfade`, `Fade Through Black`, or
+`Wipe Left`, set the transition duration, and adjust `background_transparency` (0% is
+opaque; 100% shows only the theme background). It keeps only a few resized images in
+memory and returns a single preview frame; the MP4 contains the full animation.
+
 Lyric timing sources, tried in this order in `Auto` mode:
 
 1. **Forced alignment on audio** (`torchaudio.pipelines.MMS_FA`, multilingual CTC). Connect

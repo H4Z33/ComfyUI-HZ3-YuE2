@@ -140,3 +140,16 @@ ABC -> Lyrics Prosody.score_abc
 The mapping is still a hypothesis because ordinary ABC lacks explicit `w:`
 syllable-to-note anchors. The JSON output records that limitation and preserves
 the measurements used by the agent.
+# Fetch lyrics from an audio input
+
+The **HZ3 YuE2 · Fetch Lyrics from Audio** node takes a ComfyUI `AUDIO` input, creates a local Chromaprint fingerprint with `fpcalc`, identifies the recording through AcoustID, and retrieves plain or synchronized lyrics from LRCLIB. Its `lyrics` output prefers synchronized LRC text and can be connected directly to MixMash; `synced_lyrics` is also available separately, along with the matched title, artist, album, confidence, and status.
+
+Setup:
+
+1. Install Chromaprint so `fpcalc` is available on `PATH`, or enter the full executable path in the node's optional `fpcalc_path` field. On Windows, MusicBrainz Picard installs `fpcalc` with Chromaprint.
+2. Register a free AcoustID application and enter its client ID in the node. AcoustID's public service is limited to non-commercial usage and asks clients to stay below three requests per second.
+3. Connect your input audio. The node sends the fingerprint and duration to AcoustID, not the raw audio. LRCLIB does not require an API key.
+
+This lookup depends on the recording being present in AcoustID and its lyrics being present in LRCLIB. It is intended for identifying released recordings; original or substantially rearranged AI-generated songs may not be recognized. For those, provide the lyrics directly or transcribe the vocal track separately.
+
+References: [AcoustID API](https://acoustid.org/webservice), [LRCLIB API](https://lrclib.net/docs), [Chromaprint](https://github.com/acoustid/chromaprint).

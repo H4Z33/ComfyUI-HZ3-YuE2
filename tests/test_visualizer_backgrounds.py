@@ -4,6 +4,8 @@ import os
 import tempfile
 import unittest
 
+import av
+import numpy as np
 from PIL import Image
 
 from karaoke_visualizer import (
@@ -50,6 +52,25 @@ class BackgroundCarouselTests(unittest.TestCase):
     def pixel(self, image):
         return image.getpixel((0, 0))
 
+    @staticmethod
+    def write_test_video(path):
+        container = av.open(path, mode="w", format="mp4")
+        stream = container.add_stream("mpeg4", rate=2)
+        stream.width = 32
+        stream.height = 32
+        stream.pix_fmt = "yuv420p"
+        colors = ((255, 0, 0), (0, 0, 255)) + ((0, 255, 0),) * 10
+        for index, color in enumerate(colors):
+            pixels = np.empty((32, 32, 3), dtype=np.uint8)
+            pixels[:] = color
+            frame = av.VideoFrame.from_ndarray(pixels, format="rgb24")
+            frame.pts = index
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
+
     def test_alphabetical_order_and_interval_rotation(self):
         carousel = self.carousel()
         self.assertEqual([os.path.basename(path) for path in carousel.paths], ["01-red.png", "02-blue.png"])
@@ -61,6 +82,42 @@ class BackgroundCarouselTests(unittest.TestCase):
     def test_transparency_composites_over_theme_background(self):
         carousel = self.carousel(transparency=50.0, transition="Cut")
         self.assertEqual(self.pixel(carousel.frame(0)), (128, 0, 0))
+
+    def test_still_images_get_slow_zoom_and_pan(self):
+        gradient = np.zeros((120, 120, 3), dtype=np.uint8)
+        gradient[:, :, 0] = np.arange(120, dtype=np.uint8)[None, :]
+        gradient[:, :, 1] = np.arange(120, dtype=np.uint8)[:, None]
+        Image.fromarray(gradient).save(os.path.join(self.temp_dir.name, "03-gradient.png"))
+        carousel = self.carousel(width=40, height=40, transition="Cut")
+        first = carousel.frame(10.0)
+        moved = carousel.frame(12.5)
+        self.assertNotEqual(first.tobytes(), moved.tobytes())
+
+    def test_video_backgrounds_play_in_order_with_transparency(self):
+        video_path = os.path.join(self.temp_dir.name, "03-colors.mp4")
+        self.write_test_video(video_path)
+        carousel = self.carousel(transition="Cut", transparency=50.0)
+        self.addCleanup(carousel.close)
+
+        first_video_frame = carousel.frame(10.1).getpixel((2, 2))
+        second_video_frame = carousel.frame(10.6).getpixel((2, 2))
+        late_video_frame = carousel.frame(15.2).getpixel((2, 2))
+        self.assertGreater(first_video_frame[0], 100)
+        self.assertLess(first_video_frame[2], 40)
+        self.assertGreater(second_video_frame[2], 100)
+        self.assertLess(second_video_frame[0], 40)
+        self.assertGreater(late_video_frame[1], 100)
+        self.assertLess(late_video_frame[0], 40)
+
+    def test_video_backgrounds_use_selected_transition(self):
+        video_path = os.path.join(self.temp_dir.name, "03-colors.mp4")
+        self.write_test_video(video_path)
+        carousel = self.carousel(transition="Crossfade", transition_duration=0.4)
+        self.addCleanup(carousel.close)
+
+        blended = carousel.frame(10.2).getpixel((2, 2))
+        self.assertGreater(blended[0], 90)
+        self.assertGreater(blended[2], 90)
 
     def test_fade_through_black_and_wipe_are_renderable(self):
         for transition in ("Fade Through Black", "Wipe Left"):

@@ -15,6 +15,7 @@ import math
 import os
 import random
 import time
+from bisect import bisect_right
 from collections import OrderedDict, deque
 from functools import lru_cache
 from typing import Any
@@ -147,10 +148,104 @@ RESOLUTIONS: dict[str, tuple[int, int]] = {
 BACKGROUND_TRANSITIONS = ["Cut", "Crossfade", "Fade Through Black", "Wipe Left"]
 
 
+class _BackgroundVideoReader:
+    """Sequentially decode video background frames with bounded memory."""
+
+    def __init__(self, path: str, width: int, height: int):
+        self.path = path
+        self.width = int(width)
+        self.height = int(height)
+        self.container = av.open(path, mode="r")
+        self.stream = next(stream for stream in self.container.streams if stream.type == "video")
+        self.time_base = float(self.stream.time_base or 1 / 30)
+        self.frame_rate = float(self.stream.average_rate or self.stream.base_rate or 30.0)
+        self.duration = None
+        if self.stream.duration is not None and self.stream.time_base is not None:
+            self.duration = float(self.stream.duration * self.stream.time_base)
+        elif self.container.duration is not None:
+            self.duration = float(self.container.duration / av.time_base)
+        self.duration = self.duration if self.duration and self.duration > 0 else None
+        self._decoder = iter(self.container.decode(self.stream))
+        self._previous: tuple[float, av.VideoFrame] | None = None
+        self._next: tuple[float, av.VideoFrame] | None = None
+        self._last_request: float | None = None
+        self._last_image: Image.Image | None = None
+
+    def _frame_time(self, frame: av.VideoFrame, fallback: float = 0.0) -> float:
+        if frame.time is not None:
+            return float(frame.time)
+        if frame.pts is not None and self.stream.time_base is not None:
+            return float(frame.pts * self.stream.time_base)
+        return fallback
+
+    def _decode_next(self) -> tuple[float, av.VideoFrame] | None:
+        try:
+            frame = next(self._decoder)
+        except StopIteration:
+            return None
+        fallback = (self._previous[0] if self._previous else 0.0) + 1.0 / max(1.0, self.frame_rate)
+        return self._frame_time(frame, fallback), frame
+
+    def _seek(self, seconds: float) -> None:
+        offset = max(0, int(seconds / max(self.time_base, 1e-9)))
+        self.container.seek(offset, stream=self.stream, backward=True, any_frame=False)
+        self._decoder = iter(self.container.decode(self.stream))
+        self._previous = None
+        self._next = None
+        self._last_image = None
+
+    def frame(self, seconds: float) -> Image.Image:
+        target = max(0.0, float(seconds))
+        if self.duration:
+            target %= self.duration
+
+        if self._last_request is not None and (
+            target < self._last_request - 1e-4 or target - self._last_request > 2.0
+        ):
+            self._seek(target)
+        elif self._last_request is None and target > 1.0:
+            self._seek(target)
+
+        if self._next is None:
+            self._next = self._decode_next()
+        while self._next is not None and self._next[0] < target:
+            self._previous = self._next
+            self._next = self._decode_next()
+
+        candidates = [candidate for candidate in (self._previous, self._next) if candidate is not None]
+        if not candidates:
+            if self._last_image is not None:
+                return self._last_image.copy()
+            raise RuntimeError(f"Video background contains no decodable frames: {self.path}")
+
+        _, selected = min(candidates, key=lambda item: abs(item[0] - target))
+        self._last_request = target
+        self._last_image = ImageOps.fit(
+            selected.to_image().convert("RGBA"),
+            (self.width, self.height),
+            method=Image.Resampling.BILINEAR,
+        )
+        return self._last_image.copy()
+
+    def close(self) -> None:
+        if self.container is not None:
+            self.container.close()
+            self.container = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
 class _BackgroundCarousel:
-    """Load, sequence, transition, and composite a folder of images for video frames."""
+    """Animate stills, sequence clips, and composite backgrounds for video frames."""
 
     IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
+    VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"}
+    IMAGE_OVERSCAN = 1.10
+    IMAGE_ZOOM_RANGE = 0.06
 
     def __init__(
         self,
@@ -173,7 +268,7 @@ class _BackgroundCarousel:
         self.opacity = 1.0 - max(0.0, min(100.0, float(transparency))) / 100.0
         self.paths = sorted(
             (os.path.join(folder, name) for name in os.listdir(folder)
-             if os.path.splitext(name)[1].lower() in self.IMAGE_EXTENSIONS
+             if os.path.splitext(name)[1].lower() in self.IMAGE_EXTENSIONS | self.VIDEO_EXTENSIONS
              and os.path.isfile(os.path.join(folder, name))),
             key=lambda path: os.path.basename(path).casefold(),
         )
@@ -183,7 +278,42 @@ class _BackgroundCarousel:
                 self.paths[0], self.paths[1] = self.paths[1], self.paths[0]
         self.cache: OrderedDict[str, Image.Image] = OrderedDict()
         self.cache_limit = 3
+        self.video_readers: dict[str, _BackgroundVideoReader] = {}
+        self.video_failures: set[str] = set()
+        self.image_paths = {path for path in self.paths if self._is_image(path)}
+        self.video_paths = set(self.paths) - self.image_paths
+        self.asset_durations = [
+            self.interval if path in self.image_paths else (self._probe_video_duration(path) or self.interval)
+            for path in self.paths
+        ]
+        self.asset_duration_by_path = dict(zip(self.paths, self.asset_durations))
+        self.cycle_duration = sum(self.asset_durations) or self.interval
+        self.asset_end_times = []
+        elapsed = 0.0
+        for duration in self.asset_durations:
+            elapsed += duration
+            self.asset_end_times.append(elapsed)
         self.black = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 255))
+
+    @classmethod
+    def _is_image(cls, path: str) -> bool:
+        return os.path.splitext(path)[1].lower() in cls.IMAGE_EXTENSIONS
+
+    @staticmethod
+    def _probe_video_duration(path: str) -> float | None:
+        try:
+            with av.open(path, mode="r") as container:
+                stream = next(stream for stream in container.streams if stream.type == "video")
+                if stream.duration is not None and stream.time_base is not None:
+                    duration = float(stream.duration * stream.time_base)
+                elif container.duration is not None:
+                    duration = float(container.duration / av.time_base)
+                else:
+                    return None
+                return duration if duration > 0 else None
+        except Exception as exc:
+            logger.warning("Could not inspect visualizer background video '%s': %s", path, exc)
+            return None
 
     def _load(self, path: str) -> Image.Image:
         cached = self.cache.get(path)
@@ -193,7 +323,11 @@ class _BackgroundCarousel:
         try:
             with Image.open(path) as source:
                 image = ImageOps.exif_transpose(source).convert("RGBA")
-                image = ImageOps.fit(image, (self.width, self.height), method=Image.Resampling.LANCZOS)
+                overscan_size = (
+                    max(self.width, int(round(self.width * self.IMAGE_OVERSCAN))),
+                    max(self.height, int(round(self.height * self.IMAGE_OVERSCAN))),
+                )
+                image = ImageOps.fit(image, overscan_size, method=Image.Resampling.LANCZOS)
         except Exception as exc:
             logger.warning("Could not load visualizer background image '%s': %s", path, exc)
             image = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
@@ -203,24 +337,80 @@ class _BackgroundCarousel:
             self.cache.popitem(last=False)
         return image
 
+    def _image_frame(self, path: str, seconds: float) -> Image.Image:
+        source = self._load(path)
+        duration = self.asset_duration_by_path[path]
+        phase = (max(0.0, float(seconds)) % duration) / max(duration, 1e-6)
+        # A slow Ken Burns cycle: gentle push-in plus a smooth diagonal pan.
+        zoom = 1.0 + self.IMAGE_ZOOM_RANGE * (0.5 - 0.5 * math.cos(2.0 * math.pi * phase))
+        crop_width = min(source.width, max(1, int(round(self.width / zoom))))
+        crop_height = min(source.height, max(1, int(round(self.height / zoom))))
+        available_x = max(0, source.width - crop_width)
+        available_y = max(0, source.height - crop_height)
+        pan_x = 0.42 * available_x * math.sin(2.0 * math.pi * phase)
+        pan_y = 0.32 * available_y * math.sin(2.0 * math.pi * phase + math.pi / 3.0)
+        left = int(round((available_x / 2.0) + pan_x))
+        top = int(round((available_y / 2.0) + pan_y))
+        return source.crop((left, top, left + crop_width, top + crop_height)).resize(
+            (self.width, self.height), Image.Resampling.BILINEAR
+        )
+
+    def _video_frame(self, path: str, seconds: float) -> Image.Image:
+        if path in self.video_failures:
+            return self.base.copy().convert("RGBA")
+        try:
+            reader = self.video_readers.get(path)
+            if reader is None:
+                reader = _BackgroundVideoReader(path, self.width, self.height)
+                self.video_readers[path] = reader
+            return reader.frame(seconds)
+        except Exception as exc:
+            self.video_failures.add(path)
+            logger.warning("Could not decode visualizer background video '%s': %s", path, exc)
+            reader = self.video_readers.pop(path, None)
+            if reader is not None:
+                reader.close()
+            return self.base.copy().convert("RGBA")
+
+    def _media_frame(self, path: str, seconds: float) -> Image.Image:
+        if path in self.image_paths:
+            return self._image_frame(path, seconds)
+        return self._video_frame(path, seconds)
+
+    def close(self) -> None:
+        for reader in self.video_readers.values():
+            reader.close()
+        self.video_readers.clear()
+
     def frame(self, seconds: float) -> Image.Image:
         if not self.paths or self.opacity <= 0.0:
             return self.base.copy()
 
-        slot = max(0, int(max(0.0, float(seconds)) // self.interval))
-        current_index = slot % len(self.paths)
-        current = self._load(self.paths[current_index])
+        seconds = max(0.0, float(seconds))
+        cycle = int(seconds // self.cycle_duration)
+        cycle_phase = seconds - cycle * self.cycle_duration
+        current_index = min(bisect_right(self.asset_end_times, cycle_phase), len(self.paths) - 1)
+        slot_start = 0.0 if current_index == 0 else self.asset_end_times[current_index - 1]
+        phase = max(0.0, cycle_phase - slot_start)
+        current = self._media_frame(self.paths[current_index], phase)
         previous = None
-        phase = max(0.0, float(seconds)) % self.interval
+        has_previous_asset = len(self.paths) > 1 and (current_index > 0 or cycle > 0)
+        previous_index = (current_index - 1) % len(self.paths)
+        transition_duration = min(
+            self.transition_duration,
+            self.asset_durations[current_index],
+            self.asset_durations[previous_index],
+        )
         in_transition = (
-            slot > 0
+            has_previous_asset
             and self.transition != "Cut"
-            and self.transition_duration > 0.0
-            and phase < self.transition_duration
+            and transition_duration > 0.0
+            and phase < transition_duration
         )
         if in_transition:
-            previous = self._load(self.paths[(current_index - 1) % len(self.paths)])
-            amount = max(0.0, min(1.0, phase / self.transition_duration))
+            previous_phase = self.asset_durations[previous_index] - transition_duration + phase
+            previous = self._media_frame(self.paths[previous_index], previous_phase)
+            amount = max(0.0, min(1.0, phase / transition_duration))
             if self.transition == "Crossfade":
                 image = Image.blend(previous, current, amount)
             elif self.transition == "Fade Through Black":
@@ -378,11 +568,11 @@ class HZ3_YuE2_KaraokeVisualizer:
                 "theme": (list(THEMES.keys()), {"default": "Cyberpunk Neon"}),
                 "background_folder": (
                     "STRING",
-                    {"default": "", "multiline": False, "tooltip": "Optional folder of background images. Images are listed alphabetically, or shuffled in Random mode."},
+                    {"default": "", "multiline": False, "tooltip": "Optional folder of images and video clips. Images get slow zoom and pan; video clips play as-is. Items are listed alphabetically or shuffled in Random mode."},
                 ),
                 "background_interval": (
                     "FLOAT",
-                    {"default": 8.0, "min": 0.5, "max": 300.0, "step": 0.5, "tooltip": "Seconds between background changes."},
+                    {"default": 8.0, "min": 0.5, "max": 300.0, "step": 0.5, "tooltip": "Seconds each still image stays on screen; video clips play for their full duration."},
                 ),
                 "background_mode": (
                     ["Alphabetical", "Random"],
@@ -390,11 +580,11 @@ class HZ3_YuE2_KaraokeVisualizer:
                 ),
                 "background_transition": (
                     BACKGROUND_TRANSITIONS,
-                    {"default": "Crossfade", "tooltip": "Transition between background images."},
+                    {"default": "Crossfade", "tooltip": "Transition between image and video backgrounds."},
                 ),
                 "background_transition_duration": (
                     "FLOAT",
-                    {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1, "tooltip": "Length of each transition in seconds (up to the change interval)."},
+                    {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1, "tooltip": "Length of each transition in seconds, capped by the adjacent background durations."},
                 ),
                 "background_transparency": (
                     "FLOAT",
@@ -1352,9 +1542,14 @@ class HZ3_YuE2_KaraokeVisualizer:
                     )
                     if candidate.paths:
                         background_carousel = candidate
-                        logger.info("Visualizer backgrounds: %d images from %s", len(candidate.paths), background_folder)
+                        logger.info(
+                            "Visualizer backgrounds: %d images and %d video clips from %s",
+                            len(candidate.image_paths),
+                            len(candidate.video_paths),
+                            background_folder,
+                        )
                     else:
-                        logger.warning("No supported images found in visualizer background folder '%s'. Using theme background.", background_folder)
+                        logger.warning("No supported images or videos found in visualizer background folder '%s'. Using theme background.", background_folder)
                 except Exception as exc:
                     logger.warning("Could not read visualizer background folder '%s': %s. Using theme background.", background_folder, exc)
             else:
@@ -1591,6 +1786,8 @@ class HZ3_YuE2_KaraokeVisualizer:
             background_carousel=background_carousel,
         )
         images_tensor = torch.from_numpy(np.array(first_frame, dtype=np.float32) / 255.0).unsqueeze(0)
+        if background_carousel is not None:
+            background_carousel.close()
 
         if not has_audio:
             silent_wav = torch.zeros((1, 2, int(audio_sr * min(total_duration, 1.0))))

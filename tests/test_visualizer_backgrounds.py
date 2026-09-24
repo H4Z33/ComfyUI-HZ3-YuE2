@@ -14,6 +14,7 @@ from karaoke_visualizer import (
     HZ3_YuE2_KaraokeVisualizer,
     _BackgroundCarousel,
     _rolling_scope_source,
+    _scaled_font_size,
 )
 
 
@@ -25,6 +26,14 @@ class RollingScopeSourceTests(unittest.TestCase):
     def test_prefers_connected_vocal_stem(self):
         vocals = object()
         self.assertIs(_rolling_scope_source(vocals, object()), vocals)
+
+
+class FontScalingTests(unittest.TestCase):
+    def test_font_size_scales_with_resolution_short_edge(self):
+        self.assertEqual(_scaled_font_size(38, 1280, 720), 38)
+        self.assertEqual(_scaled_font_size(38, 1920, 1080), 57)
+        self.assertEqual(_scaled_font_size(38, 854, 480), 25)
+        self.assertEqual(_scaled_font_size(38, 720, 1280), 38)
 
 
 class RollingLyricsWindowTests(unittest.TestCase):

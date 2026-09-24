@@ -450,6 +450,12 @@ def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFo
         return None
 
 
+def _scaled_font_size(base_size: int, width: int, height: int) -> int:
+    """Scale the font control relative to the 720px short edge reference."""
+    scale = max(1, min(int(width), int(height))) / 720.0
+    return max(1, int(round(int(base_size) * scale)))
+
+
 def _lerp_color(c1: tuple[int, int, int], c2: tuple[int, int, int], t: float) -> tuple[int, int, int]:
     """Linear interpolate between two RGB colors."""
     t = max(0.0, min(1.0, float(t)))
@@ -594,7 +600,10 @@ class HZ3_YuE2_KaraokeVisualizer:
                     ["Spectrum Bars", "Mirrored Spectrum", "Waveform Oscilloscope", "Rolling Mode"],
                     {"default": "Spectrum Bars"},
                 ),
-                "font_size": ("INT", {"default": 38, "min": 20, "max": 72, "step": 2}),
+                "font_size": (
+                    "INT",
+                    {"default": 38, "min": 20, "max": 72, "step": 2, "tooltip": "Base lyric font size at 1280x720; scales with output resolution."},
+                ),
                 "filename_prefix": ("STRING", {"default": "video/HZ3-Karaoke"}),
                 "save_video": ("BOOLEAN", {"default": True}),
                 "encoder": (
@@ -1562,9 +1571,10 @@ class HZ3_YuE2_KaraokeVisualizer:
                 logger.warning("Visualizer background folder does not exist: '%s'. Using theme background.", background_folder)
 
         # Fonts
-        font_main = _get_font(font_size, bold=True)
-        font_sub = _get_font(int(font_size * 0.65), bold=False)
-        font_hud = _get_font(max(14, int(font_size * 0.45)), bold=True)
+        scaled_font_size = _scaled_font_size(font_size, width, height)
+        font_main = _get_font(scaled_font_size, bold=True)
+        font_sub = _get_font(max(1, int(scaled_font_size * 0.65)), bold=False)
+        font_hud = _get_font(max(14, int(scaled_font_size * 0.45)), bold=True)
 
         # Visualizer frequency bands
         num_bands = 48

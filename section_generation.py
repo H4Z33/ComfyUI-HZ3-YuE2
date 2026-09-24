@@ -167,31 +167,64 @@ def _common_prefix_length(prefixes: list[list[int]], maximum: int) -> int:
     return limit
 
 
-def _clone_prefix_cache(model, source_cache, prefix_length: int, capacity: int, device, dtype):
+def _init_kv_cache(model, batch: int, capacity: int, device, dtype, fixed: bool | None = None):
+    """Initialize a YuE2 cache layout without leaving the model in a changed mode."""
+    transformer = model.model
+    previous = getattr(transformer, "fixed_kv", None)
+    if fixed is not None and previous is not None:
+        transformer.fixed_kv = fixed
+    try:
+        return transformer.init_kv_cache(batch, capacity, device, dtype)
+    finally:
+        if fixed is not None and previous is not None:
+            transformer.fixed_kv = previous
+
+
+def _clone_prefix_cache(
+    model, source_cache, prefix_length: int, capacity: int, device, dtype, *, force_tuple=False
+):
     """Create a writable branch cache containing only the immutable base prefix."""
     if prefix_length < 1:
         raise ValueError("The shared YuE2 prefix must contain at least one token.")
     if capacity < prefix_length:
         raise ValueError("A section KV cache is shorter than its shared prefix.")
 
-    branch = model.model.init_kv_cache(1, capacity, device, dtype)
+    branch = _init_kv_cache(
+        model, 1, capacity, device, dtype, fixed=False if force_tuple else None
+    )
     if len(branch) != len(source_cache):
         raise ValueError("YuE2 returned incompatible base and section KV caches.")
 
     for layer_index, (source, target) in enumerate(zip(source_cache, branch)):
         if hasattr(source, "key") and hasattr(source, "value"):
-            if not (hasattr(target, "key") and hasattr(target, "value")):
-                raise ValueError("YuE2 changed KV cache types while branching a section.")
-            if source.key.shape[1] < prefix_length or target.key.shape[1] < prefix_length:
+            if source.key.shape[1] < prefix_length:
                 raise ValueError("YuE2 fixed KV cache cannot hold the frozen prefix.")
-            target.key[:, :prefix_length].copy_(source.key[:, :prefix_length])
-            target.value[:, :prefix_length].copy_(source.value[:, :prefix_length])
-            target.index = prefix_length
-            if torch.is_tensor(getattr(target, "seqlen", None)):
-                target.seqlen.fill_(prefix_length)
-            if torch.is_tensor(getattr(target, "position", None)):
-                target.position.fill_(prefix_length)
-            continue
+            if hasattr(target, "key") and hasattr(target, "value"):
+                if target.key.shape[1] < prefix_length:
+                    raise ValueError("YuE2 fixed KV cache cannot hold the frozen prefix.")
+                target.key[:, :prefix_length].copy_(source.key[:, :prefix_length])
+                target.value[:, :prefix_length].copy_(source.value[:, :prefix_length])
+                target.index = prefix_length
+                if torch.is_tensor(getattr(target, "seqlen", None)):
+                    target.seqlen.fill_(prefix_length)
+                if torch.is_tensor(getattr(target, "position", None)):
+                    target.position.fill_(prefix_length)
+                continue
+
+            if isinstance(target, (tuple, list)) and len(target) >= 2:
+                target_key, target_value = target[0], target[1]
+                if target_key.shape[2] < prefix_length:
+                    raise ValueError("YuE2 tuple KV cache cannot hold the frozen prefix.")
+                target_key[:, :, :prefix_length].copy_(
+                    source.key[:, :prefix_length].transpose(1, 2)
+                )
+                target_value[:, :, :prefix_length].copy_(
+                    source.value[:, :prefix_length].transpose(1, 2)
+                )
+                branch[layer_index] = (target_key, target_value, prefix_length)
+                continue
+
+            raise ValueError("YuE2 returned incompatible base and section KV cache types.")
 
         if (
             isinstance(source, (tuple, list))
@@ -214,6 +247,29 @@ def _clone_prefix_cache(model, source_cache, prefix_length: int, capacity: int, 
 
         raise ValueError("YuE2 returned an unsupported KV cache format.")
     return branch
+
+
+def _tuple_cache_to_fixed(model, cache, length: int, capacity: int, device, dtype):
+    """Convert a tuple KV cache to Comfy's fast single-token decode cache."""
+    if not cache or hasattr(cache[0], "key"):
+        return cache
+    fixed_cache = _init_kv_cache(model, 1, capacity, device, dtype, fixed=True)
+    if not fixed_cache or not hasattr(fixed_cache[0], "key"):
+        return cache
+    if len(fixed_cache) != len(cache):
+        raise ValueError("YuE2 returned incompatible tuple and fixed KV caches.")
+
+    for source, target in zip(cache, fixed_cache):
+        if target.key.shape[1] < length or source[0].shape[2] < length:
+            raise ValueError("YuE2 KV cache cannot hold the section prompt.")
+        target.key[:, :length].copy_(source[0][:, :, :length].transpose(1, 2))
+        target.value[:, :length].copy_(source[1][:, :, :length].transpose(1, 2))
+        target.index = length
+        if torch.is_tensor(getattr(target, "seqlen", None)):
+            target.seqlen.fill_(length)
+        if torch.is_tensor(getattr(target, "position", None)):
+            target.position.fill_(length)
+    return fixed_cache
 
 
 def _forward_with_cache(model, cache, token_ids: list[int], position_start: int, device, dtype):
@@ -309,22 +365,38 @@ def _generate_section_tokens(
             "Shorten this section's lyrics, ABC, or target duration."
         )
 
+    positive_uses_fixed_kv = bool(
+        positive_base_cache and hasattr(positive_base_cache[0], "key")
+    )
     positive_cache = _clone_prefix_cache(
-        model, positive_base_cache, len(positive_base), capacity, device, dtype
+        model, positive_base_cache, len(positive_base), capacity, device, dtype,
+        force_tuple=True,
     )
     positive_logits, positive_cache = _forward_with_cache(
         model, positive_cache, positive_suffix, len(positive_base), device, dtype
     )
+    if positive_uses_fixed_kv:
+        positive_cache = _tuple_cache_to_fixed(
+            model, positive_cache, positive_length, capacity, device, dtype
+        )
 
     negative_cache = None
     negative_logits = None
     if cfg_scale != 1.0:
+        negative_uses_fixed_kv = bool(
+            negative_base_cache and hasattr(negative_base_cache[0], "key")
+        )
         negative_cache = _clone_prefix_cache(
-            model, negative_base_cache, len(negative_base), capacity, device, dtype
+            model, negative_base_cache, len(negative_base), capacity, device, dtype,
+            force_tuple=True,
         )
         negative_logits, negative_cache = _forward_with_cache(
             model, negative_cache, negative_suffix, len(negative_base), device, dtype
         )
+        if negative_uses_fixed_kv:
+            negative_cache = _tuple_cache_to_fixed(
+                model, negative_cache, len(negative_full), capacity, device, dtype
+            )
 
     target_frames = section["frames"]
     positive_decode_state = None

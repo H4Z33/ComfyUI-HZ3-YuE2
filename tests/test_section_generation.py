@@ -89,10 +89,10 @@ class FakeFixedKVCache:
 class FakeSectionTransformer:
     def __init__(self, fixed_cache=False):
         self.base_caches = []
-        self.fixed_cache = fixed_cache
+        self.fixed_kv = fixed_cache
 
     def init_kv_cache(self, batch, capacity, device, dtype):
-        if self.fixed_cache:
+        if self.fixed_kv:
             return [FakeFixedKVCache(batch, capacity, device, dtype)]
         return [(torch.zeros((batch, 1, capacity, 1), device=device, dtype=dtype),
                  torch.zeros((batch, 1, capacity, 1), device=device, dtype=dtype), 0)]

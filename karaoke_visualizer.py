@@ -47,6 +47,11 @@ except (ImportError, ValueError):
 logger = logging.getLogger("HZ3.KaraokeVisualizer")
 
 
+def _rolling_scope_source(vocals_mono, mix_mono):
+    """Use isolated vocals for the rolling scope when available, else the mix."""
+    return vocals_mono if vocals_mono is not None else mix_mono
+
+
 # --- COLOR THEMES ---
 THEMES: dict[str, dict[str, Any]] = {
     "Cyberpunk Neon": {
@@ -1446,10 +1451,15 @@ class HZ3_YuE2_KaraokeVisualizer:
                 rms_raw = self._frame_rms(waveform_mono, audio_sr, fps, total_frames)
                 p95 = float(np.percentile(rms_raw, 95)) if len(rms_raw) else 1.0
                 speaker_rms_all = np.clip(rms_raw / max(1e-4, p95), 0.0, 1.0)
-            if vocals_mono is not None and len(vocals_mono):
-                vocal_sample_rate = int(vocals.get("sample_rate", 44100))
-                vocal_peak = max(1e-4, float(np.max(np.abs(vocals_mono))))
-                vocal_samples = vocals_mono / vocal_peak
+            oscilloscope_mono = _rolling_scope_source(vocals_mono, waveform_mono)
+            if oscilloscope_mono is not None and len(oscilloscope_mono):
+                vocal_sample_rate = (
+                    int(vocals.get("sample_rate", 44100)) if has_vocals else audio_sr
+                )
+                vocal_peak = max(1e-4, float(np.max(np.abs(oscilloscope_mono))))
+                vocal_samples = oscilloscope_mono / vocal_peak
+                scope_source = "vocal stem" if has_vocals else "full mix fallback"
+                logger.info("Rolling Mode oscilloscope source: %s", scope_source)
 
         render_seconds = 0.0
         encode_seconds = 0.0
@@ -1601,6 +1611,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         render_summary = (
             f"Rendered Karaoke & Visualizer · {total_frames} frames ({total_duration:.1f}s) @ {fps}fps\n"
             f"Encoder: {chosen_codec} · Resolution: {width}x{height} · Speed: {fps_rendered:.1f} fps ({elapsed:.2f}s total)\n"
+            f"Rolling oscilloscope: {'vocal stem' if has_vocals else 'full mix fallback'}\n"
             f"Timing: drawing {render_seconds:.2f}s · video encoding {encode_seconds:.2f}s · audio/finalize {audio_mux_seconds:.2f}s\n"
             f"Lyrics: {sung_lines}/{len(timed_lines)} lines timed via {alignment_label}\n"
             f"Saved MP4: {video_full_path}"

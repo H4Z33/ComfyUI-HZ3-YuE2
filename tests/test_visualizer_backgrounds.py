@@ -6,7 +6,22 @@ import unittest
 
 from PIL import Image
 
-from karaoke_visualizer import BACKGROUND_TRANSITIONS, HZ3_YuE2_KaraokeVisualizer, _BackgroundCarousel
+from karaoke_visualizer import (
+    BACKGROUND_TRANSITIONS,
+    HZ3_YuE2_KaraokeVisualizer,
+    _BackgroundCarousel,
+    _rolling_scope_source,
+)
+
+
+class RollingScopeSourceTests(unittest.TestCase):
+    def test_uses_mix_when_no_vocal_stem_is_connected(self):
+        mix = object()
+        self.assertIs(_rolling_scope_source(None, mix), mix)
+
+    def test_prefers_connected_vocal_stem(self):
+        vocals = object()
+        self.assertIs(_rolling_scope_source(vocals, object()), vocals)
 
 
 class BackgroundCarouselTests(unittest.TestCase):

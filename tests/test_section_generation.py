@@ -43,6 +43,19 @@ V: Ins
 G32|
 '''
 
+
+ABC_TIED_ACROSS_SECTION = HEADER + '''% intro
+V: Vocal
+Z|
+V: Ins
+G32-|
+% verse 1
+V: Vocal
+"C"E32|
+V: Ins
+G32|
+'''
+
 LYRICS = """[Intro]
 (instrumental)
 
@@ -172,6 +185,14 @@ class SectionGenerationTests(unittest.TestCase):
         self.assertEqual(sections[0]["lyrics"], "(instrumental)")
         self.assertEqual(sections[1]["lyrics"], "first line\nsecond line")
         self.assertEqual(sections[0]["abc"].count("% intro"), 1)
+
+    def test_keeps_a_valid_tie_that_crosses_a_section_boundary(self):
+        sections = generation._build_section_specs(ABC_TIED_ACROSS_SECTION, LYRICS)
+
+        self.assertEqual([section["seconds"] for section in sections], [2.0, 2.0])
+        self.assertTrue(sections[0]["abc"].rstrip().endswith("G32-|"))
+        self.assertEqual(sections[0]["bars"], 1)
+        self.assertEqual(sections[1]["bars"], 1)
 
     def test_rejects_out_of_order_or_mismatched_section_names(self):
         with self.assertRaisesRegex(ValueError, "does not match"):

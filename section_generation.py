@@ -28,6 +28,7 @@ from comfy.text_encoders.yue2 import (
 )
 from comfy.text_encoders.llama import rope_matrix
 
+from .abc_score import parse as parse_abc
 from .score_analysis import inspect_score
 from .sheetsage2_sections import split_abc_by_sections
 from .token_stream import _prepare_model
@@ -97,7 +98,18 @@ def _build_section_specs(score_abc: str, lyrics: str) -> list[dict]:
             f"{len(lyric_sections)} [Section] block(s). They must match one-to-one."
         )
 
+    # Validate and time the complete score before splitting it for YuE2. A
+    # tied note may legitimately continue across a section marker; parsing each
+    # fragment independently would reject that valid tie at the fragment edge.
+    parsed_score = parse_abc(score_abc)
+    score_sections = inspect_score(score_abc, lyrics)["sections"]
+    if len(score_sections) != len(abc_sections):
+        raise ValueError(
+            "ABC section markers do not match the score's parsed section boundaries."
+        )
+
     specs = []
+    bar_cursor = 0
     for index, ((abc_name, raw_fragment), lyric_section) in enumerate(
         zip(abc_sections, lyric_sections), 1
     ):
@@ -114,21 +126,31 @@ def _build_section_specs(score_abc: str, lyrics: str) -> list[dict]:
             )
 
         section_abc = raw_fragment
-        score = inspect_score(section_abc, lyric_section["lyrics"])
-        target_frames = round(float(score["seconds"]) * FRAMES_PER_SECOND)
+        score_section = score_sections[index - 1]
+        bars = len(score_section["vocal"])
+        section_bars = parsed_score.voices["Vocal"].bars[bar_cursor:bar_cursor + bars]
+        if bars < 1 or len(section_bars) != bars:
+            raise ValueError(f"ABC section {abc_name!r} has no measurable duration.")
+        bar_cursor += bars
+        seconds = sum(
+            float(length) * 60 / parsed_score.bpm
+            for _, length, _meter in section_bars
+        )
+        target_frames = round(seconds * FRAMES_PER_SECOND)
         if target_frames < 1:
             raise ValueError(f"ABC section {abc_name!r} has no measurable duration.")
+        first_meter = section_bars[0][2]
         specs.append(
             {
                 "name": abc_name,
                 "lyrics_name": lyric_section["name"],
                 "lyrics": lyric_section["lyrics"],
                 "abc": section_abc,
-                "bars": int(score["bars"]),
-                "seconds": float(score["seconds"]),
+                "bars": bars,
+                "seconds": seconds,
                 "frames": target_frames,
-                "bpm": int(score["bpm"]),
-                "meter": str(score["meter"]),
+                "bpm": int(parsed_score.bpm),
+                "meter": f"{first_meter[0]}/{first_meter[1]}",
             }
         )
     return specs

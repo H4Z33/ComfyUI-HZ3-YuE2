@@ -258,6 +258,7 @@ class _BackgroundCarousel:
         transition: str,
         transition_duration: float,
         transparency: float,
+        motion_speed: float = 0.25,
     ):
         self.width = int(width)
         self.height = int(height)
@@ -266,6 +267,7 @@ class _BackgroundCarousel:
         self.transition = transition if transition in BACKGROUND_TRANSITIONS else "Crossfade"
         self.transition_duration = min(self.interval, max(0.0, float(transition_duration)))
         self.opacity = 1.0 - max(0.0, min(100.0, float(transparency))) / 100.0
+        self.motion_speed = max(0.0, min(2.0, float(motion_speed)))
         self.paths = sorted(
             (os.path.join(folder, name) for name in os.listdir(folder)
              if os.path.splitext(name)[1].lower() in self.IMAGE_EXTENSIONS | self.VIDEO_EXTENSIONS
@@ -286,7 +288,6 @@ class _BackgroundCarousel:
             self.interval if path in self.image_paths else (self._probe_video_duration(path) or self.interval)
             for path in self.paths
         ]
-        self.asset_duration_by_path = dict(zip(self.paths, self.asset_durations))
         self.cycle_duration = sum(self.asset_durations) or self.interval
         self.asset_end_times = []
         elapsed = 0.0
@@ -339,8 +340,7 @@ class _BackgroundCarousel:
 
     def _image_frame(self, path: str, seconds: float) -> Image.Image:
         source = self._load(path)
-        duration = self.asset_duration_by_path[path]
-        phase = (max(0.0, float(seconds)) % duration) / max(duration, 1e-6)
+        phase = (max(0.0, float(seconds)) * self.motion_speed / self.interval) % 1.0
         # A slow Ken Burns cycle: gentle push-in plus a smooth diagonal pan.
         zoom = 1.0 + self.IMAGE_ZOOM_RANGE * (0.5 - 0.5 * math.cos(2.0 * math.pi * phase))
         crop_width = min(source.width, max(1, int(round(self.width / zoom))))
@@ -372,9 +372,9 @@ class _BackgroundCarousel:
                 reader.close()
             return self.base.copy().convert("RGBA")
 
-    def _media_frame(self, path: str, seconds: float) -> Image.Image:
+    def _media_frame(self, path: str, seconds: float, motion_seconds: float) -> Image.Image:
         if path in self.image_paths:
-            return self._image_frame(path, seconds)
+            return self._image_frame(path, motion_seconds)
         return self._video_frame(path, seconds)
 
     def close(self) -> None:
@@ -392,7 +392,7 @@ class _BackgroundCarousel:
         current_index = min(bisect_right(self.asset_end_times, cycle_phase), len(self.paths) - 1)
         slot_start = 0.0 if current_index == 0 else self.asset_end_times[current_index - 1]
         phase = max(0.0, cycle_phase - slot_start)
-        current = self._media_frame(self.paths[current_index], phase)
+        current = self._media_frame(self.paths[current_index], phase, seconds)
         previous = None
         has_previous_asset = len(self.paths) > 1 and (current_index > 0 or cycle > 0)
         previous_index = (current_index - 1) % len(self.paths)
@@ -409,7 +409,7 @@ class _BackgroundCarousel:
         )
         if in_transition:
             previous_phase = self.asset_durations[previous_index] - transition_duration + phase
-            previous = self._media_frame(self.paths[previous_index], previous_phase)
+            previous = self._media_frame(self.paths[previous_index], previous_phase, seconds)
             amount = max(0.0, min(1.0, phase / transition_duration))
             if self.transition == "Crossfade":
                 image = Image.blend(previous, current, amount)
@@ -613,6 +613,10 @@ class HZ3_YuE2_KaraokeVisualizer:
                         "step": 1.0,
                         "tooltip": "Optional maximum duration in seconds (0 = full length of audio/score).",
                     },
+                ),
+                "background_motion_speed": (
+                    "FLOAT",
+                    {"default": 0.25, "min": 0.0, "max": 2.0, "step": 0.05, "tooltip": "Speed of synchronized image zoom and pan. 0 freezes motion; 1 completes one movement cycle per still-image interval."},
                 ),
             },
         }
@@ -1447,6 +1451,7 @@ class HZ3_YuE2_KaraokeVisualizer:
         theme: str = "Cyberpunk Neon",
         background_folder: str = "",
         background_interval: float = 8.0,
+        background_motion_speed: float = 0.25,
         background_mode: str = "Alphabetical",
         background_transition: str = "Crossfade",
         background_transition_duration: float = 1.0,
@@ -1539,6 +1544,7 @@ class HZ3_YuE2_KaraokeVisualizer:
                         background_transition,
                         background_transition_duration,
                         background_transparency,
+                        background_motion_speed,
                     )
                     if candidate.paths:
                         background_carousel = candidate

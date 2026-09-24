@@ -3,6 +3,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import av
 import numpy as np
@@ -45,6 +46,7 @@ class BackgroundCarouselTests(unittest.TestCase):
             "transition": "Crossfade",
             "transition_duration": 2.0,
             "transparency": 0.0,
+            "motion_speed": 0.25,
         }
         options.update(overrides)
         return _BackgroundCarousel(**options)
@@ -88,10 +90,26 @@ class BackgroundCarouselTests(unittest.TestCase):
         gradient[:, :, 0] = np.arange(120, dtype=np.uint8)[None, :]
         gradient[:, :, 1] = np.arange(120, dtype=np.uint8)[:, None]
         Image.fromarray(gradient).save(os.path.join(self.temp_dir.name, "03-gradient.png"))
-        carousel = self.carousel(width=40, height=40, transition="Cut")
+        carousel = self.carousel(width=40, height=40, base=Image.new("RGB", (40, 40)), transition="Cut")
         first = carousel.frame(10.0)
         moved = carousel.frame(12.5)
         self.assertNotEqual(first.tobytes(), moved.tobytes())
+
+    def test_motion_speed_zero_freezes_still_backgrounds(self):
+        gradient = np.zeros((120, 120, 3), dtype=np.uint8)
+        gradient[:, :, 0] = np.arange(120, dtype=np.uint8)[None, :]
+        gradient[:, :, 1] = np.arange(120, dtype=np.uint8)[:, None]
+        Image.fromarray(gradient).save(os.path.join(self.temp_dir.name, "03-gradient.png"))
+        carousel = self.carousel(motion_speed=0.0, transition="Cut")
+        first = carousel.frame(10.0)
+        later = carousel.frame(12.5)
+        self.assertEqual(first.tobytes(), later.tobytes())
+
+    def test_overlapping_images_share_one_continuous_motion_phase(self):
+        carousel = self.carousel()
+        with patch.object(carousel, "_image_frame", wraps=carousel._image_frame) as render_image:
+            carousel.frame(5.5)
+        self.assertEqual([call.args[1] for call in render_image.call_args_list], [5.5, 5.5])
 
     def test_video_backgrounds_play_in_order_with_transparency(self):
         video_path = os.path.join(self.temp_dir.name, "03-colors.mp4")
@@ -132,6 +150,7 @@ class BackgroundCarouselTests(unittest.TestCase):
         self.assertTrue({
             "background_folder",
             "background_interval",
+            "background_motion_speed",
             "background_mode",
             "background_transition",
             "background_transition_duration",

@@ -173,6 +173,18 @@ z32|A32|
         self.assertEqual(data["lyrics"], "loaded lyric")
         self.assertEqual(result["result"][1], "[Section 1]\nloaded lyric\n")
 
+    def test_loaded_pair_runs_without_connected_abc_or_lyrics_inputs(self):
+        loaded = HEADER + 'V: Vocal\n"G"G32|\nV: Ins\nz32|\n'
+        node = editor.HZ3_YuE2_ABCViewer()
+        schema = node.INPUT_TYPES()
+        result = node.view(loaded_abc=loaded, loaded_lyrics="loaded lyric")
+
+        self.assertEqual(schema["required"], {})
+        self.assertIn("score_abc", schema["optional"])
+        self.assertIn("lyrics", schema["optional"])
+        self.assertEqual(result["ui"]["abc_viewer"][0]["abc"], loaded)
+        self.assertEqual(result["result"][1], "[Section 1]\nloaded lyric\n")
+
     def test_can_split_inside_original_group_and_preserve_meter_changes(self):
         source = HEADER + '''% intro
 V: Vocal

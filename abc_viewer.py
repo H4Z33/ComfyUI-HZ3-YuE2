@@ -342,8 +342,9 @@ class HZ3_YuE2_ABCViewer:
     @classmethod
     def INPUT_TYPES(cls):
         return {
-            "required": {"score_abc": ("STRING", {"forceInput": True})},
+            "required": {},
             "optional": {
+                "score_abc": ("STRING", {"forceInput": True}),
                 "lyrics": ("STRING", {"forceInput": True}),
                 "editor_state": ("STRING", {"default": "", "multiline": True}),
                 "loaded_abc": ("STRING", {"default": "", "multiline": True}),
@@ -351,10 +352,12 @@ class HZ3_YuE2_ABCViewer:
             },
         }
 
-    def view(self, score_abc, lyrics="", editor_state="", loaded_abc="", loaded_lyrics=""):
+    def view(self, score_abc="", lyrics="", editor_state="", loaded_abc="", loaded_lyrics=""):
         # A pair loaded in the editor takes precedence until cleared by the user.
         effective_abc = loaded_abc or score_abc
         effective_lyrics = loaded_lyrics if loaded_abc else lyrics
+        if not str(effective_abc or "").strip():
+            raise ValueError("Connect an ABC input or load an ABC + lyrics pair in the editor.")
         data = viewer_data(effective_abc, effective_lyrics, editor_state)
         return {
             "ui": {"abc_viewer": [data]},

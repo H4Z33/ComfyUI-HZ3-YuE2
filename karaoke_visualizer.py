@@ -1124,8 +1124,8 @@ class HZ3_YuE2_KaraokeVisualizer:
 
         lambda_line = self._get_rolling_lambda(lines, t)
 
-        min_k = max(0, int(lambda_line) - 2)
-        max_k = min(len(lines), int(lambda_line) + 3)
+        min_k = max(0, int(lambda_line) - 1)
+        max_k = min(len(lines), int(lambda_line) + 2)
 
         for k in range(min_k, max_k):
             k_line = lines[k]

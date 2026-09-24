@@ -27,6 +27,39 @@ class RollingScopeSourceTests(unittest.TestCase):
         self.assertIs(_rolling_scope_source(vocals, object()), vocals)
 
 
+class RollingLyricsWindowTests(unittest.TestCase):
+    def test_rolling_lyrics_show_only_previous_current_and_next(self):
+        visualizer = HZ3_YuE2_KaraokeVisualizer()
+        lines = [
+            {"text": f"line {index}", "start": index * 10.0, "end": index * 10.0 + 5.0}
+            for index in range(6)
+        ]
+        visible_text = []
+
+        def record_line(_draw, text, *_args, **_kwargs):
+            visible_text.append(text)
+            return None
+
+        with (
+            patch.object(visualizer, "_get_rolling_lambda", return_value=2.75),
+            patch.object(visualizer, "_draw_rolling_line", side_effect=record_line),
+        ):
+            visualizer._render_rolling_lyrics(
+                frame_img=object(),
+                draw=object(),
+                t=22.0,
+                timeline={"lines": lines},
+                width=1280,
+                height=720,
+                theme={},
+                font_main=object(),
+                font_sub=object(),
+                render_resources=object(),
+            )
+
+        self.assertEqual(visible_text, ["line 1", "line 2", "line 3"])
+
+
 class BackgroundCarouselTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()

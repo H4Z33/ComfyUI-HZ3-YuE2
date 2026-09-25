@@ -76,7 +76,8 @@ def _extract_abc(score_abc: str):
     chords = [{"start": int(start * 256), "symbol": symbol}
               for start, symbol in score.voices["Vocal"].chords]
     total_ticks = int(score.voices["Vocal"].time * 256)
-    return info, bars, directives, markers, tracks, chords, total_ticks
+    duration_seconds = float(score.voices["Vocal"].time * 60 / score.bpm)
+    return info, bars, directives, markers, tracks, chords, total_ticks, duration_seconds
 
 
 def _parse_lyrics(lyrics: str):
@@ -290,7 +291,7 @@ def _state_json(state):
 
 
 def viewer_data(score_abc, lyrics="", editor_state=""):
-    info, bars, directives, abc_markers, tracks, chords, total_ticks = _extract_abc(score_abc)
+    info, bars, directives, abc_markers, tracks, chords, total_ticks, duration_seconds = _extract_abc(score_abc)
     lyric_lines, lyric_markers = _parse_lyrics(lyrics)
     source_hash = hashlib.sha256((info["abc"] + "\0" + str(lyrics or "")).encode("utf-8")).hexdigest()[:20]
     state = _normalize_state(editor_state, source_hash, lyric_lines, bars, lyric_markers, abc_markers)
@@ -319,6 +320,7 @@ def viewer_data(score_abc, lyrics="", editor_state=""):
         "tracks": tracks,
         "chords": chords,
         "total_ticks": total_ticks,
+        "duration_seconds": duration_seconds,
         "sections": state["sections"],
         "source_hash": source_hash,
         "editor_state": _state_json(state),
@@ -334,8 +336,8 @@ def viewer_data(score_abc, lyrics="", editor_state=""):
 class HZ3_YuE2_ABCViewer:
     CATEGORY = "HZ3 YuE2/Score"
     FUNCTION = "view"
-    RETURN_TYPES = ("STRING", "STRING", "STRING")
-    RETURN_NAMES = ("abc_with_sections", "lyrics_with_sections", "section_map")
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "FLOAT")
+    RETURN_NAMES = ("abc_with_sections", "lyrics_with_sections", "section_map", "duration_seconds")
     OUTPUT_NODE = True
     DESCRIPTION = "View resolved ABC notes in a piano roll and edit lyrics with explicit section bar ranges."
 
@@ -361,7 +363,8 @@ class HZ3_YuE2_ABCViewer:
         data = viewer_data(effective_abc, effective_lyrics, editor_state)
         return {
             "ui": {"abc_viewer": [data]},
-            "result": (data["edited_abc"], data["edited_lyrics"], data["section_report"]),
+            "result": (data["edited_abc"], data["edited_lyrics"], data["section_report"],
+                       data["duration_seconds"]),
         }
 
 

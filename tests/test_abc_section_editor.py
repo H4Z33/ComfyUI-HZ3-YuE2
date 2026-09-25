@@ -161,6 +161,7 @@ z32|A32|
         ])
         self.assertEqual(result["bars"][1]["start"], 4 * 256)
         self.assertEqual(result["total_ticks"], 8 * 256)
+        self.assertAlmostEqual(result["duration_seconds"], 8 * 60 / 72)
 
     def test_loaded_abc_and_lyrics_pair_overrides_connected_inputs(self):
         connected = HEADER + 'V: Vocal\n"C"C32|\nV: Ins\nz32|\n'
@@ -184,6 +185,9 @@ z32|A32|
         self.assertIn("lyrics", schema["optional"])
         self.assertEqual(result["ui"]["abc_viewer"][0]["abc"], loaded)
         self.assertEqual(result["result"][1], "[Section 1]\nloaded lyric\n")
+        self.assertEqual(node.RETURN_TYPES[-1], "FLOAT")
+        self.assertEqual(node.RETURN_NAMES[-1], "duration_seconds")
+        self.assertAlmostEqual(result["result"][3], 4 * 60 / 72)
 
     def test_can_split_inside_original_group_and_preserve_meter_changes(self):
         source = HEADER + '''% intro

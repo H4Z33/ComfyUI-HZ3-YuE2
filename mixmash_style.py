@@ -1028,6 +1028,10 @@ class HZ3_YuE2_MixMashStyle:
                 "endpoint": ("STRING", {"default": "http://127.0.0.1:11434"}),
                 "temperature": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 1.5, "step": 0.05}),
                 "timeout": ("INT", {"default": 180, "min": 10, "max": 900}),
+                "force_redo": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "OFF (default): reuse ComfyUI's cached MixMash result when inputs are unchanged. ON: always rerun the Ollama request.",
+                }),
             },
             "optional": {
                 "lora_trigger": ("STRING", {"default": "", "tooltip": "Optional LoRA trigger keyword or handle (e.g. que_hablen_de_mi). Strictly preserved and procedurally injected."}),
@@ -1049,7 +1053,7 @@ class HZ3_YuE2_MixMashStyle:
         }
 
     def compose(self, model="deepseek-v4.1-flash:cloud", endpoint="http://127.0.0.1:11434",
-                temperature=0.35, timeout=180,
+                temperature=0.35, timeout=180, force_redo=False,
                 abc_report="", audio2style_analysis="", abc="",
                 structure="", analysis="", report="", section_cues="",
                 instructions="", lyrics="", context="", extend_abc=False,
@@ -1148,6 +1152,12 @@ class HZ3_YuE2_MixMashStyle:
             visible += "\n\nLYRICS CHECK:\n- " + "\n- ".join(warnings)
         return {"ui": {"text": [visible]},
                 "result": (style, final_lyrics, abc_repaired, compact, balanced, abc_karaoke, sections_karaoke, abc_vocals, is_karaoke)}
+
+    @classmethod
+    def IS_CHANGED(cls, force_redo=False, **kwargs):
+        # ComfyUI compares this value as part of the node cache key. NaN is
+        # deliberately unequal to itself, so opting in bypasses that cache.
+        return float("NaN") if bool(force_redo) else False
 
 
 LYRICS_EDIT_MODES = {"punctuation_only", "light_rewrite", "fit_to_score"}

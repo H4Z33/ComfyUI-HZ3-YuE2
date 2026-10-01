@@ -49,12 +49,75 @@ def _note_runs(f0, min_seconds=0.09):
     return runs
 
 
-def _voice_shifts(runs, score):
+def _time_warp(f0, notes, bpm, window=8.0, hop=2.0, max_lag=10.0, step=0.05, floor=0.45):
+    """(abc_seconds, audio_seconds) knots mapping the nominal ABC timeline onto the sung vocal.
+
+    Generated singers drift seconds away from the score. Windowed pitch-class
+    cross-correlation of the ABC melody against the pitch track (octave-blind, so
+    it also fits a line sung an octave away), Viterbi-smoothed over the lag;
+    windows without a confident match interpolate between their neighbours.
+    """
+    seconds = 60 / bpm
+    total = max(len(f0) * FRAME_SECONDS, max((float(start + length) * seconds for start, _, length in notes), default=0))
+    count = int(total / step) + 1
+    pad = int(max_lag / step)
+    score = np.zeros((13, count))  # 12 pitch classes + a sounding flag
+    for start, pitch, length in notes:
+        first = int(float(start) * seconds / step)
+        last = max(int(float(start + length) * seconds / step), first + 1)
+        score[pitch % 12, first:last] = 1
+        score[12, first:last] = 1
+    sung = np.zeros((13, count))
+    voiced = np.flatnonzero(~np.isnan(f0))
+    midi = 69 + 12 * np.log2(f0[voiced] / 440)
+    bins = np.minimum((voiced * FRAME_SECONDS / step).astype(int), count - 1)
+    low = np.floor(midi).astype(int)
+    np.add.at(sung, (low % 12, bins), 1 - (midi - low))
+    np.add.at(sung, ((low + 1) % 12, bins), midi - low)
+    sung[:12] /= np.maximum(sung[:12].sum(0), 1e-9)
+    sung[12, bins] = 1
+    score, sung = (scipy.ndimage.gaussian_filter1d(feature, 0.1 / step, axis=1) for feature in (score, sung))
+    sung = np.pad(sung, ((0, 0), (pad, pad + int(window / step))))
+    centers = np.arange(0, total + hop, hop)
+    lags = np.arange(-pad, pad + 1)
+    half = int(window / step / 2)
+    corr = np.zeros((len(centers), len(lags)))
+    for i, center in enumerate(centers):
+        lo, hi = max(int(center / step) - half, 0), min(int(center / step) + half, count)
+        if hi - lo < half or score[12, lo:hi].mean() < 0.02:
+            continue
+        reference = score[:, lo:hi] - score[:, lo:hi].mean(1, keepdims=True)
+        weight = min(score[12, lo:hi].mean() / 0.15, 1)
+        for j, lag in enumerate(lags):
+            segment = sung[:, lo + lag + pad:hi + lag + pad]
+            segment = segment - segment.mean(1, keepdims=True)
+            norm = np.linalg.norm(reference) * np.linalg.norm(segment)
+            corr[i, j] = weight * (reference * segment).sum() / norm if norm > 1e-6 else 0
+    cost = -np.maximum(corr - floor, 0)
+    jump = 0.06 * np.abs(lags[:, None] - lags[None, :]) * step / hop
+    total_cost = cost[0].copy()
+    back = np.zeros(cost.shape, dtype=int)
+    for i in range(1, len(centers)):
+        options = total_cost[None, :] + jump
+        back[i] = options.argmin(1)
+        total_cost = cost[i] + options.min(1)
+    path = np.zeros(len(centers), dtype=int)
+    path[-1] = total_cost.argmin()
+    for i in range(len(centers) - 1, 0, -1):
+        path[i - 1] = back[i, path[i]]
+    lag = lags[path] * step
+    sure = corr.max(1) > floor + 0.1
+    lag = np.interp(centers, centers[sure], lag[sure]) if sure.any() else np.zeros(len(centers))
+    return centers, np.maximum.accumulate(centers + lag)
+
+
+def _voice_shifts(runs, score, warp):
     """Per voice, (start_frame, end_frame, semitone shift) for every lead note it sings."""
     source = score.voices["Vocal"]
     seconds = 60 / score.bpm
-    chord_times = [float(time) * seconds for time, _ in source.chords]
-    key_times = [float(time) * seconds for time, _ in source.keys]
+    # Chords sit where the singer actually is, not at the nominal score time.
+    chord_times = np.interp([float(time) * seconds for time, _ in source.chords], *warp).tolist()
+    key_times = np.interp([float(time) * seconds for time, _ in source.keys], *warp).tolist()
     parts = {name: [] for name in VOICES}
     held_bass = held_counter = None
     for start, end, note, actual in runs:
@@ -122,11 +185,12 @@ def harmonize_audio(waveform, sample_rate, score_abc):
     """Return {voice: mono float32 samples} and a short report."""
     mono = waveform.mean(0).astype(np.float32)
     f0 = _track(mono, sample_rate)
-    runs = _note_runs(f0)
-    parts = _voice_shifts(runs, parse(score_abc.strip() + "\n"))
     voiced = ~np.isnan(f0)
     if not voiced.any():
         return {name: np.zeros_like(mono) for name in VOICES}, "No sung notes were detected in the vocal."
+    score = parse(score_abc.strip() + "\n")
+    runs = _note_runs(f0)
+    parts = _voice_shifts(runs, score, _time_warp(f0, score.voices["Vocal"].notes, score.bpm))
     frame_index = np.minimum((np.arange(len(mono)) / sample_rate / FRAME_SECONDS).astype(np.int64), len(f0) - 1)
     period = sample_rate / np.interp(np.arange(len(f0)), np.flatnonzero(voiced), f0[voiced])[frame_index]
     marks = []

@@ -55,6 +55,16 @@ class HarmonizerTests(unittest.TestCase):
             self.assertAlmostEqual(float(np.nanmedian(librosa.hz_to_midi(f0[voiced]))), target, delta=0.5, msg=name)
         self.assertIn("tenor:", report)
 
+    def test_time_warp_follows_a_late_singer(self):
+        # One-second notes at 60 BPM; the singer comes in 1.5 s late, an octave up.
+        melody = [57, 60, 64, 62, 59, 65, 69, 67, 64, 60] * 4
+        notes = [[index, pitch, 1] for index, pitch in enumerate(melody)]
+        times = np.arange(int(45 / harmonizer.FRAME_SECONDS)) * harmonizer.FRAME_SECONDS - 1.5
+        f0 = np.array([librosa.midi_to_hz(melody[int(time)] + 12) if 0 <= time < len(melody) else np.nan for time in times])
+        warp = harmonizer._time_warp(f0, notes, 60)
+        for score_time in (10, 20, 30):
+            self.assertAlmostEqual(float(np.interp(score_time, *warp)), score_time + 1.5, delta=0.2)
+
     def test_silence_returns_silent_tracks(self):
         voices, report = harmonizer.harmonize_audio(np.zeros((2, SAMPLE_RATE), dtype=np.float32), SAMPLE_RATE, SCORE)
         self.assertTrue(all(not voice.any() for voice in voices.values()))

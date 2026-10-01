@@ -141,6 +141,8 @@ For normal use, connect the original `YuE2 Generate Music.conditioning` directly
 ## Section-by-section covers
 
 `Section Plan` parses the native ABC into an ordered, timed section list (bars, seconds, and semantic frames per section). It merges optional per-section `style_overrides` lines (`Section: text`) into the plan and `sections` JSON. `Assemble Sections` is the complement: it concatenates one conditioning take per section into a single contiguous YuE2 conditioning, rebasing each chunk's KV offset and frame timestamps so the result feeds directly to KSampler with `seconds` for `Empty YuE2 Latent Audio`. Connect `Section Plan.sections` to label each take in the assembly report. Generate each section (optionally via `Conditioning Cut` on a single take) and tile the takes in order; sections must tile exactly.
+
+`Generate Music Sections` samples the whole song as one continuous YuE2 pass, stopping at each ABC section boundary, and stores each section's tokens under `output/HZ3-YuE2/section_tokens`. Editing a section's lyrics or ABC, or rerolling it with `section_seeds` (`Chorus 2 = 1234`), resamples only that section; the rest is replayed from storage. Sung words come from the sampled tokens, so a lyric edit always needs that section resampled.
 ABC -> Lyrics Prosody.score_abc
 ```
 

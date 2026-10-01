@@ -3,15 +3,15 @@
 import importlib
 from contextlib import nullcontext
 from pathlib import Path
-import re
 import sys
+import tempfile
 import types
 import unittest
 from unittest import mock
 
 import torch
-from comfy.text_encoders.yue2 import ABC_START, CODEC_OFFSET, CODEC_SIZE, CONTEXT, EOD
-
+from comfy.text_encoders.llama import FixedKV
+from comfy.text_encoders.yue2 import ABC_END, ABC_START, CODEC_OFFSET, CODEC_SIZE, CONTEXT, EOD, MUSIC_START, chunk_ranges
 
 PACKAGE = "section_generation_test_nodes"
 package = types.ModuleType(PACKAGE)
@@ -65,60 +65,44 @@ second line
 """
 
 
-class FakeModel:
-    def __init__(self, cache_factory):
-        self.model = types.SimpleNamespace(init_kv_cache=cache_factory)
-
-
-class FakeFixedKVCache:
-    def __init__(self, batch, capacity, device, dtype):
-        self.key = torch.zeros((batch, capacity, 1, 1), device=device, dtype=dtype)
-        self.value = torch.zeros_like(self.key)
-        self.index = 0
-        self.position = torch.zeros((batch,), device=device, dtype=torch.int64)
-        self.seqlen = torch.zeros((batch,), device=device, dtype=torch.int32)
-
-    def prepare(self, count):
-        self.position.copy_(self.seqlen)
-        self.seqlen.add_(count)
-
-    def advance(self, count):
-        self.index += count
-
-
 class FakeSectionTransformer:
+    """Each token's logits peak at a codec id derived from the previous token, so
+    sampled tokens form a chain that depends on everything before them."""
+
     def __init__(self, fixed_cache=False):
-        self.base_caches = []
+        self.prefills = []
         self.fixed_kv = fixed_cache
 
     def init_kv_cache(self, batch, capacity, device, dtype):
         if self.fixed_kv:
-            return [FakeFixedKVCache(batch, capacity, device, dtype)]
+            key = torch.zeros((batch, capacity, 1, 1), device=device, dtype=dtype)
+            return [FixedKV(key, torch.zeros_like(key), 0,
+                            torch.zeros((batch,), device=device, dtype=torch.int64),
+                            torch.zeros((batch,), device=device, dtype=torch.int32))]
         return [(torch.zeros((batch, 1, capacity, 1), device=device, dtype=dtype),
                  torch.zeros((batch, 1, capacity, 1), device=device, dtype=dtype), 0)]
 
-    def __call__(self, ids, past_key_values, dtype, position_ids=None, decode_buffers=None):
+    def __call__(self, ids, past_key_values, dtype, attention_mask=None, position_ids=None, decode_buffers=None):
         result = []
         for cache in past_key_values:
-            if isinstance(cache, FakeFixedKVCache):
-                past_length = cache.index
-                cache.prepare(ids.shape[1])
-                end = past_length + ids.shape[1]
-                cache.key[:, past_length:end].copy_(ids[:, :, None, None].to(cache.key))
-                cache.value[:, past_length:end].copy_(ids[:, :, None, None].to(cache.value))
-                cache.advance(ids.shape[1])
+            if isinstance(cache, FixedKV):
+                end = cache.index + ids.shape[1]
+                cache.key[:, cache.index:end].copy_(ids[:, :, None, None].to(cache.key))
+                cache.index = end
                 result.append(cache)
             else:
                 key, value, past_length = cache
                 end = past_length + ids.shape[1]
                 key[:, :, past_length:end].copy_(ids[:, None, :, None].to(key))
-                value[:, :, past_length:end].copy_(ids[:, None, :, None].to(value))
                 result.append((key, value, end))
         hidden = ids.to(dtype).unsqueeze(-1).expand(-1, -1, 4)
         return hidden, None, result
 
     def lm_head(self, hidden):
-        return torch.zeros((hidden.shape[0], CODEC_OFFSET + CODEC_SIZE), device=hidden.device)
+        logits = torch.zeros((hidden.shape[0], CODEC_OFFSET + CODEC_SIZE), device=hidden.device)
+        for row, last in enumerate(hidden[:, 0].tolist()):
+            logits[row, CODEC_OFFSET + int(last) % 97] = 1.0
+        return logits
 
     def compute_freqs_cis(self, position_ids, device):
         return torch.zeros((1, 1, 2), device=device)
@@ -136,37 +120,38 @@ class FakeSectionModel:
         )
 
     def _prefill(self, prefixes, capacity, dtype):
-        ids = torch.tensor(prefixes, device="cpu", dtype=torch.long)
-        cache = self.model.init_kv_cache(1, capacity, "cpu", dtype)
+        self.model.prefills.append([list(prefix) for prefix in prefixes])
+        length = max(map(len, prefixes))
+        ids = torch.tensor([[0] * (length - len(prefix)) + prefix for prefix in prefixes], dtype=torch.long)
+        mask = None
+        if any(len(prefix) != length for prefix in prefixes):
+            mask = torch.ones((len(prefixes), capacity), dtype=torch.long)
+            for index, prefix in enumerate(prefixes):
+                mask[index, :length - len(prefix)] = 0
+        cache = self.model.init_kv_cache(len(prefixes), capacity, "cpu", dtype)
         output = self.model(ids, past_key_values=cache, dtype=dtype)
-        self.model.base_caches.append(output[2])
-        return self.model.lm_head(output[0][:, -1]), output[2], None
+        return self.model.lm_head(output[0][:, -1]), output[2], mask
 
     def _acoustic_conditioning(self, prefix, tokens, dtype):
-        ranges = generation.chunk_ranges(len(tokens), len(prefix), self.config.max_position_embeddings)
+        self.acoustic_call = (list(prefix), list(tokens))
+        ranges = chunk_ranges(len(tokens), len(prefix), self.config.max_position_embeddings)
         total = sum(len(prefix) + end - start + 1 for start, end in ranges)
-        context = torch.arange(total * 4, device="cpu", dtype=dtype).reshape(1, total, 4)
-        chunks = []
-        offset = 0
-        for start, end in ranges:
-            size = len(prefix) + end - start + 1
-            chunks.append((start, end, offset, offset + size))
-            offset += size
-        return context, tuple(chunks)
+        context = torch.tensor(prefix + tokens + [0], dtype=dtype).reshape(1, total, 1).expand(1, total, 4).clone()
+        chunks = tuple((start, end, 0, total) for start, end in ranges)
+        return context, chunks
 
 
 class FakeClip:
+    def __init__(self):
+        self.patcher = types.SimpleNamespace(patches={})
+        self.calls = []
+
     def tokenize(self, style, lyrics, cot, seed, abc, max_tokens, temperature, top_p, top_k,
                  repetition_penalty, cfg_scale):
-        if lyrics:
-            heading = re.search(r"\[([^\]]+)\]", lyrics).group(1)
-            section_token = 101 if heading.lower().startswith("intro") else 102
-            prefix = [EOD, 42, section_token, ABC_START]
-        else:
-            prefix = [EOD, 42, ABC_START]
+        self.calls.append({"lyrics": lyrics, "abc": abc, "max_tokens": max_tokens})
         return {
-            "prefix": prefix,
-            "negative": [EOD, 42],
+            "prefix": [EOD, 42, ABC_START],
+            "negative": [EOD],
             "abc_ids": [71, 72],
             "cot": cot,
             "cfg_scale": cfg_scale,
@@ -174,7 +159,41 @@ class FakeClip:
         }
 
 
+def run_sections(model, clip=None, **overrides):
+    inputs = dict(
+        clip=clip or FakeClip(),
+        style="same global style",
+        lyrics=LYRICS,
+        abc=ABC,
+        seed=50,
+        mode="full",
+        temperature=0.0,
+        top_p=1.0,
+        top_k=1,
+        repetition_penalty=1.0,
+    )
+    inputs.update(overrides)
+    node = generation.HZ3_YuE2_GenerateMusicSections()
+    with mock.patch.object(generation, "_prepare_model", return_value=(model, torch.device("cpu"), torch.float32)), \
+            mock.patch.object(generation.comfy.ops, "use_quantized_matmul", return_value=nullcontext()), \
+            mock.patch.object(generation.comfy.utils, "model_trange", side_effect=lambda n, **_kwargs: range(n)), \
+            mock.patch.object(generation.comfy.model_prefetch, "malloc_graph_begin"), \
+            mock.patch.object(generation.comfy.model_prefetch, "malloc_graph_end"):
+        return node.generate(**inputs)
+
+
+POSITIVE = [EOD, 42, ABC_START, 71, 72, ABC_END, MUSIC_START]
+NEGATIVE = [EOD, ABC_START, 71, 72, ABC_END, MUSIC_START]
+
+
 class SectionGenerationTests(unittest.TestCase):
+    def setUp(self):
+        output = tempfile.TemporaryDirectory()
+        self.addCleanup(output.cleanup)
+        patcher = mock.patch.object(generation.folder_paths, "get_output_directory", return_value=output.name)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_builds_matching_sections_and_uses_abc_duration(self):
         sections = generation._build_section_specs(ABC, LYRICS)
 
@@ -198,100 +217,70 @@ class SectionGenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not match"):
             generation._build_section_specs(ABC, "[Intro]\n(instrumental)\n[Chorus]\nwords")
 
-    def test_clones_only_the_used_tuple_cache_prefix(self):
-        source_key = torch.arange(24, dtype=torch.float32).reshape(1, 2, 4, 3)
-        source_value = source_key + 100
-
-        def cache_factory(batch, capacity, device, dtype):
-            return [(torch.zeros((batch, 2, capacity, 3), device=device, dtype=dtype),
-                     torch.zeros((batch, 2, capacity, 3), device=device, dtype=dtype), 0)]
-
-        model = FakeModel(cache_factory)
-        branch = generation._clone_prefix_cache(
-            model, [(source_key, source_value, 4)], 3, 7, "cpu", torch.float32
-        )
-
-        self.assertEqual(branch[0][2], 3)
-        self.assertTrue(torch.equal(branch[0][0][:, :, :3], source_key[:, :, :3]))
-        self.assertTrue(torch.equal(branch[0][1][:, :, :3], source_value[:, :, :3]))
-        self.assertTrue(torch.equal(branch[0][0][:, :, 3:], torch.zeros_like(branch[0][0][:, :, 3:])))
-
-    def test_clones_fixed_cache_prefix_and_position_state(self):
-        source_key = torch.arange(24, dtype=torch.float32).reshape(1, 4, 2, 3)
-        source_value = source_key + 100
-        source = types.SimpleNamespace(
-            key=source_key,
-            value=source_value,
-            index=4,
-            position=torch.tensor([4], dtype=torch.int64),
-            seqlen=torch.tensor([4], dtype=torch.int32),
-        )
-
-        def cache_factory(batch, capacity, device, dtype):
-            return [types.SimpleNamespace(
-                key=torch.zeros((batch, capacity, 2, 3), device=device, dtype=dtype),
-                value=torch.zeros((batch, capacity, 2, 3), device=device, dtype=dtype),
-                index=0,
-                position=torch.zeros((batch,), device=device, dtype=torch.int64),
-                seqlen=torch.zeros((batch,), device=device, dtype=torch.int32),
-            )]
-
-        model = FakeModel(cache_factory)
-        branch = generation._clone_prefix_cache(
-            model, [source], 3, 7, "cpu", torch.float32
-        )
-
-        self.assertEqual(branch[0].index, 3)
-        self.assertEqual(branch[0].position.item(), 3)
-        self.assertEqual(branch[0].seqlen.item(), 3)
-        self.assertTrue(torch.equal(branch[0].key[:, :3], source_key[:, :3]))
-        self.assertTrue(torch.equal(branch[0].value[:, :3], source_value[:, :3]))
-
-    def test_generates_sections_serially_into_one_exact_length_conditioning(self):
+    def test_generates_sections_as_one_continuous_sequence(self):
         for fixed_cache in (False, True):
             for cfg_scale in (1.0, 2.0):
-                with self.subTest(fixed_cache=fixed_cache, cfg_scale=cfg_scale):
+                with self.subTest(fixed_cache=fixed_cache, cfg_scale=cfg_scale), \
+                        tempfile.TemporaryDirectory() as output, \
+                        mock.patch.object(generation.folder_paths, "get_output_directory", return_value=output):
                     model = FakeSectionModel(fixed_cache)
-                    node = generation.HZ3_YuE2_GenerateMusicSections()
-                    with mock.patch.object(generation, "_prepare_model", return_value=(model, torch.device("cpu"), torch.float32)), \
-                            mock.patch.object(generation.comfy.ops, "use_quantized_matmul", return_value=nullcontext()), \
-                            mock.patch.object(generation.comfy.utils, "model_trange", side_effect=lambda n, **_kwargs: range(n)), \
-                            mock.patch.object(generation.comfy.model_prefetch, "malloc_graph_begin"), \
-                            mock.patch.object(generation.comfy.model_prefetch, "malloc_graph_end"):
-                        result = node.generate(
-                            clip=FakeClip(),
-                            style="same global style",
-                            lyrics=LYRICS,
-                            abc=ABC,
-                            seed=50,
-                            mode="full",
-                            temperature=0.0,
-                            top_p=1.0,
-                            top_k=1,
-                            repetition_penalty=1.0,
-                            cfg_scale=cfg_scale,
-                        )
+                    clip = FakeClip()
+                    result = run_sections(model, clip=clip, cfg_scale=cfg_scale)
 
                     conditioning, seconds, report = result["result"]
                     context, metadata = conditioning[0]
                     self.assertEqual(seconds, 4.0)
                     self.assertEqual(metadata["yue2_frames"], 100)
-                    self.assertEqual(context.shape[0], 1)
+                    self.assertEqual(metadata["yue2_abc_ids"], [71, 72])
                     self.assertEqual(metadata["hz3_section_layout"][1]["start_frame"], 50)
-                    self.assertEqual(
-                        [(chunk[0], chunk[1]) for chunk in metadata["yue2_chunks"]],
-                        [(0, 50), (50, 100)],
-                    )
-                    self.assertIn("one final KSampler pass", report)
-                    base_layer = model.model.base_caches[0][0]
-                    if isinstance(base_layer, FakeFixedKVCache):
-                        base_key = base_layer.key[:, :2]
-                    else:
-                        base_key = base_layer[0][:, :, :2]
-                    self.assertTrue(torch.equal(
-                        base_key.flatten(),
-                        torch.tensor([EOD, 42], dtype=torch.float32),
-                    ))
+                    self.assertEqual([(chunk[0], chunk[1]) for chunk in metadata["yue2_chunks"]], [(0, 100)])
+                    self.assertIn("2 sampled, 0 reused", report)
+
+                    # The whole song is tokenized once and the model prompt is the full prefix.
+                    self.assertEqual([call["max_tokens"] for call in clip.calls], [100])
+                    self.assertEqual(clip.calls[0]["lyrics"], LYRICS)
+                    prefill_prompts = [prefixes[0][:len(POSITIVE)] for prefixes in model.model.prefills]
+                    self.assertEqual(prefill_prompts, [POSITIVE, POSITIVE])
+                    if cfg_scale != 1.0:
+                        self.assertEqual(model.model.prefills[0][1], NEGATIVE)
+
+                    # Verse 1 starts from the intro's tokens, and the acoustic pass sees the full sequence.
+                    acoustic_prefix, acoustic_tokens = model.acoustic_call
+                    self.assertEqual(acoustic_prefix, POSITIVE)
+                    self.assertEqual(model.model.prefills[1][0], POSITIVE + acoustic_tokens[:50])
+                    self.assertEqual(len(acoustic_tokens), 100)
+                    self.assertTrue(all(CODEC_OFFSET <= token < CODEC_OFFSET + CODEC_SIZE for token in acoustic_tokens))
+                    self.assertEqual(acoustic_tokens[50], CODEC_OFFSET + acoustic_tokens[49] % 97)
+                    self.assertEqual(context.shape, (1, len(POSITIVE) + 101, 4))
+
+    def test_reuses_stored_section_tokens_and_rerolls_only_seeded_sections(self):
+        first = run_sections(FakeSectionModel())["result"]
+        cached_model = FakeSectionModel()
+        second = run_sections(cached_model)["result"]
+        self.assertEqual(cached_model.model.prefills, [])
+        self.assertIn("0 sampled, 2 reused", second[2])
+        self.assertTrue(torch.equal(first[0][0][0], second[0][0][0]))
+
+        rerolled_model = FakeSectionModel()
+        rerolled = run_sections(rerolled_model, section_seeds="verse 1 = 9")["result"]
+        layout = rerolled[0][0][1]["hz3_section_layout"]
+        self.assertEqual([section["reused"] for section in layout], [True, False])
+        self.assertEqual(layout[1]["seed"], 9)
+        # Only the verse was prefilled, on top of the replayed intro tokens.
+        intro_tokens = rerolled_model.acoustic_call[1][:50]
+        self.assertEqual(rerolled_model.model.prefills, [[POSITIVE + intro_tokens]])
+
+    def test_edited_lyrics_invalidate_only_that_section(self):
+        run_sections(FakeSectionModel())
+        model = FakeSectionModel()
+        edited = LYRICS.replace("second line", "another line")
+        report = run_sections(model, lyrics=edited)["result"][2]
+        self.assertIn("1 sampled, 1 reused", report)
+        self.assertEqual(len(model.model.prefills), 1)
+
+    def test_rejects_seed_overrides_for_unknown_sections(self):
+        with self.assertRaisesRegex(ValueError, "unknown section"):
+            run_sections(FakeSectionModel(), section_seeds="bridge = 3")
 
 
 if __name__ == "__main__":

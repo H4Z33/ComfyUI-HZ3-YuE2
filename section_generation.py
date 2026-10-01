@@ -1,18 +1,24 @@
-"""Generate YuE2 conditioning one ABC/lyrics section at a time.
+"""Generate YuE2 conditioning for a whole song one ABC/lyrics section at a time.
 
-The global style prefix is prefetched once and kept immutable. Each section gets
-a fresh copy of that prefix KV, then appends only its own lyrics and ABC before
-semantic sampling. Section conditionings are streamed into one output tensor so
-the final KSampler still renders the song in one pass.
+The model always sees the complete style, lyrics, and ABC prompt plus every
+semantic token that comes before the current section, exactly like a single
+whole-song pass, but sampling stops at each section's score boundary. Each
+section's tokens are stored on disk keyed by what shaped them, so editing one
+section only resamples that section: untouched sections are replayed from
+storage through one batched prefill instead of being generated again.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
 import re
 import unicodedata
 
 import torch
 
+import folder_paths
 import comfy.model_management
 import comfy.model_prefetch
 import comfy.ops
@@ -20,13 +26,13 @@ import comfy.utils
 from comfy.text_encoders.yue2 import (
     ABC_END,
     ABC_START,
+    CODEC_OFFSET,
+    CODEC_SIZE,
     FRAMES_PER_SECOND,
-    MUSIC_END,
     MUSIC_START,
-    chunk_ranges,
     distribution,
 )
-from comfy.text_encoders.llama import rope_matrix
+from comfy.text_encoders.llama import FixedKV, rope_matrix
 
 from .abc_score import parse as parse_abc
 from .score_analysis import inspect_score
@@ -156,298 +162,98 @@ def _build_section_specs(score_abc: str, lyrics: str) -> list[dict]:
     return specs
 
 
-def _common_prefix_length(prefixes: list[list[int]], maximum: int) -> int:
-    if not prefixes or maximum < 1:
-        raise ValueError("YuE2 produced an empty shared style prefix.")
-    limit = min(maximum, *(len(prefix) for prefix in prefixes))
-    for index in range(limit):
-        token = prefixes[0][index]
-        if any(prefix[index] != token for prefix in prefixes[1:]):
-            return index
-    return limit
-
-
-def _clone_prefix_cache(model, source_cache, prefix_length: int, capacity: int, device, dtype):
-    """Create a writable branch cache containing only the immutable base prefix."""
-    if prefix_length < 1:
-        raise ValueError("The shared YuE2 prefix must contain at least one token.")
-    if capacity < prefix_length:
-        raise ValueError("A section KV cache is shorter than its shared prefix.")
-
-    branch = model.model.init_kv_cache(1, capacity, device, dtype)
-    if len(branch) != len(source_cache):
-        raise ValueError("YuE2 returned incompatible base and section KV caches.")
-
-    for layer_index, (source, target) in enumerate(zip(source_cache, branch)):
-        if hasattr(source, "key") and hasattr(source, "value"):
-            if not (hasattr(target, "key") and hasattr(target, "value")):
-                raise ValueError("YuE2 changed KV cache types while branching a section.")
-            if source.key.shape[1] < prefix_length or target.key.shape[1] < prefix_length:
-                raise ValueError("YuE2 fixed KV cache cannot hold the frozen prefix.")
-            target.key[:, :prefix_length].copy_(source.key[:, :prefix_length])
-            target.value[:, :prefix_length].copy_(source.value[:, :prefix_length])
-            target.index = prefix_length
-            if torch.is_tensor(getattr(target, "seqlen", None)):
-                target.seqlen.fill_(prefix_length)
-            if torch.is_tensor(getattr(target, "position", None)):
-                target.position.fill_(prefix_length)
+def _parse_section_seeds(text: str) -> dict[str, int]:
+    seeds = {}
+    for line in (text or "").replace(",", "\n").splitlines():
+        if not line.strip():
             continue
-
-        if (
-            isinstance(source, (tuple, list))
-            and isinstance(target, (tuple, list))
-            and len(source) >= 2
-            and len(target) >= 2
-        ):
-            source_key, source_value = source[0], source[1]
-            target_key, target_value = target[0], target[1]
-            if source_key.shape[2] < prefix_length or target_key.shape[2] < prefix_length:
-                raise ValueError("YuE2 tuple KV cache cannot hold the frozen prefix.")
-            target_key[:, :, :prefix_length].copy_(source_key[:, :, :prefix_length])
-            target_value[:, :, :prefix_length].copy_(source_value[:, :, :prefix_length])
-            branch[layer_index] = (
-                target_key,
-                target_value,
-                prefix_length,
-            )
-            continue
-
-        raise ValueError("YuE2 returned an unsupported KV cache format.")
-    return branch
+        name, separator, value = line.rpartition("=")
+        if not separator or not name.strip() or not value.strip().isdigit():
+            raise ValueError(f"Section seed lines must look like 'Chorus 2 = 1234', got {line.strip()!r}.")
+        seeds[name.strip().casefold()] = int(value) & 0xFFFFFFFFFFFFFFFF
+    return seeds
 
 
-def _forward_with_cache(model, cache, token_ids: list[int], position_start: int, device, dtype):
-    ids = torch.tensor([token_ids], device=device, dtype=torch.long)
-    positions = torch.arange(
-        position_start,
-        position_start + len(token_ids),
-        device=device,
-        dtype=torch.long,
-    ).unsqueeze(0)
-    output = model.model(ids, past_key_values=cache, dtype=dtype, position_ids=positions)
-    return model.model.lm_head(output[0][:, -1]), output[2]
+def _patch_summary(value):
+    if torch.is_tensor(value):
+        return [list(value.shape), float(value.float().sum())]
+    if isinstance(value, (tuple, list)):
+        return [_patch_summary(item) for item in value]
+    if hasattr(value, "weights"):
+        return _patch_summary(value.weights)
+    return value if isinstance(value, (int, float, str)) or value is None else repr(value)
 
 
-def _new_decode_state(model, logits, first_position: int, cache, device, dtype):
-    position_ids = torch.tensor([[first_position]], device=device, dtype=torch.long)
-    fixed_kv = hasattr(cache[0], "key") and hasattr(cache[0], "advance")
+def _patches_fingerprint(clip) -> list:
+    """LoRA and other weight patches change sampling, so they belong in the token key."""
+    return sorted(
+        [key, [[float(strength), _patch_summary(patch), float(model_strength)] for strength, patch, model_strength, *_ in patches]]
+        for key, patches in clip.patcher.patches.items()
+    )
+
+
+def _section_token_path(fields: dict) -> Path:
+    digest = hashlib.sha256(json.dumps(fields, sort_keys=True).encode("utf-8")).hexdigest()
+    return Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "section_tokens" / f"{digest}.json"
+
+
+def _load_section_tokens(path: Path, frames: int):
+    if not path.is_file():
+        return None
+    tokens = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(tokens, list)
+        or len(tokens) != frames
+        or any(type(token) is not int or not CODEC_OFFSET <= token < CODEC_OFFSET + CODEC_SIZE for token in tokens)
+    ):
+        return None
+    return tokens
+
+
+def _sample_section(model, prefixes, cfg_scale, frames, seed, history, sampling, device, dtype, progress, progress_start, name):
+    """Prefill the prompt plus every earlier token, then sample exactly `frames` codec tokens."""
+    rng_device = device if torch.device(device).type != "mps" else "cpu"
+    generator = torch.Generator(device=rng_device).manual_seed(seed)
+    prefix_length = max(map(len, prefixes))
+    logits, cache, mask = model._prefill(prefixes, prefix_length + frames, dtype)
+    fixed_kv = isinstance(cache[0], FixedKV)
+    decode_tokens = torch.empty((len(prefixes), 1), device=device, dtype=torch.long)
+    positions = torch.tensor([[len(prefix)] for prefix in prefixes], device=device, dtype=torch.long)
     decode_buffers = None
     if fixed_kv:
-        decode_buffers = (
-            torch.empty((1, 1, model.config.hidden_size), device=device, dtype=dtype),
-            rope_matrix(model.model.compute_freqs_cis(position_ids, device)),
-        )
-    return {
-        "ids": torch.empty((1, 1), device=device, dtype=torch.long),
-        "position_ids": position_ids,
-        "logits": torch.empty_like(logits),
-        "decode_buffers": decode_buffers,
-        "fixed_kv": fixed_kv,
-        "dtype": dtype,
-    }
-
-
-def _decode_one(model, cache, token: int, position: int, state):
-    state["ids"].fill_(token)
-    state["position_ids"].fill_(position)
-    fixed_kv = state["fixed_kv"]
-    if fixed_kv:
-        comfy.model_prefetch.malloc_graph_begin(state["ids"].device)
+        decode_buffers = (torch.empty((len(prefixes), 1, model.config.hidden_size), device=device, dtype=dtype),
+                          rope_matrix(model.model.compute_freqs_cis(positions, device)))
+    tokens = []
     try:
-        output = model.model(
-            state["ids"],
-            past_key_values=cache,
-            dtype=state["dtype"],
-            position_ids=state["position_ids"],
-            decode_buffers=state["decode_buffers"],
-        )
-        state["logits"].copy_(model.model.lm_head(output[0][:, -1]))
-        next_cache = output[2]
-        del output
-        return state["logits"], next_cache
-    finally:
-        if fixed_kv:
-            comfy.model_prefetch.malloc_graph_end()
-
-
-def _extend_cache_with_tokens(model, cache, initial_logits, token_ids, position_start, device, dtype):
-    """Append prompt tokens one at a time; Comfy's KV decode path supports this safely."""
-    state = _new_decode_state(model, initial_logits, position_start, cache, device, dtype)
-    logits = initial_logits
-    for offset, token in enumerate(token_ids):
-        logits, cache = _decode_one(
-            model, cache, token, position_start + offset, state
-        )
-    return logits, cache
-
-
-def _generate_section_tokens(
-    model,
-    section,
-    positive_base_cache,
-    positive_base_logits,
-    positive_base,
-    negative_base_cache,
-    negative_base_logits,
-    negative_base,
-    positive_tokens,
-    cfg_scale,
-    section_seed,
-    temperature,
-    top_p,
-    top_k,
-    repetition_penalty,
-    device,
-    dtype,
-    progress,
-    progress_start,
-):
-    abc_ids = positive_tokens["abc_ids"]
-    positive_full = positive_tokens["prefix"] + abc_ids + [ABC_END, MUSIC_START]
-    positive_suffix = positive_full[len(positive_base):]
-    positive_length = len(positive_full)
-    negative_full = None
-    negative_suffix = None
-    if cfg_scale != 1.0:
-        negative_full = negative_base + [ABC_START] + abc_ids + [ABC_END, MUSIC_START]
-        negative_suffix = negative_full[len(negative_base):]
-    capacity = max(
-        positive_length,
-        len(negative_full) if negative_full is not None else positive_length,
-    ) + section["frames"]
-    if capacity > model.config.max_position_embeddings:
-        raise ValueError(
-            f"Section {section['name']!r} needs {capacity} YuE2 context tokens, "
-            f"above the model limit {model.config.max_position_embeddings}. "
-            "Shorten this section's lyrics, ABC, or target duration."
-        )
-
-    positive_cache = _clone_prefix_cache(
-        model, positive_base_cache, len(positive_base), capacity, device, dtype
-    )
-    positive_logits, positive_cache = _extend_cache_with_tokens(
-        model, positive_cache, positive_base_logits, positive_suffix,
-        len(positive_base), device, dtype,
-    )
-
-    negative_cache = None
-    negative_logits = None
-    if cfg_scale != 1.0:
-        negative_cache = _clone_prefix_cache(
-            model, negative_base_cache, len(negative_base), capacity, device, dtype
-        )
-        negative_logits, negative_cache = _extend_cache_with_tokens(
-            model, negative_cache, negative_base_logits, negative_suffix,
-            len(negative_base), device, dtype,
-        )
-
-    target_frames = section["frames"]
-    positive_decode_state = None
-    negative_decode_state = None
-    if target_frames > 1:
-        positive_decode_state = _new_decode_state(
-            model, positive_logits, positive_length, positive_cache, device, dtype
-        )
-        if cfg_scale != 1.0:
-            negative_decode_state = _new_decode_state(
-                model, negative_logits, len(negative_full), negative_cache, device, dtype
-            )
-
-    rng_device = device if torch.device(device).type != "mps" else "cpu"
-    generator = torch.Generator(device=rng_device).manual_seed(section_seed)
-    history = []
-
-    try:
-        for step in comfy.utils.model_trange(
-            target_frames,
-            desc=f"YuE2 section {section['name']}",
-            unit="token",
-        ):
+        for step in comfy.utils.model_trange(frames, desc=f"YuE2 section {name}", unit="token"):
             comfy.model_management.throw_exception_if_processing_interrupted()
-            if cfg_scale == 1.0:
-                guided = positive_logits
-            else:
-                guided = negative_logits + cfg_scale * (positive_logits - negative_logits)
-            scores = distribution(
-                guided,
-                history,
-                step,
-                "semantic",
-                temperature,
-                top_p,
-                top_k,
-                repetition_penalty,
-                50,
-                target_frames,
-            )
-            if temperature == 0:
+            guided = logits if cfg_scale == 1.0 else logits[1:] + cfg_scale * (logits[:1] - logits[1:])
+            scores = distribution(guided, history, step, "semantic", penalty_window=50, min_tokens=frames, **sampling)
+            if sampling["temperature"] == 0:
                 next_id = scores.argmax(-1, keepdim=True)
             else:
                 probabilities = scores.softmax(-1).to(rng_device)
                 next_id = torch.multinomial(probabilities, 1, generator=generator).to(device)
-            token = int(next_id.item())
-            if token == MUSIC_END:
-                raise RuntimeError(
-                    f"YuE2 ended section {section['name']!r} before its ABC duration. "
-                    "The exact-length guard should prevent this."
-                )
+            decode_tokens.copy_(next_id)
+            token = next_id.item()
+            tokens.append(token)
             history.append(token)
             progress.update_absolute(progress_start + step + 1)
-
-            if step + 1 < target_frames:
-                positive_logits, positive_cache = _decode_one(
-                    model, positive_cache, token, positive_length + step, positive_decode_state
-                )
-                if cfg_scale != 1.0:
-                    negative_logits, negative_cache = _decode_one(
-                        model,
-                        negative_cache,
-                        token,
-                        len(negative_full) + step,
-                        negative_decode_state,
-                    )
+            if step + 1 < frames:
+                if fixed_kv:
+                    comfy.model_prefetch.malloc_graph_begin(device)
+                output = model.model(decode_tokens, past_key_values=cache, dtype=dtype, position_ids=positions,
+                                     attention_mask=mask[:, :prefix_length + step + 1] if mask is not None and not fixed_kv else None,
+                                     decode_buffers=decode_buffers)
+                logits.copy_(model.model.lm_head(output[0][:, -1]))
+                cache = output[2]
+                del output
+                if fixed_kv:
+                    comfy.model_prefetch.malloc_graph_end()
+                positions.add_(1)
     finally:
         comfy.model_prefetch.cleanup_prefetch_queues()
-
-    if len(history) != target_frames:
-        raise RuntimeError(
-            f"YuE2 generated {len(history)} frame token(s) for {section['name']!r}; "
-            f"the ABC requires exactly {target_frames}."
-        )
-    return history, positive_full, abc_ids
-
-
-def _expected_conditioning_tokens(sections, prefixes, context):
-    total = 0
-    for section, prefix in zip(sections, prefixes):
-        for start, end in chunk_ranges(section["frames"], len(prefix), context):
-            total += len(prefix) + end - start + 1
-    return total
-
-
-def _append_section_conditioning(
-    output,
-    section_context,
-    local_chunks,
-    global_start,
-    kv_cursor,
-):
-    global_chunks = []
-    for chunk_start, chunk_end, local_kv_start, local_kv_end in local_chunks:
-        size = local_kv_end - local_kv_start
-        output[:, kv_cursor:kv_cursor + size].copy_(
-            section_context[:, local_kv_start:local_kv_end]
-        )
-        global_chunks.append(
-            (
-                global_start + chunk_start,
-                global_start + chunk_end,
-                kv_cursor,
-                kv_cursor + size,
-            )
-        )
-        kv_cursor += size
-    return global_chunks, kv_cursor
+    return tokens
 
 
 class HZ3_YuE2_GenerateMusicSections:
@@ -457,8 +263,9 @@ class HZ3_YuE2_GenerateMusicSections:
     RETURN_NAMES = ("conditioning", "seconds", "report")
     OUTPUT_NODE = True
     DESCRIPTION = (
-        "Generate each tagged ABC/lyrics section serially from one frozen global "
-        "YuE2 prompt prefix, then join the section conditionings for one KSampler pass."
+        "Generate the song as one continuous YuE2 pass that stops at every ABC/lyrics "
+        "section boundary and stores each section's tokens, so edited sections are "
+        "resampled while the rest is replayed."
     )
 
     @classmethod
@@ -502,6 +309,12 @@ class HZ3_YuE2_GenerateMusicSections:
                     "step": 0.01,
                     "advanced": True,
                 }),
+                "section_seeds": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": "Optional per-section seed overrides, one 'Chorus 2 = 1234' per line, "
+                               "to re-roll only those sections. Unchanged sections reuse their stored tokens.",
+                }),
             },
         }
 
@@ -518,169 +331,114 @@ class HZ3_YuE2_GenerateMusicSections:
         top_k,
         repetition_penalty,
         cfg_scale=1.0,
+        section_seeds="",
     ):
         specs = _build_section_specs(abc, lyrics)
         style = str(style or "").strip()
         seed = int(seed) & 0xFFFFFFFFFFFFFFFF
         cfg_scale = float(cfg_scale)
+        sampling = {
+            "temperature": float(temperature),
+            "top_p": float(top_p),
+            "top_k": int(top_k),
+            "repetition_penalty": float(repetition_penalty),
+        }
+        seed_overrides = _parse_section_seeds(section_seeds)
+        unknown = set(seed_overrides) - {section["name"].casefold() for section in specs}
+        if unknown:
+            raise ValueError(f"section_seeds names unknown section(s): {', '.join(sorted(unknown))}.")
 
-        token_specs = []
-        for index, section in enumerate(specs):
-            section_seed = (seed + index) & 0xFFFFFFFFFFFFFFFF
-            section_lyrics = f"[{section['name']}]\n{section['lyrics']}".strip()
-            tokens = clip.tokenize(
-                style,
-                lyrics=section_lyrics,
-                cot=mode,
-                seed=section_seed,
-                abc=section["abc"],
-                max_tokens=section["frames"],
-                temperature=float(temperature),
-                top_p=float(top_p),
-                top_k=int(top_k),
-                repetition_penalty=float(repetition_penalty),
-                cfg_scale=cfg_scale,
-            )
-            token_specs.append((section_seed, tokens))
-
-        empty_prompt = clip.tokenize(
+        total_frames = sum(section["frames"] for section in specs)
+        tokens = clip.tokenize(
             style,
-            lyrics="",
+            lyrics=lyrics,
             cot=mode,
             seed=seed,
-            abc="",
-            max_tokens=1,
-            temperature=float(temperature),
-            top_p=float(top_p),
-            top_k=int(top_k),
-            repetition_penalty=float(repetition_penalty),
+            abc=abc,
+            max_tokens=total_frames,
             cfg_scale=cfg_scale,
+            **sampling,
         )
-        # The empty-lyrics prompt ends in a newline plus ABC_START; cap the shared
-        # cache before ABC_START and at the common prefix of the actual sections.
-        prompt_limit = max(1, len(empty_prompt["prefix"]) - 1)
-        positive_prefixes = [tokens["prefix"] for _, tokens in token_specs]
-        shared_length = _common_prefix_length(positive_prefixes, prompt_limit)
-        positive_base = positive_prefixes[0][:shared_length]
-        if not positive_base:
-            raise ValueError("Could not find a shared YuE2 style prefix for the sections.")
+        abc_ids = tokens["abc_ids"]
+        positive = tokens["prefix"] + abc_ids + [ABC_END, MUSIC_START]
+        negative = tokens["negative"] + [ABC_START] + abc_ids + [ABC_END, MUSIC_START]
+        model, device, dtype = _prepare_model(clip, tokens)
+        context = model.config.max_position_embeddings
+        if max(len(positive), len(negative)) + total_frames > context:
+            raise ValueError(
+                f"The song needs {max(len(positive), len(negative)) + total_frames} YuE2 context tokens, "
+                f"above the model limit {context}. Shorten the lyrics, ABC, or score duration."
+            )
 
-        negative_base = token_specs[0][1]["negative"]
-        if any(tokens["negative"] != negative_base for _, tokens in token_specs[1:]):
-            raise ValueError("YuE2 section modes produced different negative prompt prefixes.")
+        patches = _patches_fingerprint(clip)
+        plan = []
+        for index, section in enumerate(specs):
+            section_seed = seed_overrides.get(section["name"].casefold(), (seed + index) & 0xFFFFFFFFFFFFFFFF)
+            path = _section_token_path(
+                {
+                    "style": style,
+                    "mode": mode,
+                    "lyrics": section["lyrics"],
+                    "abc": section["abc"],
+                    "frames": section["frames"],
+                    "seed": section_seed,
+                    "sampling": [*sampling.values(), cfg_scale],
+                    "patches": patches,
+                }
+            )
+            plan.append((section, section_seed, path, _load_section_tokens(path, section["frames"])))
 
-        model, device, dtype = _prepare_model(clip, token_specs[0][1])
-        total_frames = sum(section["frames"] for section in specs)
         progress = comfy.utils.ProgressBar(total_frames)
-        global_start = 0
-        kv_cursor = 0
-        all_chunks = []
-        all_abc_ids = []
+        history = []
         section_layout = []
-        assembled = None
-        expected_kv_tokens = None
-
         try:
-            with comfy.model_management.cuda_device_context(device), comfy.ops.use_quantized_matmul(
-                model, device
-            ):
-                positive_base_logits, positive_base_cache, _ = model._prefill(
-                    [positive_base], len(positive_base), dtype
-                )
-                negative_base_cache = None
-                negative_base_logits = None
-                if cfg_scale != 1.0:
-                    negative_base_logits, negative_base_cache, _ = model._prefill(
-                        [negative_base], len(negative_base), dtype
-                    )
-
-                positive_full_prefixes = [
-                    tokens["prefix"] + tokens["abc_ids"] + [ABC_END, MUSIC_START]
-                    for _, tokens in token_specs
-                ]
-                expected_kv_tokens = _expected_conditioning_tokens(
-                    specs, positive_full_prefixes, model.config.max_position_embeddings
-                )
-
-                for index, (section, (section_seed, tokens)) in enumerate(
-                    zip(specs, token_specs)
-                ):
-                    semantic, acoustic_prefix, abc_ids = _generate_section_tokens(
-                        model=model,
-                        section=section,
-                        positive_base_cache=positive_base_cache,
-                        positive_base_logits=positive_base_logits,
-                        positive_base=positive_base,
-                        negative_base_cache=negative_base_cache,
-                        negative_base_logits=negative_base_logits,
-                        negative_base=negative_base,
-                        positive_tokens=tokens,
-                        cfg_scale=cfg_scale,
-                        section_seed=section_seed,
-                        temperature=float(temperature),
-                        top_p=float(top_p),
-                        top_k=int(top_k),
-                        repetition_penalty=float(repetition_penalty),
-                        device=device,
-                        dtype=dtype,
-                        progress=progress,
-                        progress_start=global_start,
-                    )
-                    section_context, local_chunks = model._acoustic_conditioning(
-                        acoustic_prefix, semantic, dtype
-                    )
-                    if assembled is None:
-                        assembled = torch.empty(
-                            (1, expected_kv_tokens, section_context.shape[-1]),
-                            device=section_context.device,
-                            dtype=section_context.dtype,
+            with comfy.model_management.cuda_device_context(device), comfy.ops.use_quantized_matmul(model, device):
+                for section, section_seed, path, stored in plan:
+                    start = len(history)
+                    if stored is None:
+                        prefixes = [positive + history]
+                        if cfg_scale != 1.0:
+                            prefixes.append(negative + history)
+                        stored = _sample_section(
+                            model, prefixes, cfg_scale, section["frames"], section_seed, history,
+                            sampling, device, dtype, progress, start, section["name"],
                         )
-                    section_chunks, kv_cursor = _append_section_conditioning(
-                        assembled,
-                        section_context,
-                        local_chunks,
-                        global_start,
-                        kv_cursor,
-                    )
-                    all_chunks.extend(section_chunks)
-                    all_abc_ids.extend(abc_ids)
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text(json.dumps(stored), encoding="utf-8")
+                        reused = False
+                    else:
+                        history.extend(stored)
+                        progress.update_absolute(len(history))
+                        reused = True
                     section_layout.append(
                         {
                             "name": section["name"],
-                            "start_frame": global_start,
-                            "end_frame": global_start + section["frames"],
+                            "start_frame": start,
+                            "end_frame": len(history),
                             "seconds": section["frames"] / FRAMES_PER_SECOND,
                             "bars": section["bars"],
                             "seed": section_seed,
+                            "reused": reused,
                         }
                     )
-                    global_start += section["frames"]
-                    del semantic, section_context
-                    comfy.model_prefetch.cleanup_prefetch_queues()
+                conditioning, chunks = model._acoustic_conditioning(positive, history, dtype)
         finally:
             comfy.model_prefetch.cleanup_prefetch_queues()
 
-        if assembled is None or global_start != total_frames or kv_cursor != expected_kv_tokens:
-            raise RuntimeError(
-                "YuE2 section conditioning assembly did not match the planned score duration."
-            )
-
         metadata = {
             "pooled_output": None,
-            "yue2_chunks": tuple(all_chunks),
-            "yue2_abc_ids": all_abc_ids,
+            "yue2_chunks": chunks,
+            "yue2_abc_ids": abc_ids,
             "yue2_frames": total_frames,
             "yue2_truncated": False,
-            "hz3_section_assembly": True,
             "hz3_section_layout": section_layout,
-            "hz3_frozen_prefix_tokens": shared_length,
         }
-        conditioning = [[assembled, metadata]]
         seconds = total_frames / FRAMES_PER_SECOND
+        resampled = sum(not section["reused"] for section in section_layout)
         report_lines = [
-            f"Generated {len(specs)} ABC/lyrics sections · {seconds:.2f} s",
-            f"Frozen shared prompt prefix: {shared_length} tokens · one final KSampler pass",
-            "Section lengths are locked to the ABC; each block ended at its score boundary.",
+            f"Generated {len(specs)} ABC/lyrics sections · {seconds:.2f} s · "
+            f"{resampled} sampled, {len(specs) - resampled} reused from stored tokens",
+            "One continuous YuE2 pass over the full prompt; section lengths are locked to the ABC.",
         ]
         for section in section_layout:
             start_seconds = section["start_frame"] / FRAMES_PER_SECOND
@@ -688,11 +446,12 @@ class HZ3_YuE2_GenerateMusicSections:
             report_lines.append(
                 f"{section['name']}: {section['bars']} bars · "
                 f"{start_seconds:.2f}-{end_seconds:.2f}s · seed {section['seed']}"
+                f"{' · reused' if section['reused'] else ''}"
             )
         report = "\n".join(report_lines)
         return {
             "ui": {"text": [report]},
-            "result": (conditioning, seconds, report),
+            "result": ([[conditioning, metadata]], seconds, report),
         }
 
 

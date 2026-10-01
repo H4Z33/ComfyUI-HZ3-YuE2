@@ -13,7 +13,12 @@
   <select id="project-list" title="Proyectos guardados"></select>
   <input id="project-name" placeholder="nombre del proyecto" maxlength="64">
   <button id="save-project">Guardar</button>
-  <label class="file">Importar JSON<input id="import-json" type="file" accept=".json"></label>
+  <label class="file" title="Abre .mixmash desde tu disco">Abrir .mixmash<input id="import-package" type="file" accept=".mixmash"></label>
+  <button id="download-package" title="Descarga el paquete con audio, letra, ABC y estado de la app">Descargar .mixmash</button>
+  <label class="file" title="Canción de origen a analizar">Audio original<input id="source-audio" type="file" accept="audio/*"></label>
+  <button id="analyze" title="SheetSage2 (ABC) + Whisper (letra) + MixMash (estilo)">Analizar audio</button>
+  <button id="compose" title="YuE2 compone el ABC (melodía y acordes) a partir del estilo y la letra">Generar ABC (YuE2)</button>
+  <label class="file" title="JSON con style, lyrics y abc">Importar JSON<input id="import-json" type="file" accept=".json"></label>
   <span class="spacer"></span>
   <label class="switch"><input id="harmonize" type="checkbox" checked> Armonías</label>
   <button id="arrange" title="El agente decide en qué secciones y con qué voces van las armonías">Armonías con agente</button>
@@ -25,8 +30,9 @@
 
 <main>
   <aside class="song">
+    <label>Indicaciones de estilo (MixMash)<textarea id="style-instructions" rows="3" placeholder="p. ej. intro en piano, romántico, big band después del solo"></textarea></label>
     <label>Estilo<textarea id="style" rows="6"></textarea></label>
-    <label>Letra<textarea id="lyrics" rows="12"></textarea></label>
+    <label>Letra (si está vacía al analizar, se transcribe con Whisper)<textarea id="lyrics" rows="12"></textarea></label>
     <label>ABC<textarea id="abc" rows="8" spellcheck="false"></textarea></label>
     <div class="row">
       <label>Semilla<input id="seed" type="number" min="0" value="60"></label>
@@ -63,6 +69,11 @@
     <div id="inspector" class="inspector hidden">
       <h3 id="inspector-title"></h3>
       <p id="section-arrangement" class="note"></p>
+      <div class="row">
+        <label>Nombre<input id="section-name" maxlength="100"></label>
+        <button id="section-split" title="Divide la sección en el compás del cursor">Dividir en el cursor</button>
+        <button id="section-merge">Unir con la siguiente</button>
+      </div>
       <label>Letra de la sección<textarea id="section-lyrics" rows="6"></textarea></label>
       <div class="row">
         <label>Semilla de la sección<input id="section-seed" type="number" min="0"></label>

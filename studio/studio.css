@@ -43,7 +43,7 @@ main { flex: 1; display: flex; min-height: 0; }
 .lane-head input[type=range] { width: 70px; }
 .lane-body { position: relative; flex: none; }
 .lane-body canvas { position: absolute; inset: 0; }
-.section-block { position: absolute; top: 4px; bottom: 4px; border: 1px solid var(--line); border-radius: 4px; background: #2a2d35; padding: 2px 6px; overflow: hidden; white-space: nowrap; cursor: pointer; }
+.section-block { position: absolute; top: 4px; bottom: 4px; border: 1px solid var(--line); border-left-width: 4px; border-radius: 4px; background: #2a2d35; padding: 2px 6px; overflow: hidden; white-space: nowrap; cursor: pointer; }
 .section-block.selected { border-color: var(--accent); }
 .section-block .take { color: var(--accent); font-size: 11px; margin-left: 4px; }
 .section-block .edited { color: var(--danger); font-size: 11px; margin-left: 4px; }
@@ -61,3 +61,7 @@ main { flex: 1; display: flex; min-height: 0; }
 @media (max-width: 1100px) { .song { flex-basis: 260px; } .lane-head { flex-basis: 140px; } }
 .note { grid-column: 1 / -1; margin: 0; color: var(--muted); }
 .note:empty { display: none; }
+.lane.score { height: 120px; }
+.handle { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
+.handle:hover { background: rgba(224, 176, 74, .5); }
+.drag-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); z-index: 5; pointer-events: none; }

@@ -1,10 +1,14 @@
 "use strict";
 
-// HZ3 Studio: song timeline over ComfyUI. Every render is a "take" of the whole
-// song; each section plays from the take chosen for it (comping), with short
-// crossfades at section boundaries. Harmony voices are tracks switched per section.
+// HZ3 Studio: song timeline over ComfyUI. A project starts from a source audio:
+// analysis transcribes its ABC, lyrics and style, the piano roll corrects the
+// sections, and every render is a "take" of the whole song. Each section plays
+// from the take chosen for it (comping), with short crossfades at section
+// boundaries. Harmony voices are tracks switched per section. Projects are
+// saved as .mixmash packages.
 
 const TRACKS = [
+  { id: "original", name: "Original", gain: 1, source: true },
   { id: "vocals", name: "Voz principal", gain: 1 },
   { id: "instrumental", name: "Instrumental", gain: 1 },
   { id: "tenor", name: "Tenor", gain: 0.4, harmony: true },
@@ -16,13 +20,18 @@ const TRACKS = [
 const VOICES = TRACKS.filter((track) => track.harmony).map((track) => track.id);
 const FADE = 0.3;
 const PEAKS_PER_SECOND = 100;
-const NODE_LABELS = { 1: "Cargando modelo", 2: "Tokens YuE2", 4: "KSampler", 5: "Decodificando audio", 7: "Separando voz", 12: "Armonías" };
+const TICKS_PER_QUARTER = 256;
+const SECTION_COLORS = ["#e0b04a", "#4aa3e0", "#7bc96f", "#d9714e", "#b07be0", "#4ec9b0", "#e07ba8", "#c9c24a"];
+const RENDER_LABELS = { 1: "Cargando modelo", 2: "Tokens YuE2", 4: "KSampler", 5: "Decodificando audio", 7: "Separando voz", 12: "Armonías" };
+const ANALYSIS_LABELS = { 3: "SheetSage2 (ABC)", 4: "Separando voz", 5: "Whisper (letra)", 6: "MixMash (Ollama)" };
+const COMPOSE_LABELS = { 1: "Cargando modelo", 2: "YuE2 compone el ABC" };
 
 const $ = (id) => document.getElementById(id);
 const clientId = crypto.randomUUID();
 
 let project = newProject();
 let sections = [];
+let score = null;
 let selected = null;
 let pxPerSecond = 6;
 const buffers = new Map();
@@ -33,7 +42,8 @@ let pausedAt = 0;
 
 function newProject() {
   return {
-    name: "", style: "", lyrics: "", abc: "", seed: 60, mode: "full",
+    name: "", source: null, styleInstructions: "", analysis: null,
+    style: "", lyrics: "", abc: "", seed: 60, mode: "full",
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
     harmonize: true, sectionSeeds: {}, takes: [], comp: {}, harmonyOn: {}, mixer: {},
@@ -61,6 +71,10 @@ async function api(path, options) {
   return data;
 }
 
+function postJson(path, body) {
+  return api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
 // ---------- form <-> project
 
 const SAMPLING = ["temperature", "top_p", "top_k", "repetition_penalty", "cfg_scale"];
@@ -68,6 +82,7 @@ const SAMPLING = ["temperature", "top_p", "top_k", "repetition_penalty", "cfg_sc
 function readForm() {
   project.name = $("project-name").value.trim();
   for (const key of ["style", "lyrics", "abc", "mode", "ckpt"]) project[key] = $(key).value;
+  project.styleInstructions = $("style-instructions").value;
   project.seed = Number($("seed").value) || 0;
   project.harmonize = $("harmonize").checked;
   for (const key of SAMPLING) project.sampling[key] = Number($(key).value);
@@ -77,6 +92,7 @@ function readForm() {
 function writeForm() {
   $("project-name").value = project.name;
   for (const key of ["style", "lyrics", "abc", "mode"]) $(key).value = project[key];
+  $("style-instructions").value = project.styleInstructions;
   if ([...$("ckpt").options].some((option) => option.value === project.ckpt)) $("ckpt").value = project.ckpt;
   $("seed").value = project.seed;
   $("harmonize").checked = project.harmonize;
@@ -85,7 +101,7 @@ function writeForm() {
   $("arranger-instructions").value = project.arranger.instructions;
 }
 
-// ---------- sections and lyrics
+// ---------- sections, score and lyrics
 
 let sectionsTimer = null;
 function scheduleSections() {
@@ -95,19 +111,62 @@ function scheduleSections() {
 
 async function refreshSections() {
   readForm();
-  if (!project.abc.trim() || !project.lyrics.trim()) { sections = []; draw(); return; }
-  const data = await api("/hz3/studio/sections", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ abc: project.abc, lyrics: project.lyrics }),
-  });
-  sections = data.sections;
+  if (!project.abc.trim() || !project.lyrics.trim()) { sections = []; score = null; draw(); return; }
+  sections = (await postJson("/hz3/studio/sections", { abc: project.abc, lyrics: project.lyrics })).sections;
+  score = await postJson("/hz3/yue2/abc_viewer/data", { abc: project.abc, lyrics: project.lyrics });
   if (selected && !sections.some((section) => section.name === selected)) selected = null;
   status(`${sections.length} secciones · ${fmt(duration())}`);
   draw();
 }
 
 function duration() {
-  return sections.length ? sections[sections.length - 1].end : 0;
+  if (sections.length) return sections[sections.length - 1].end;
+  return sourceEntry()?.buffer.duration ?? 0;
+}
+
+function barSeconds(bar) {
+  const ticks = bar < score.bars.length ? score.bars[bar].start : score.total_ticks;
+  return (ticks / TICKS_PER_QUARTER) * 60 / score.bpm;
+}
+
+function nearestBar(seconds) {
+  let best = 0;
+  score.bars.forEach((_, index) => {
+    if (Math.abs(barSeconds(index) - seconds) < Math.abs(barSeconds(best) - seconds)) best = index;
+  });
+  return best;
+}
+
+function editableSections() {
+  if (!score || score.sections.length !== sections.length) {
+    throw new Error("La letra y el ABC no tienen las mismas secciones; corrígelas en el panel de la canción.");
+  }
+  return structuredClone(score.sections);
+}
+
+function renameKeys(from, to) {
+  const maps = [project.comp, project.sectionSeeds, project.arrangement, ...Object.values(project.harmonyOn)];
+  for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds);
+  for (const map of maps) {
+    if (from in map) { map[to] = map[from]; delete map[from]; }
+  }
+}
+
+async function applySections(edited, renames = {}) {
+  readForm();
+  // Pin every section's seed by name so reshaping one section does not reroll the others.
+  sections.forEach((section, index) => { project.sectionSeeds[section.name] ??= project.seed + index; });
+  // The editor names sections like the lyric headers; carry ABC-marker keys over to them.
+  sections.forEach((section, index) => {
+    if (section.name !== score.sections[index].name) renameKeys(section.name, score.sections[index].name);
+  });
+  for (const [from, to] of Object.entries(renames)) renameKeys(from, to);
+  const data = await postJson("/hz3/yue2/abc_viewer/data", { abc: project.abc, lyrics: project.lyrics, sections: edited });
+  project.abc = data.edited_abc;
+  project.lyrics = data.edited_lyrics;
+  $("abc").value = project.abc;
+  $("lyrics").value = project.lyrics;
+  await refreshSections();
 }
 
 function lyricBlocks(text) {
@@ -156,10 +215,9 @@ async function arrange() {
   status("El agente está arreglando las armonías…");
   $("arrange").disabled = true;
   try {
-    const { plan } = await api("/hz3/studio/arrange", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ style: project.style, instructions: project.arranger.instructions, model: project.arranger.model,
-        sections: sections.map(({ name, lyrics, start, end }) => ({ name, lyrics, start: fmt(start), end: fmt(end) })) }),
+    const { plan } = await postJson("/hz3/studio/arrange", {
+      style: project.style, instructions: project.arranger.instructions, model: project.arranger.model,
+      sections: sections.map(({ name, lyrics, start, end }) => ({ name, lyrics, start: fmt(start), end: fmt(end) })),
     });
     for (const section of sections) {
       const entry = plan[section.name];
@@ -177,10 +235,139 @@ async function arrange() {
   }
 }
 
-// ---------- rendering through ComfyUI
+// ---------- jobs through ComfyUI
+
+async function queue(prompt, labels, finish) {
+  const data = await postJson("/prompt", { prompt, client_id: clientId });
+  pending.set(data.prompt_id, { labels, finish });
+  setBusy(true);
+  return data.prompt_id;
+}
+
+async function finishJob(promptId) {
+  const job = pending.get(promptId);
+  pending.delete(promptId);
+  setBusy(pending.size > 0);
+  const history = await api(`/history/${promptId}`);
+  await job.finish(history[promptId]?.outputs ?? {});
+}
+
+function setBusy(busy) {
+  for (const id of ["render-song", "render-section", "analyze", "compose"]) $(id).disabled = busy;
+}
+
+function connectSocket() {
+  const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?clientId=${clientId}`);
+  socket.onmessage = (event) => {
+    if (typeof event.data !== "string") return;
+    const { type, data } = JSON.parse(event.data);
+    const job = data?.prompt_id && pending.get(data.prompt_id);
+    if (!job) return;
+    if (type === "progress") {
+      status(`${job.labels[data.node] ?? "Procesando"} · ${data.value}/${data.max}`, data.value / data.max);
+    } else if (type === "executing" && data.node) {
+      status(`${job.labels[data.node] ?? "Procesando"}…`);
+    } else if (type === "execution_success") {
+      finishJob(data.prompt_id).catch((error) => status(error.message, null, true));
+    } else if (type === "execution_error" || type === "execution_interrupted") {
+      pending.delete(data.prompt_id);
+      setBusy(pending.size > 0);
+      status(type === "execution_error" ? `Error en ${data.node_type}: ${data.exception_message}` : "Trabajo interrumpido.", null, true);
+    }
+  };
+  socket.onclose = () => setTimeout(connectSocket, 2000);
+}
+
+async function uploadSource(file) {
+  readForm();
+  if (!project.name) {
+    project.name = file.name.replace(/\.[^.]+$/, "").replace(/[^\p{L}\p{N} _-]+/gu, "_").slice(0, 64).trim();
+    $("project-name").value = project.name;
+  }
+  const form = new FormData();
+  form.append("file", file);
+  project.source = await api(`/hz3/studio/source?project=${encodeURIComponent(project.name)}`, { method: "POST", body: form });
+  await loadSource();
+  await saveProject();
+  status(`Audio «${project.source.original}» listo. Pulsa «Analizar audio».`, 1);
+  draw();
+}
+
+async function analyze() {
+  readForm();
+  if (!project.source) throw new Error("Abre primero el audio original.");
+  const lyrics = project.lyrics.trim();
+  const prompt = {
+    1: { class_type: "LoadAudio", inputs: { audio: project.source.filename } },
+    2: { class_type: "AudioEncoderLoader", inputs: { audio_encoder_name: "sheetsage2_bf16.safetensors" } },
+    3: { class_type: "HZ3_YuE2_SheetSage2Sections", inputs: { audio_encoder: ["2", 0], audio: ["1", 0], mode: "full" } },
+    4: { class_type: "AudioSeparation", inputs: { audio: ["1", 0] } },
+    5: {
+      class_type: "HZ3_YuE2_Whisper",
+      inputs: { audio: ["4", 3], backend: "fast", language: "auto", task: "transcribe", device: "cpu", beam_size: 5, force_rerun: false },
+    },
+    6: {
+      class_type: "HZ3_YuE2_MixMashStyle",
+      inputs: {
+        model: project.arranger.model, endpoint: "http://127.0.0.1:11434", temperature: 0.35, timeout: 180, force_redo: false,
+        lora_trigger: "", abc_report: ["3", 4], abc: ["3", 0], instructions: project.styleInstructions,
+        lyrics: lyrics || ["5", 0], extend_abc: false, karaoke_mode: false,
+      },
+    },
+    10: { class_type: "PreviewAny", inputs: { source: ["6", 0] } },
+    11: { class_type: "PreviewAny", inputs: { source: ["6", 1] } },
+    12: { class_type: "PreviewAny", inputs: { source: ["6", 2] } },
+    13: { class_type: "PreviewAny", inputs: { source: ["3", 0] } },
+    14: { class_type: "PreviewAny", inputs: { source: ["5", 0] } },
+  };
+  await queue(prompt, ANALYSIS_LABELS, async (outputs) => {
+    const text = (node) => outputs[node]?.text?.[0] ?? "";
+    if (!text(12).trim()) throw new Error("El análisis terminó sin ABC.");
+    project.analysis = {
+      at: Date.now(), sheetsage_abc: text(13), whisper_lyrics: text(14),
+      mixmash: { style: text(10), lyrics: text(11), abc: text(12) },
+    };
+    project.style = text(10);
+    project.lyrics = text(11);
+    project.abc = text(12);
+    writeForm();
+    await refreshSections();
+    await saveProject();
+    status("Análisis listo: revisa las secciones en la partitura, la letra y el ABC.", 1);
+  });
+  status("Análisis en cola…", 0);
+}
+
+async function compose() {
+  readForm();
+  if (!project.style.trim() || !project.lyrics.trim()) throw new Error("Escribe estilo y letra con encabezados [Sección] antes de generar el ABC.");
+  const prompt = {
+    1: { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: project.ckpt } },
+    2: {
+      class_type: "YuE2GenerateABC",
+      inputs: {
+        clip: ["1", 1], style: project.style, lyrics: project.lyrics, seed: project.seed, mode: project.mode,
+        max_abc_tokens: 8192, temperature: 0.7, top_p: 0.9, top_k: 30, repetition_penalty: 1.005, penalty_window: 100,
+      },
+    },
+    3: { class_type: "PreviewAny", inputs: { source: ["2", 0] } },
+  };
+  await queue(prompt, COMPOSE_LABELS, async (outputs) => {
+    const abc = outputs[3]?.text?.[0] ?? "";
+    if (!abc.trim()) throw new Error("YuE2 no devolvió ABC.");
+    project.abc = abc;
+    $("abc").value = abc;
+    await refreshSections().catch((error) => status(`ABC generado; revisa las secciones: ${error.message}`, null, true));
+    await saveProject();
+    status("ABC generado: revisa las secciones en la partitura.", 1);
+  });
+  status("Composición en cola…", 0);
+}
 
 function buildPrompt(prefix) {
-  const overrides = Object.entries(project.sectionSeeds).map(([name, seed]) => `${name} = ${seed}`).join("\n");
+  const overrides = Object.entries(project.sectionSeeds)
+    .filter(([name]) => sections.some((section) => section.name === name))
+    .map(([name, seed]) => `${name} = ${seed}`).join("\n");
   const prompt = {
     1: { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: project.ckpt } },
     2: {
@@ -233,62 +420,20 @@ async function render(targets) {
     !targets || targets.includes(section.name) || isEdited(section, index) || !takeById(project.comp[section.name])
   ).map((section) => section.name));
   const { prompt, saves } = buildPrompt(`HZ3-Studio/${project.name}/take-${id}`);
-  const data = await api("/prompt", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, client_id: clientId }),
-  });
-  pending.set(data.prompt_id, { take, saves, comped });
-  status(`Take ${id} en cola…`, 0);
-  setBusy(true);
-}
-
-async function finishRender(promptId) {
-  const job = pending.get(promptId);
-  pending.delete(promptId);
-  setBusy(pending.size > 0);
-  const history = await api(`/history/${promptId}`);
-  const outputs = history[promptId]?.outputs ?? {};
-  for (const [node, track] of Object.entries(job.saves)) {
-    const file = outputs[node]?.audio?.[0];
-    if (file) job.take.files[track] = file;
-  }
-  if (!job.take.files.vocals) throw new Error("La generación terminó sin audio.");
-  project.takes.push(job.take);
-  for (const name of job.comped) project.comp[name] = job.take.id;
-  await saveProject();
-  await loadTake(job.take);
-  status(`Take ${job.take.id} listo · ${[...job.comped].join(", ")}`, 1);
-  draw();
-}
-
-function setBusy(busy) {
-  $("render-song").disabled = busy;
-  $("render-section").disabled = busy;
-}
-
-function connectSocket() {
-  const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?clientId=${clientId}`);
-  socket.onmessage = (event) => {
-    if (typeof event.data !== "string") return;
-    const { type, data } = JSON.parse(event.data);
-    if (!data?.prompt_id || !pending.has(data.prompt_id)) return;
-    if (type === "progress") {
-      status(`${NODE_LABELS[data.node] ?? "Procesando"} · ${data.value}/${data.max}`, data.value / data.max);
-    } else if (type === "executing" && data.node) {
-      status(`${NODE_LABELS[data.node] ?? "Procesando"}…`);
-    } else if (type === "execution_success") {
-      finishRender(data.prompt_id).catch((error) => status(error.message, null, true));
-    } else if (type === "execution_error") {
-      pending.delete(data.prompt_id);
-      setBusy(pending.size > 0);
-      status(`Error en ${data.node_type}: ${data.exception_message}`, null, true);
-    } else if (type === "execution_interrupted") {
-      pending.delete(data.prompt_id);
-      setBusy(pending.size > 0);
-      status("Generación interrumpida.", null, true);
+  await queue(prompt, RENDER_LABELS, async (outputs) => {
+    for (const [node, track] of Object.entries(saves)) {
+      const file = outputs[node]?.audio?.[0];
+      if (file) take.files[track] = file;
     }
-  };
-  socket.onclose = () => setTimeout(connectSocket, 2000);
+    if (!take.files.vocals) throw new Error("La generación terminó sin audio.");
+    project.takes.push(take);
+    for (const name of comped) project.comp[name] = take.id;
+    await saveProject();
+    await loadTake(take);
+    status(`Take ${take.id} listo · ${[...comped].join(", ")}`, 1);
+    draw();
+  });
+  status(`Take ${id} en cola…`, 0);
 }
 
 // ---------- audio
@@ -298,20 +443,33 @@ function fileUrl(file) {
   return `/view?${query}`;
 }
 
+function sourceUrl() {
+  return project.source ? fileUrl({ filename: project.source.filename, subfolder: "", type: "input" }) : null;
+}
+
 function context() {
   audioContext ??= new AudioContext();
   return audioContext;
 }
 
+async function loadUrl(url) {
+  if (buffers.has(url)) return;
+  const response = await fetch(url);
+  if (!response.ok) return;
+  const buffer = await context().decodeAudioData(await response.arrayBuffer());
+  buffers.set(url, { buffer, peaks: peaks(buffer) });
+}
+
 async function loadTake(take) {
-  await Promise.all(Object.entries(take.files).filter(([track]) => track !== "mix").map(async ([, file]) => {
-    const url = fileUrl(file);
-    if (buffers.has(url)) return;
-    const response = await fetch(url);
-    if (!response.ok) return;
-    const buffer = await context().decodeAudioData(await response.arrayBuffer());
-    buffers.set(url, { buffer, peaks: peaks(buffer) });
-  }));
+  await Promise.all(Object.entries(take.files).filter(([track]) => track !== "mix").map(([, file]) => loadUrl(fileUrl(file))));
+}
+
+async function loadSource() {
+  if (project.source) await loadUrl(sourceUrl());
+}
+
+function sourceEntry() {
+  return project.source ? buffers.get(sourceUrl()) : undefined;
 }
 
 function peaks(buffer) {
@@ -353,33 +511,38 @@ function scheduleGain(param, values, start, from) {
   }
 }
 
+function muted(track) {
+  // The source is the reference while correcting; once takes exist it starts muted.
+  return project.mixer[track.id]?.mute ?? Boolean(track.source && project.takes.length);
+}
+
 function mixerGain(track) {
-  const mixer = project.mixer[track.id] ?? {};
   const soloed = TRACKS.some((other) => project.mixer[other.id]?.solo);
-  if (mixer.mute || (soloed && !mixer.solo)) return 0;
-  return mixer.gain ?? track.gain;
+  if (muted(track) || (soloed && !project.mixer[track.id]?.solo)) return 0;
+  return project.mixer[track.id]?.gain ?? track.gain;
 }
 
 function buildGraph(target, destination, from, start) {
   const sources = [];
   const trackGains = {};
   const takeIds = new Set(Object.values(project.comp));
+  const connect = (entry, trackGain, values) => {
+    if (!entry || from >= entry.buffer.duration) return;
+    const source = target.createBufferSource();
+    source.buffer = entry.buffer;
+    const gain = target.createGain();
+    if (values) scheduleGain(gain.gain, values, start, from);
+    source.connect(gain).connect(trackGain);
+    source.start(start, from);
+    sources.push(source);
+  };
   for (const track of TRACKS) {
     const trackGain = target.createGain();
     trackGain.gain.value = mixerGain(track);
     trackGain.connect(destination);
     trackGains[track.id] = trackGain;
-    for (const takeId of takeIds) {
-      const entry = trackBuffer(track.id, takeId);
-      if (!entry || from >= entry.buffer.duration) continue;
-      const source = target.createBufferSource();
-      source.buffer = entry.buffer;
-      const gain = target.createGain();
-      scheduleGain(gain.gain, sectionGains(track.id, takeId), start, from);
-      source.connect(gain).connect(trackGain);
-      source.start(start, from);
-      sources.push(source);
-    }
+    if (track.source) connect(sourceEntry(), trackGain, null);
+    else for (const takeId of takeIds) connect(trackBuffer(track.id, takeId), trackGain, sectionGains(track.id, takeId));
   }
   return { sources, trackGains };
 }
@@ -425,9 +588,12 @@ function tick() {
   if (playback) requestAnimationFrame(tick);
 }
 
+function headWidth() {
+  return document.querySelector(".lane-head")?.offsetWidth ?? 0;
+}
+
 function updatePlayhead() {
-  const head = document.querySelector(".lane-head")?.offsetWidth ?? 0;
-  $("playhead").style.left = `${head + position() * pxPerSecond}px`;
+  $("playhead").style.left = `${headWidth() + position() * pxPerSecond}px`;
   $("clock").textContent = `${fmt(position())} / ${fmt(duration())}`;
 }
 
@@ -485,53 +651,137 @@ function lane(className, head) {
 
 function draw() {
   $("lanes").innerHTML = "";
-  if (!sections.length) { updatePlayhead(); drawInspector(); return; }
+  if (!duration()) { updatePlayhead(); drawInspector(); return; }
   const ruler = lane("ruler", "m:ss");
   const step = pxPerSecond >= 20 ? 5 : pxPerSecond >= 8 ? 10 : 30;
   for (let time = 0; time < duration(); time += step) {
-    const tick = document.createElement("div");
-    tick.className = "tick";
-    tick.style.left = `${time * pxPerSecond}px`;
-    tick.textContent = fmt(time);
-    ruler.body.append(tick);
+    const mark = document.createElement("div");
+    mark.className = "tick";
+    mark.style.left = `${time * pxPerSecond}px`;
+    mark.textContent = fmt(time);
+    ruler.body.append(mark);
   }
   ruler.body.onclick = (event) => seek(event.offsetX / pxPerSecond);
+  if (sections.length) drawSections();
+  if (score) drawScore();
+  for (const track of TRACKS) drawTrack(track);
+  updatePlayhead();
+  drawInspector();
+}
 
-  const sectionLane = lane("sections", "Secciones");
+function drawSections() {
+  const { body } = lane("sections", "Secciones");
   sections.forEach((section, index) => {
     const block = document.createElement("div");
     block.className = `section-block${section.name === selected ? " selected" : ""}`;
     block.style.left = `${section.start * pxPerSecond}px`;
     block.style.width = `${(section.end - section.start) * pxPerSecond}px`;
+    block.style.borderLeftColor = SECTION_COLORS[index % SECTION_COLORS.length];
     block.title = `${section.name} · ${fmt(section.start)}–${fmt(section.end)}`;
     block.textContent = section.name;
     const takeId = project.comp[section.name];
     if (takeId) block.insertAdjacentHTML("beforeend", `<span class="take">T${takeId}</span>`);
     if (isEdited(section, index)) block.insertAdjacentHTML("beforeend", `<span class="edited">editado</span>`);
     block.onclick = () => { selected = section.name; draw(); };
-    sectionLane.body.append(block);
+    if (index > 0 && score) {
+      const handle = document.createElement("div");
+      handle.className = "handle";
+      handle.title = "Arrastra para mover el inicio de la sección (se ajusta al compás)";
+      handle.onmousedown = (event) => { event.preventDefault(); event.stopPropagation(); dragBoundary(index, body); };
+      block.append(handle);
+    }
+    body.append(block);
   });
+}
 
-  for (const track of TRACKS) drawTrack(track);
-  updatePlayhead();
-  drawInspector();
+function dragBoundary(index, body) {
+  const edited = editableSections();
+  const low = edited[index - 1].start_bar + 1;
+  const high = edited[index].end_bar;
+  const line = document.createElement("div");
+  line.className = "drag-line";
+  $("lanes").append(line);
+  let bar = edited[index].start_bar;
+  const move = (event) => {
+    const seconds = (event.clientX - body.getBoundingClientRect().left) / pxPerSecond;
+    bar = Math.min(high, Math.max(low, nearestBar(seconds)));
+    line.style.left = `${headWidth() + barSeconds(bar) * pxPerSecond}px`;
+    status(`«${edited[index].name}» empezará en el compás ${bar + 1} · ${fmt(barSeconds(bar))}`);
+  };
+  const up = () => {
+    window.removeEventListener("mousemove", move);
+    window.removeEventListener("mouseup", up);
+    line.remove();
+    if (bar === edited[index].start_bar) return;
+    edited[index].start_bar = bar;
+    edited[index - 1].end_bar = bar - 1;
+    guard(() => applySections(edited))();
+  };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+}
+
+function drawScore() {
+  const head = document.createElement("span");
+  head.className = "name";
+  head.textContent = `Partitura · ${score.key} · ${score.bpm} BPM`;
+  const { body } = lane("score", head);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(duration() * pxPerSecond));
+  canvas.height = 119;
+  body.append(canvas);
+  const graphics = canvas.getContext("2d");
+  const x = (ticks) => (ticks / TICKS_PER_QUARTER) * 60 / score.bpm * pxPerSecond;
+  const notes = [...(score.tracks.Vocal ?? []), ...(score.tracks.Ins ?? [])];
+  if (!notes.length) return;
+  const low = Math.min(...notes.map((note) => note.pitch)) - 1;
+  const high = Math.max(...notes.map((note) => note.pitch)) + 1;
+  const top = 14;
+  const row = (canvas.height - top) / (high - low + 1);
+  const starts = score.sections.map((section) => section.start_bar);
+  score.bars.forEach((bar, index) => {
+    graphics.fillStyle = starts.includes(index) ? "#6a6d78" : "#262930";
+    graphics.fillRect(Math.round(x(bar.start)), 0, 1, canvas.height);
+  });
+  const sectionAt = (ticks) => {
+    let found = 0;
+    score.sections.forEach((section, index) => { if (score.bars[section.start_bar].start <= ticks) found = index; });
+    return found;
+  };
+  for (const [name, color] of [["Ins", null], ["Vocal", true]]) {
+    for (const note of score.tracks[name] ?? []) {
+      graphics.fillStyle = color ? SECTION_COLORS[sectionAt(note.start) % SECTION_COLORS.length] : "#4a4d57";
+      graphics.fillRect(x(note.start), top + (high - note.pitch) * row, Math.max(1, x(note.duration) - 1), Math.max(2, row - 1));
+    }
+  }
+  graphics.font = "10px system-ui, sans-serif";
+  graphics.fillStyle = "#9a9ca5";
+  let lastEnd = -Infinity;
+  for (const chord of score.chords) {
+    const left = x(chord.start);
+    if (left < lastEnd + 4) continue;
+    graphics.fillText(chord.symbol, left + 2, 10);
+    lastEnd = left + graphics.measureText(chord.symbol).width;
+  }
 }
 
 function drawTrack(track) {
   const head = document.createElement("div");
-  const mixer = project.mixer[track.id] ?? {};
   head.innerHTML = `<span class="name">${track.name}</span><span class="controls">
-    <button data-action="mute" class="${mixer.mute ? "active" : ""}" title="Silenciar">M</button>
-    <button data-action="solo" class="${mixer.solo ? "active" : ""}" title="Solo">S</button>
-    <input type="range" min="0" max="1.5" step="0.01" value="${mixer.gain ?? track.gain}" title="Volumen"></span>`;
-  head.querySelectorAll("button").forEach((button) => {
-    button.onclick = () => {
-      const entry = project.mixer[track.id] ??= {};
-      entry[button.dataset.action] = !entry[button.dataset.action];
-      applyMixer();
-      draw();
-    };
-  });
+    <button data-action="mute" class="${muted(track) ? "active" : ""}" title="Silenciar">M</button>
+    <button data-action="solo" class="${project.mixer[track.id]?.solo ? "active" : ""}" title="Solo">S</button>
+    <input type="range" min="0" max="1.5" step="0.01" value="${project.mixer[track.id]?.gain ?? track.gain}" title="Volumen"></span>`;
+  head.querySelector('[data-action="mute"]').onclick = () => {
+    (project.mixer[track.id] ??= {}).mute = !muted(track);
+    applyMixer();
+    draw();
+  };
+  head.querySelector('[data-action="solo"]').onclick = () => {
+    const entry = project.mixer[track.id] ??= {};
+    entry.solo = !entry.solo;
+    applyMixer();
+    draw();
+  };
   head.querySelector("input").oninput = (event) => {
     (project.mixer[track.id] ??= {}).gain = Number(event.target.value);
     applyMixer();
@@ -543,20 +793,27 @@ function drawTrack(track) {
   body.append(canvas);
   const graphics = canvas.getContext("2d");
   const middle = canvas.height / 2;
+  const paint = (entry, from, to) => {
+    for (let column = Math.floor(from * pxPerSecond); column < to * pxPerSecond; column++) {
+      const first = Math.floor((column / pxPerSecond) * PEAKS_PER_SECOND);
+      const last = Math.min(entry.peaks.length, Math.floor(((column + 1) / pxPerSecond) * PEAKS_PER_SECOND));
+      let peak = 0;
+      for (let index = first; index < last; index++) peak = Math.max(peak, entry.peaks[index]);
+      const height = Math.min(1, peak) * (middle - 2);
+      graphics.fillRect(column, middle - height, 1, height * 2 || 1);
+    }
+  };
+  if (track.source) {
+    const entry = sourceEntry();
+    graphics.fillStyle = "#8a8d96";
+    if (entry) paint(entry, 0, Math.min(duration(), entry.buffer.duration));
+    return;
+  }
   sections.forEach((section) => {
     const entry = trackBuffer(track.id, project.comp[section.name]);
     const enabled = !track.harmony || harmonyEnabled(track.id, section);
     graphics.fillStyle = enabled ? (track.harmony ? "#4aa3e0" : "#c9a14a") : "#3a3d45";
-    if (entry) {
-      for (let x = Math.floor(section.start * pxPerSecond); x < section.end * pxPerSecond; x++) {
-        const from = Math.floor((x / pxPerSecond) * PEAKS_PER_SECOND);
-        const to = Math.min(entry.peaks.length, Math.floor(((x + 1) / pxPerSecond) * PEAKS_PER_SECOND));
-        let peak = 0;
-        for (let index = from; index < to; index++) peak = Math.max(peak, entry.peaks[index]);
-        const height = Math.min(1, peak) * (middle - 2);
-        graphics.fillRect(x, middle - height, 1, height * 2 || 1);
-      }
-    }
+    if (entry) paint(entry, section.start, section.end);
     if (track.harmony) {
       const toggle = document.createElement("div");
       toggle.className = `toggle${enabled ? "" : " off"}`;
@@ -583,10 +840,12 @@ function drawInspector() {
   $("inspector").classList.toggle("hidden", index < 0);
   if (index < 0) return;
   const section = sections[index];
-  $("inspector-title").textContent = `${section.name} · ${fmt(section.start)}–${fmt(section.end)}`;
+  $("inspector-title").textContent = `${section.name} · ${fmt(section.start)}–${fmt(section.end)} · ${section.bars} compases`;
   $("section-arrangement").textContent = project.arrangement[section.name] ? `Agente: ${project.arrangement[section.name]}` : "";
+  if (document.activeElement !== $("section-name")) $("section-name").value = section.name;
   if (document.activeElement !== $("section-lyrics")) $("section-lyrics").value = section.lyrics;
   if (document.activeElement !== $("section-seed")) $("section-seed").value = sectionSeed(section, index);
+  $("section-merge").disabled = index === sections.length - 1;
   const takes = $("section-takes");
   takes.innerHTML = project.takes.length ? "<span>Take de esta sección</span>" : "<span>Sin takes todavía.</span>";
   for (const take of project.takes) {
@@ -603,12 +862,48 @@ function drawInspector() {
   }
 }
 
-// ---------- projects
+async function renameSection(name) {
+  const index = sections.findIndex((section) => section.name === selected);
+  name = name.replace(/[\r\n[\]]+/g, " ").trim();
+  if (!name || name === selected) return;
+  if (sections.some((section) => section.name === name)) throw new Error(`Ya existe una sección «${name}».`);
+  const edited = editableSections();
+  edited[index].name = name;
+  const from = selected;
+  selected = name;
+  await applySections(edited, { [from]: name });
+}
+
+async function splitSection() {
+  const index = sections.findIndex((section) => section.name === selected);
+  const edited = editableSections();
+  const bar = nearestBar(position());
+  if (bar <= edited[index].start_bar || bar > edited[index].end_bar) {
+    throw new Error("Pon el cursor dentro de la sección, en el compás donde debe empezar la nueva.");
+  }
+  let name = `${edited[index].name} b`;
+  while (sections.some((section) => section.name === name)) name += "b";
+  edited.splice(index + 1, 0, { id: `section-${Date.now()}`, name, start_bar: bar, end_bar: edited[index].end_bar, lyrics: "" });
+  edited[index].end_bar = bar - 1;
+  selected = name;
+  await applySections(edited);
+}
+
+async function mergeSection() {
+  const index = sections.findIndex((section) => section.name === selected);
+  const edited = editableSections();
+  const [next] = edited.splice(index + 1, 1);
+  edited[index].end_bar = next.end_bar;
+  edited[index].lyrics = [edited[index].lyrics.trim(), next.lyrics.trim()].filter(Boolean).join("\n");
+  await applySections(edited);
+}
+
+// ---------- projects (.mixmash packages)
 
 async function saveProject() {
   readForm();
   if (!project.name) throw new Error("Ponle nombre al proyecto.");
-  await api("/hz3/studio/project", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(project) });
+  await postJson("/hz3/studio/project", project);
   await listProjects();
   status(`Proyecto «${project.name}» guardado.`, 1);
 }
@@ -627,7 +922,7 @@ async function openProject(name) {
   writeForm();
   await refreshSections();
   status("Cargando audio…");
-  await Promise.all(project.takes.map(loadTake));
+  await Promise.all([loadSource(), ...project.takes.map(loadTake)]);
   status(`Proyecto «${project.name}» · ${project.takes.length} takes`, 1);
   draw();
 }
@@ -650,6 +945,13 @@ async function init() {
   $("project-list").onchange = guard((event) => event.target.value && openProject(event.target.value));
   $("save-project").onclick = guard(saveProject);
   $("toggle-song").onclick = () => document.querySelector(".song").classList.toggle("hidden");
+  $("source-audio").onchange = guard(async (event) => {
+    const [file] = event.target.files;
+    event.target.value = "";
+    if (file) await uploadSource(file);
+  });
+  $("analyze").onclick = guard(analyze);
+  $("compose").onclick = guard(compose);
   $("render-song").onclick = guard(() => render(null));
   $("render-section").onclick = guard(() => render([selected]));
   $("export-mix").onclick = guard(exportMix);
@@ -663,6 +965,21 @@ async function init() {
     event.target.value = "";
     await refreshSections();
   });
+  $("import-package").onchange = guard(async (event) => {
+    const form = new FormData();
+    form.append("file", event.target.files[0]);
+    event.target.value = "";
+    const { name } = await api("/hz3/studio/package", { method: "POST", body: form });
+    await listProjects();
+    await openProject(name);
+  });
+  $("download-package").onclick = guard(async () => {
+    await saveProject();
+    location.href = `/hz3/studio/package?name=${encodeURIComponent(project.name)}`;
+  });
+  $("section-name").addEventListener("change", guard((event) => renameSection(event.target.value)));
+  $("section-split").onclick = guard(splitSection);
+  $("section-merge").onclick = guard(mergeSection);
   $("section-lyrics").addEventListener("input", guard((event) => {
     setSectionLyrics(sections.findIndex((section) => section.name === selected), event.target.value);
     scheduleSections();

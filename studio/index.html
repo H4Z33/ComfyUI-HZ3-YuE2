@@ -33,6 +33,7 @@
   <aside class="song">
     <label>Indicaciones de estilo (MixMash)<textarea id="style-instructions" rows="3" placeholder="p. ej. intro en piano, romántico, big band después del solo"></textarea></label>
     <label>Estilo<textarea id="style" rows="6"></textarea></label>
+    <button id="apply-classical" title="Escribe en la línea instrumental frases de cuartetos de dominio público (carpeta references/), en las secciones marcadas">Aplicar líneas clásicas</button>
     <button id="section-styles-from-cues" title="Convierte cada línea «[Sección] …» del estilo en el estilo propio de esa sección">Estilos por sección desde [Sección]</button>
     <label>Letra (si está vacía al analizar, se transcribe con Whisper)<textarea id="lyrics" rows="12"></textarea></label>
     <label>ABC<textarea id="abc" rows="8" spellcheck="false"></textarea></label>
@@ -76,6 +77,7 @@
         <label>Nombre<input id="section-name" maxlength="100"></label>
         <button id="section-split" title="Divide la sección en el compás del cursor">Dividir en el cursor</button>
         <button id="section-merge">Unir con la siguiente</button>
+        <label>Línea clásica<select id="section-classical"><option value="">Ninguna</option><option value="high">Alta (violín 1)</option><option value="low">Baja (viola / chelo)</option></select></label>
       </div>
       <label>Letra de la sección<textarea id="section-lyrics" rows="6"></textarea></label>
       <label>Estilo de la sección (vacío = estilo general)<textarea id="section-style" rows="6" placeholder="p. ej. Spanish female soprano, modern Latin pop, bright full band"></textarea></label>

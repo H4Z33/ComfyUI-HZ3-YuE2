@@ -10,6 +10,7 @@ the accompaniment still comes from the chords and the style.
 
 from bisect import bisect_right
 from fractions import Fraction
+import json
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
@@ -28,7 +29,7 @@ GRID = Fraction(1, 8)  # 32nd notes, the finest unit of the YuE2 ABC grid
 
 
 def _quantize(value):
-    return round(Fraction(value) / GRID) * GRID
+    return round(Fraction(value).limit_denominator(64) / GRID) * GRID
 
 
 def read_musicxml(path):
@@ -167,7 +168,36 @@ def _beat_chords(score, start, beats, tonic, minor):
     return result
 
 
-def add_lines(score_abc, references, plan, register_high=(72, 88), register_low=(48, 62)):
+def build_library(paths):
+    """Every usable phrase of the given MusicXML files, with its role: the first part
+    ("high", e.g. Violin 1) or an inner/lower part ("low", e.g. viola, cello)."""
+    library = []
+    for path in paths:
+        piece = read_musicxml(path)
+        names = list(piece["parts"])
+        for role, wanted in (("high", names[:1]), ("low", names[1:])):
+            for part in wanted:
+                for phrase in phrases(piece, part):
+                    phrase["notes"] = [[float(onset), pitch, float(duration)] for onset, pitch, duration in phrase["notes"]]
+                    library.append({**phrase, "role": role, "source": Path(path).stem})
+    return library
+
+
+def load_library(folder):
+    """Phrases of every score under `folder`, kept in folder/phrases.json until a score changes."""
+    folder = Path(folder)
+    scores = sorted(path for path in folder.rglob("*") if path.suffix in (".mxl", ".musicxml"))
+    index = folder / "phrases.json"
+    if index.is_file() and all(path.stat().st_mtime <= index.stat().st_mtime for path in scores):
+        stored = json.loads(index.read_text(encoding="utf-8"))
+        if stored["scores"] == [str(path.relative_to(folder)) for path in scores]:
+            return stored["phrases"]
+    library = build_library(scores)
+    index.write_text(json.dumps({"scores": [str(path.relative_to(folder)) for path in scores], "phrases": library}), encoding="utf-8")
+    return library
+
+
+def add_lines(score_abc, library, plan, register_high=(72, 88), register_low=(48, 62)):
     """Write borrowed phrases into the Ins voice.
 
     plan: {section name: "high" | "low"}; "high" suits intros, endings and choruses
@@ -181,13 +211,8 @@ def add_lines(score_abc, references, plan, register_high=(72, 88), register_low=
     minor = key.endswith("m")
     tonic = _pitch_class(key[:-1] if minor else key)
     candidates = {"high": [], "low": []}
-    for reference in references:
-        piece = read_musicxml(reference)
-        names = list(piece["parts"])
-        for role, wanted in (("high", names[:1]), ("low", names[1:])):
-            for part in wanted:
-                for phrase in phrases(piece, part):
-                    candidates[role].append({**phrase, "source": Path(reference).stem})
+    for phrase in library:
+        candidates[phrase["role"]].append(phrase)
     ins = [list(note) for note in score.voices["Ins"].notes]
     used, report = set(), []
     for index, (start, name) in enumerate(sections):

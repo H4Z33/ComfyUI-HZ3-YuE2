@@ -57,6 +57,16 @@ for a song editor on top of these nodes.
   gives a shift per section, refined by rhythm where pitch is unreliable (rap),
   editable in ms. A role (equal, second voice −4 dB, choir −9 dB) sets its level
   against the lead. Each voice track is switched per section like the harmonies.
+- Classical instrumental lines: put public-domain MusicXML scores (`.mxl`/`.musicxml`,
+  e.g. CC0 [OpenScore String Quartets](https://github.com/OpenScore/StringQuartets)) in
+  `references/`, mark sections in the inspector as `Alta` (first violin: intros, endings,
+  choruses) or `Baja` (viola/cello counter-line), and `Aplicar líneas clásicas`. Phrases
+  from slow duple-meter passages are moved to the song's key by scale degree, their beats
+  1 and 3 fitted to the song's chords, and written into the ABC `Ins` line; the vocal line
+  and chords are untouched and the project keeps which bars of which work were used.
+  YuE2's ABC has a single instrumental line, so this shapes melodic material; the rest of
+  the accompaniment still follows the chords and style. `references/phrases.json` caches
+  the phrases until a score changes.
 - `Exportar WAV` renders the current timeline.
 
 `Catálogo` lists every project (date, source audio or composed, sections, takes, voices,

@@ -23,12 +23,14 @@ import folder_paths
 from comfy.text_encoders.yue2 import FRAMES_PER_SECOND
 
 from .abc_score import parse
+from .classical_lines import add_lines, load_library
 from .section_generation import _build_section_specs
 from .vocal_harmonizer import _time_warp, _track
 from .vocal_harmony import PARTS, harmonize
 
 
 STATIC = Path(__file__).parent / "studio"
+REFERENCES = Path(__file__).parent / "references"
 ARRANGER_PROMPT = Path(__file__).parent / "prompts" / "harmony_arranger_system.txt"
 VOICES = ("tenor", "baritone", "low", "bass", "countertenor")
 OLLAMA = "http://127.0.0.1:11434"
@@ -143,7 +145,7 @@ def register(routes):
         timeline = []
         frame = 0
         for spec in specs:
-            timeline.append({"name": spec["name"], "lyrics": spec["lyrics"], "bars": spec["bars"],
+            timeline.append({"name": spec["name"], "lyrics": spec["lyrics"], "abc": spec["abc"], "bars": spec["bars"],
                              "start": frame / FRAMES_PER_SECOND, "end": (frame + spec["frames"]) / FRAMES_PER_SECOND})
             frame += spec["frames"]
         return web.json_response({"sections": timeline})
@@ -243,6 +245,15 @@ def register(routes):
             raise web.HTTPBadRequest(text="Vocal file not found in the output folder.")
         knots = await asyncio.to_thread(_warp, path, body["abc"], body.get("line", "lead"))
         return web.json_response({"abc": knots[0].tolist(), "audio": knots[1].tolist(), "sure": knots[2].tolist()})
+
+    @routes.post("/hz3/studio/classical")
+    async def classical(request):
+        body = await request.json()
+        if not any(REFERENCES.rglob("*.mxl")) and not any(REFERENCES.rglob("*.musicxml")):
+            return web.json_response({"error": f"Put public-domain MusicXML scores (.mxl/.musicxml) in {REFERENCES}."}, status=400)
+        library = await asyncio.to_thread(load_library, REFERENCES)
+        abc, report = add_lines(body["abc"], library, {name.casefold(): role for name, role in body["plan"].items()})
+        return web.json_response({"abc": abc, "report": report})
 
     @routes.post("/hz3/studio/arrange")
     async def arrange(request):

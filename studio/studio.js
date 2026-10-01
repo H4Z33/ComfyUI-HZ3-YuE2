@@ -54,7 +54,7 @@ function newProject() {
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
     harmonize: true, sectionSeeds: {}, sectionStyles: {}, takes: [], comp: {}, trackOn: {}, mixer: {}, voices: [],
-    arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {},
+    arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {}, classicalPlan: {}, classicalReport: [],
   };
 }
 
@@ -155,8 +155,8 @@ function editableSections() {
 }
 
 function renameKeys(from, to) {
-  const maps = [project.comp, project.sectionSeeds, project.sectionStyles, project.arrangement, ...Object.values(project.trackOn)];
-  for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds, take.sectionStyles ?? {});
+  const maps = [project.comp, project.sectionSeeds, project.sectionStyles, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
+  for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds, take.sectionStyles ?? {}, take.sectionAbc ?? {});
   for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets);
   for (const map of maps) {
     if (from in map) { map[to] = map[from]; delete map[from]; }
@@ -229,7 +229,8 @@ function isEdited(section, index) {
   if (!take) return false;
   return (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim()
     || take.sectionSeeds[section.name] !== sectionSeed(section, index)
-    || (take.sectionStyles?.[section.name] ?? "") !== (project.sectionStyles[section.name] ?? "");
+    || (take.sectionStyles?.[section.name] ?? "") !== (project.sectionStyles[section.name] ?? "")
+    || Boolean(take.sectionAbc && take.sectionAbc[section.name] !== section.abc);
 }
 
 function stylesFromCues() {
@@ -253,6 +254,20 @@ function trackEnabled(track, section) {
   // Every track can be switched per section; harmonies start on only in choruses and bridges.
   const value = project.trackOn[track]?.[section.name];
   return value ?? (!VOICES.includes(track) || /^(chorus|coro|bridge|puente)/i.test(section.name));
+}
+
+async function applyClassical() {
+  readForm();
+  const plan = Object.fromEntries(Object.entries(project.classicalPlan).filter(([name, role]) => role && sections.some((section) => section.name === name)));
+  if (!Object.keys(plan).length) throw new Error("Elige en el inspector qué secciones llevan línea clásica (alta o baja).");
+  status("Buscando frases en las partituras de referencia…");
+  const { abc, report } = await postJson("/hz3/studio/classical", { abc: project.abc, plan });
+  project.abc = abc;
+  project.classicalReport = report;
+  $("abc").value = abc;
+  await refreshSections();
+  await saveProject();
+  status(`Líneas clásicas: ${report.join(" · ")}`, 1);
 }
 
 async function arrange() {
@@ -463,6 +478,7 @@ async function render(targets) {
   const id = Math.max(0, ...project.takes.map((take) => take.id)) + 1;
   const take = { id, created: Date.now(), harmonized: project.harmonize, files: {}, sectionLyrics: {}, sectionSeeds: {} };
   take.sectionStyles = {};
+  take.sectionAbc = Object.fromEntries(sections.map((section) => [section.name, section.abc]));
   sections.forEach((section, index) => {
     take.sectionLyrics[section.name] = section.lyrics;
     take.sectionSeeds[section.name] = sectionSeed(section, index);
@@ -954,6 +970,7 @@ function drawInspector() {
   if (document.activeElement !== $("section-name")) $("section-name").value = section.name;
   if (document.activeElement !== $("section-lyrics")) $("section-lyrics").value = section.lyrics;
   if (document.activeElement !== $("section-style")) $("section-style").value = project.sectionStyles[section.name] ?? "";
+  $("section-classical").value = project.classicalPlan[section.name] ?? "";
   if (document.activeElement !== $("section-seed")) $("section-seed").value = sectionSeed(section, index);
   $("section-merge").disabled = index === sections.length - 1;
   const takes = $("section-takes");
@@ -1143,6 +1160,15 @@ async function alignVoice(voice) {
       ? shift
       : refineShift(trackBuffer("vocals", project.comp[section.name]), buffers.get(fileUrl(voice.file)), section, shift);
   }
+  // Drift between two singers is gradual; a jump of seconds is a false match, so search near the previous section.
+  let previous = null;
+  for (const section of sections) {
+    if (!(section.name in shifts)) continue;
+    if (previous !== null && Math.abs(shifts[section.name] - previous) > 3) {
+      shifts[section.name] = refineShift(trackBuffer("vocals", project.comp[section.name]), buffers.get(fileUrl(voice.file)), section, previous);
+    }
+    previous = shifts[section.name];
+  }
   const values = Object.values(shifts).sort((a, b) => a - b);
   voice.offset = values.length ? values[Math.floor(values.length / 2)] : 0;
   voice.sectionOffsets = Object.fromEntries(Object.entries(shifts).map(([name, shift]) => [name, shift - voice.offset]));
@@ -1310,6 +1336,8 @@ async function init() {
     draw();
   });
   $("section-styles-from-cues").onclick = guard(stylesFromCues);
+  $("apply-classical").onclick = guard(applyClassical);
+  $("section-classical").addEventListener("change", (event) => { project.classicalPlan[selected] = event.target.value; });
   $("add-voice").onclick = addVoice;
   for (const [id, key] of [["voice-name", "name"], ["voice-source", "source"], ["voice-octave", "octave"], ["voice-role", "role"], ["voice-style", "style"], ["voice-seed", "seed"]]) {
     $(id).addEventListener("change", (event) => {

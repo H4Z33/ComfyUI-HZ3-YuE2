@@ -73,7 +73,7 @@ class ClassicalLinesTests(unittest.TestCase):
         self.assertEqual((phrase["tonic"], phrase["minor"], phrase["measure"], phrase["last"]), (7, False, 1, 4))
 
     def test_writes_a_transposed_line_only_into_the_planned_section(self):
-        result, report = classical.add_lines(SONG, [self.reference], {"intro": "high"})
+        result, report = classical.add_lines(SONG, classical.build_library([self.reference]), {"intro": "high"})
         song, original = abc.parse(result), abc.parse(SONG)
         self.assertEqual(song.voices["Vocal"].notes, original.voices["Vocal"].notes)
         self.assertEqual(song.voices["Vocal"].chords, original.voices["Vocal"].chords)

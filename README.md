@@ -9,6 +9,7 @@ Independent ComfyUI node pack for YuE2 workflow preparation.
 - HZ3 YuE2 · Lyrics Prosody (Ollama)
 - HZ3 YuE2 · MixMash Style (Ollama)
 - HZ3 YuE2 · Vocal Harmony
+- HZ3 YuE2 · Vocal Harmonizer
 - HZ3 YuE2 · ABC Piano Roll
 - HZ3 YuE2 · Save Audio
 - HZ3 YuE2 · Load Generation
@@ -72,6 +73,13 @@ soundtrack. Each sampler uses its own generator's actual `seconds`; the final
 mix retains the instrumental length. Harmony stems and the mix are saved as FLAC,
 and the Rolling Mode visualizer saves the karaoke MP4. Initial harmony levels are
 -12, -14, and -12 dB; audition phrasing alignment before a final render.
+
+`Vocal Harmonizer` makes harmonies from the generated lead itself instead of new
+generations: separate the lead vocal, connect it with the generation's ABC, and
+it returns one track per voice (tenor, baritone, low, bass, countertenor). Each
+sung note is pitch-tracked, given chord tones from the ABC chords, and re-pitched
+with PSOLA, so the voices keep the lead's timing, words and timbre. Mix the tracks
+you want at your own levels; the ABC must start where the audio starts.
 
 ## Karaoke & Audio Visualizer
 

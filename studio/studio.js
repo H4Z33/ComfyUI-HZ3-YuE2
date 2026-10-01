@@ -113,7 +113,7 @@ async function refreshSections() {
   readForm();
   if (!project.abc.trim() || !project.lyrics.trim()) { sections = []; score = null; draw(); return; }
   sections = (await postJson("/hz3/studio/sections", { abc: project.abc, lyrics: project.lyrics })).sections;
-  score = await postJson("/hz3/yue2/abc_viewer/data", { abc: project.abc, lyrics: project.lyrics });
+  score = await postJson("/hz3/yue2/abc_viewer/data", { abc: project.abc, lyrics: project.lyrics, sections: editableSections() });
   if (selected && !sections.some((section) => section.name === selected)) selected = null;
   status(`${sections.length} secciones · ${fmt(duration())}`);
   draw();
@@ -138,10 +138,13 @@ function nearestBar(seconds) {
 }
 
 function editableSections() {
-  if (!score || score.sections.length !== sections.length) {
-    throw new Error("La letra y el ABC no tienen las mismas secciones; corrígelas en el panel de la canción.");
-  }
-  return structuredClone(score.sections);
+  // The ABC section markers are the truth; the editor works on their bar ranges.
+  let bar = 0;
+  return sections.map((section, index) => {
+    const start = bar;
+    bar += section.bars;
+    return { id: `section-${index + 1}`, name: section.name, start_bar: start, end_bar: bar - 1, lyrics: section.lyrics };
+  });
 }
 
 function renameKeys(from, to) {
@@ -156,10 +159,6 @@ async function applySections(edited, renames = {}) {
   readForm();
   // Pin every section's seed by name so reshaping one section does not reroll the others.
   sections.forEach((section, index) => { project.sectionSeeds[section.name] ??= project.seed + index; });
-  // The editor names sections like the lyric headers; carry ABC-marker keys over to them.
-  sections.forEach((section, index) => {
-    if (section.name !== score.sections[index].name) renameKeys(section.name, score.sections[index].name);
-  });
   for (const [from, to] of Object.entries(renames)) renameKeys(from, to);
   const data = await postJson("/hz3/yue2/abc_viewer/data", { abc: project.abc, lyrics: project.lyrics, sections: edited });
   project.abc = data.edited_abc;
@@ -167,6 +166,26 @@ async function applySections(edited, renames = {}) {
   $("abc").value = project.abc;
   $("lyrics").value = project.lyrics;
   await refreshSections();
+}
+
+async function uniqueSectionNames() {
+  // Sections are keyed by name (takes, seeds, harmonies); YuE2 may repeat "% chorus".
+  if (!score || new Set(sections.map((section) => section.name)).size === sections.length) return;
+  const edited = editableSections();
+  const headers = [...project.lyrics.matchAll(/^[ \t]*\[([^\]\n]+)\][ \t]*$/gm)].map((match) => match[1].trim());
+  if (headers.length === edited.length && new Set(headers.map((name) => name.toLowerCase())).size === headers.length) {
+    edited.forEach((section, index) => { section.name = headers[index]; });
+    await applySections(edited);
+    return;
+  }
+  const seen = new Set();
+  for (const section of edited) {
+    let name = section.name;
+    for (let count = 2; seen.has(name.toLowerCase()); count++) name = `${section.name} ${count}`;
+    seen.add(name.toLowerCase());
+    section.name = name;
+  }
+  await applySections(edited);
 }
 
 function lyricBlocks(text) {
@@ -332,6 +351,7 @@ async function analyze() {
     project.abc = text(12);
     writeForm();
     await refreshSections();
+    await uniqueSectionNames();
     await saveProject();
     status("Análisis listo: revisa las secciones en la partitura, la letra y el ABC.", 1);
   });
@@ -358,6 +378,7 @@ async function compose() {
     project.abc = abc;
     $("abc").value = abc;
     await refreshSections().catch((error) => status(`ABC generado; revisa las secciones: ${error.message}`, null, true));
+    await uniqueSectionNames();
     await saveProject();
     status("ABC generado: revisa las secciones en la partitura.", 1);
   });

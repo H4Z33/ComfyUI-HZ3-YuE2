@@ -13,7 +13,9 @@ song. Select a section to edit its lyrics or seed and `Regenerar sección`; only
 that section (and any other edited one) switches to the new take, the rest keeps
 playing from its previous take with short crossfades. Harmony voices are tracks
 switched on or off per section by clicking them; each track has mute, solo and
-volume. `Exportar WAV` renders the current timeline. Projects are saved under
+volume. `Armonías con agente` asks the local Ollama (model under `Avanzado`,
+prompt in `prompts/harmony_arranger_system.txt`) which voices sing in each section
+and applies that plan; its reason shows in the section inspector. `Exportar WAV` renders the current timeline. Projects are saved under
 `output/HZ3-YuE2/studio`.
 
 ## Nodes

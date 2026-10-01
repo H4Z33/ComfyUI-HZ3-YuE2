@@ -16,6 +16,7 @@
   <label class="file">Importar JSON<input id="import-json" type="file" accept=".json"></label>
   <span class="spacer"></span>
   <label class="switch"><input id="harmonize" type="checkbox" checked> Armonías</label>
+  <button id="arrange" title="El agente decide en qué secciones y con qué voces van las armonías">Armonías con agente</button>
   <button id="render-song" class="primary">Generar canción</button>
   <button id="export-mix">Exportar WAV</button>
 </header>
@@ -43,6 +44,8 @@
         <label>Penalización<input id="repetition_penalty" type="number" step="0.01" value="1.2"></label>
         <label>CFG<input id="cfg_scale" type="number" step="0.1" value="2.0"></label>
       </div>
+      <label>Modelo del agente (Ollama)<input id="arranger-model" value="deepseek-v4.1-flash:cloud"></label>
+      <label>Indicaciones para el agente<textarea id="arranger-instructions" rows="3" placeholder="p. ej. coros a cappella en el último coro"></textarea></label>
     </details>
   </aside>
 
@@ -59,6 +62,7 @@
     </div>
     <div id="inspector" class="inspector hidden">
       <h3 id="inspector-title"></h3>
+      <p id="section-arrangement" class="note"></p>
       <label>Letra de la sección<textarea id="section-lyrics" rows="6"></textarea></label>
       <div class="row">
         <label>Semilla de la sección<input id="section-seed" type="number" min="0"></label>

@@ -37,6 +37,7 @@ function newProject() {
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
     harmonize: true, sectionSeeds: {}, takes: [], comp: {}, harmonyOn: {}, mixer: {},
+    arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {},
   };
 }
 
@@ -70,6 +71,7 @@ function readForm() {
   project.seed = Number($("seed").value) || 0;
   project.harmonize = $("harmonize").checked;
   for (const key of SAMPLING) project.sampling[key] = Number($(key).value);
+  project.arranger = { model: $("arranger-model").value.trim(), instructions: $("arranger-instructions").value };
 }
 
 function writeForm() {
@@ -79,6 +81,8 @@ function writeForm() {
   $("seed").value = project.seed;
   $("harmonize").checked = project.harmonize;
   for (const key of SAMPLING) $(key).value = project.sampling[key];
+  $("arranger-model").value = project.arranger.model;
+  $("arranger-instructions").value = project.arranger.instructions;
 }
 
 // ---------- sections and lyrics
@@ -144,6 +148,33 @@ function isEdited(section, index) {
 function harmonyEnabled(voice, section) {
   const value = project.harmonyOn[voice]?.[section.name];
   return value ?? /^(chorus|coro|bridge|puente)/i.test(section.name);
+}
+
+async function arrange() {
+  readForm();
+  if (!sections.length) throw new Error("Hacen falta letra y ABC con secciones.");
+  status("El agente está arreglando las armonías…");
+  $("arrange").disabled = true;
+  try {
+    const { plan } = await api("/hz3/studio/arrange", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ style: project.style, instructions: project.arranger.instructions, model: project.arranger.model,
+        sections: sections.map(({ name, lyrics, start, end }) => ({ name, lyrics, start: fmt(start), end: fmt(end) })) }),
+    });
+    for (const section of sections) {
+      const entry = plan[section.name];
+      if (!entry) continue;
+      for (const voice of VOICES) (project.harmonyOn[voice] ??= {})[section.name] = entry.voices.includes(voice);
+      project.arrangement[section.name] = entry.reason;
+    }
+    const summary = sections.filter((section) => plan[section.name]?.voices.length)
+      .map((section) => `${section.name}: ${plan[section.name].voices.length} voces`).join(" · ");
+    status(`Arreglo del agente · ${summary || "sin armonías"}`, 1);
+    draw();
+    restartIfPlaying();
+  } finally {
+    $("arrange").disabled = false;
+  }
 }
 
 // ---------- rendering through ComfyUI
@@ -553,6 +584,7 @@ function drawInspector() {
   if (index < 0) return;
   const section = sections[index];
   $("inspector-title").textContent = `${section.name} · ${fmt(section.start)}–${fmt(section.end)}`;
+  $("section-arrangement").textContent = project.arrangement[section.name] ? `Agente: ${project.arrangement[section.name]}` : "";
   if (document.activeElement !== $("section-lyrics")) $("section-lyrics").value = section.lyrics;
   if (document.activeElement !== $("section-seed")) $("section-seed").value = sectionSeed(section, index);
   const takes = $("section-takes");
@@ -621,6 +653,7 @@ async function init() {
   $("render-song").onclick = guard(() => render(null));
   $("render-section").onclick = guard(() => render([selected]));
   $("export-mix").onclick = guard(exportMix);
+  $("arrange").onclick = guard(arrange);
   $("play").onclick = guard(play);
   $("stop").onclick = () => { pause(); pausedAt = 0; updatePlayhead(); };
   $("zoom").oninput = (event) => { pxPerSecond = Number(event.target.value); draw(); };

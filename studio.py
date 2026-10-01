@@ -100,6 +100,9 @@ def _arrange(style, instructions, sections, model):
             content = json.loads(response.read().decode("utf-8"))["message"]["content"]
     except urllib.error.URLError as error:
         raise RuntimeError(f"Ollama is unavailable at {OLLAMA}: {error.reason}") from error
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
     try:
         plan = json.loads(content)["sections"]
     except (json.JSONDecodeError, KeyError, TypeError) as error:

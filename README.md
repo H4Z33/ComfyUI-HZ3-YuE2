@@ -2,6 +2,20 @@
 
 Independent ComfyUI node pack for YuE2 workflow preparation.
 
+## HZ3 Studio
+
+Open `/hz3/studio` on the running ComfyUI (same host and port as the ComfyUI page)
+for a song editor on top of these nodes. Paste or import (`{style, lyrics, abc}`
+JSON) a song, then `Generar canción` queues a render through ComfyUI: Generate
+Music Sections, KSampler, separation into lead and instrumental, and (with
+`Armonías` on) the Vocal Harmonizer voices. Every render is a take of the whole
+song. Select a section to edit its lyrics or seed and `Regenerar sección`; only
+that section (and any other edited one) switches to the new take, the rest keeps
+playing from its previous take with short crossfades. Harmony voices are tracks
+switched on or off per section by clicking them; each track has mute, solo and
+volume. `Exportar WAV` renders the current timeline. Projects are saved under
+`output/HZ3-YuE2/studio`.
+
 ## Nodes
 
 - HZ3 YuE2 · Audio to Style (Discogs-EffNet)

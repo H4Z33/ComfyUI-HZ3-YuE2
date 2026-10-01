@@ -101,4 +101,11 @@ NODE_DISPLAY_NAME_MAPPINGS.update(LYRICS_FROM_AUDIO_NODE_DISPLAY_NAME_MAPPINGS)
 
 WEB_DIRECTORY = "./web"
 
+from server import PromptServer
+
+# Standalone scripts import the nodes without starting a server.
+if hasattr(PromptServer, "instance"):
+    from .studio import register as register_studio
+    register_studio(PromptServer.instance.routes)
+
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]

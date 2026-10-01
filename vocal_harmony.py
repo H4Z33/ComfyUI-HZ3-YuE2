@@ -197,7 +197,7 @@ def _serialize(score, groups, notes):
     return result
 
 
-def harmonize(score_abc, arrangement="close_harmony", active_sections="", ranges=DEFAULT_RANGES):
+def harmonize(score_abc, arrangement="close_harmony", active_sections="", ranges=DEFAULT_RANGES, octave=0):
     score = parse(score_abc.strip() + "\n")
     if arrangement not in ARRANGEMENTS:
         raise ValueError(f"Unknown harmony arrangement: {arrangement}")
@@ -245,7 +245,9 @@ def harmonize(score_abc, arrangement="close_harmony", active_sections="", ranges
                 else:
                     notes.append([left, pitch, right - left])
             previous, previous_end = voicing, right
-    outputs = [_serialize(score, groups, notes) for notes in [source.notes] + parts]
+    # The written register sets the singer type, so whole parts can move by octaves.
+    outputs = [_serialize(score, groups, [[time, pitch + 12 * octave, length] for time, pitch, length in notes])
+               for notes in [source.notes] + parts]
     seconds = float(source.time * 60 / score.bpm)
     report = [f"{arrangement}: {len(source.bars)} bars, {seconds:.3f} seconds per part at {score.bpm} BPM.",
               "Lead preserved; instrumental tracks are silent. Harmonies follow lead rests and attacks.",
@@ -281,12 +283,13 @@ class HZ3_YuE2_VocalHarmony:
         for name, (low, high) in zip(PARTS, DEFAULT_RANGES):
             inputs[f"{name}_low"] = ("INT", {"default": low, "min": 0, "max": 127, "tooltip": "Lowest MIDI note; C4 = 60."})
             inputs[f"{name}_high"] = ("INT", {"default": high, "min": 0, "max": 127, "tooltip": "Highest MIDI note; C4 = 60."})
-        return {"required": inputs}
+        optional = {"octave": ("INT", {"default": 0, "min": -2, "max": 2, "tooltip": "Move every output part by octaves, e.g. +1 so a female voice sings the lead or a harmony."})}
+        return {"required": inputs, "optional": optional}
 
     def arrange(self, score_abc, arrangement="close_harmony", active_sections="",
-                tenor_low=60, tenor_high=84, baritone_low=48, baritone_high=76, bass_low=36, bass_high=64):
+                tenor_low=60, tenor_high=84, baritone_low=48, baritone_high=76, bass_low=36, bass_high=64, octave=0):
         return harmonize(score_abc, arrangement, active_sections,
-                         ((tenor_low, tenor_high), (baritone_low, baritone_high), (bass_low, bass_high)))
+                         ((tenor_low, tenor_high), (baritone_low, baritone_high), (bass_low, bass_high)), octave)
 
 
 NODE_CLASS_MAPPINGS = {"HZ3_YuE2_VocalHarmony": HZ3_YuE2_VocalHarmony}

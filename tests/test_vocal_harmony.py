@@ -88,6 +88,14 @@ class HarmonyTests(unittest.TestCase):
         for output in result[1:4]:
             self.assertEqual(len(abc.parse(output).voices["Vocal"].notes), 4)
 
+    def test_octave_moves_every_part(self):
+        text = score('"Cmaj7"E8G8B8c8|')
+        base = harmony.harmonize(text)
+        raised = harmony.harmonize(text, octave=1)
+        for low, high in zip(base[:4], raised[:4]):
+            self.assertEqual([[time, pitch + 12, length] for time, pitch, length in abc.parse(low).voices["Vocal"].notes],
+                             abc.parse(high).voices["Vocal"].notes)
+
     def test_spelling_follows_key_signature(self):
         text = score('"Eb"z8B8B4G4=B2B2c4|', section="verse 1").replace("K:C", "K:Eb")
         result = self.check_timeline(text)

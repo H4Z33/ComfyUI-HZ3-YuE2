@@ -25,6 +25,13 @@ for a song editor on top of these nodes.
   each track has mute, solo and volume. `Armonías con agente` asks the local
   Ollama (model under `Avanzado`, prompt in `prompts/harmony_arranger_system.txt`)
   which voices sing in each section; its reason shows in the section inspector.
+- A section's own style (inspector, or `Estilos por sección desde [Sección]` from the
+  `[Section] …` cue lines of the style) samples it under that style while continuing
+  from the music before it.
+- `+ Voz` adds another singer: a whole separate generation with its own style and
+  seed, singing the lead melody or a Vocal Harmony line. It is aligned to the real
+  lead vocal by audio, one global shift plus a fine shift per section, editable in ms;
+  each voice track is switched per section like the harmonies.
 - `Exportar WAV` renders the current timeline.
 
 Projects are `.mixmash` packages under `output/HZ3-YuE2/studio`: a zip with the

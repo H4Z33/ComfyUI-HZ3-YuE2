@@ -18,6 +18,12 @@ const TRACKS = [
   { id: "countertenor", name: "Contratenor", gain: 0.22, harmony: true },
 ];
 const VOICES = TRACKS.filter((track) => track.harmony).map((track) => track.id);
+const VOICE_LINES = { tenor: 1, baritone: 2, bass: 3 };
+
+// Extra singers are whole separate generations, aligned to the lead by audio.
+function allTracks() {
+  return [...TRACKS, ...project.voices.map((voice) => ({ id: `voice-${voice.id}`, name: voice.name, gain: 0.8, voice }))];
+}
 const FADE = 0.3;
 const PEAKS_PER_SECOND = 100;
 const TICKS_PER_QUARTER = 256;
@@ -33,6 +39,7 @@ let project = newProject();
 let sections = [];
 let score = null;
 let selected = null;
+let selectedVoice = null;
 let pxPerSecond = 6;
 const buffers = new Map();
 const pending = new Map();
@@ -46,7 +53,7 @@ function newProject() {
     style: "", lyrics: "", abc: "", seed: 60, mode: "full",
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
-    harmonize: true, sectionSeeds: {}, takes: [], comp: {}, harmonyOn: {}, mixer: {},
+    harmonize: true, sectionSeeds: {}, sectionStyles: {}, takes: [], comp: {}, harmonyOn: {}, mixer: {}, voices: [],
     arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {},
   };
 }
@@ -148,8 +155,9 @@ function editableSections() {
 }
 
 function renameKeys(from, to) {
-  const maps = [project.comp, project.sectionSeeds, project.arrangement, ...Object.values(project.harmonyOn)];
-  for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds);
+  const maps = [project.comp, project.sectionSeeds, project.sectionStyles, project.arrangement, ...Object.values(project.harmonyOn)];
+  for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds, take.sectionStyles ?? {});
+  for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets);
   for (const map of maps) {
     if (from in map) { map[to] = map[from]; delete map[from]; }
   }
@@ -220,7 +228,25 @@ function isEdited(section, index) {
   const take = takeById(project.comp[section.name]);
   if (!take) return false;
   return (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim()
-    || take.sectionSeeds[section.name] !== sectionSeed(section, index);
+    || take.sectionSeeds[section.name] !== sectionSeed(section, index)
+    || (take.sectionStyles?.[section.name] ?? "") !== (project.sectionStyles[section.name] ?? "");
+}
+
+function stylesFromCues() {
+  readForm();
+  // MixMash-style cues: a global first line, then "[Section] description" lines.
+  const lines = project.style.split("\n");
+  const global = lines.find((line) => line.trim() && !line.trim().startsWith("[")) ?? "";
+  let count = 0;
+  for (const line of lines) {
+    const match = line.match(/^\s*\[([^\]]+)\]\s*(.+)$/);
+    const section = match && sections.find((item) => item.name.toLowerCase() === match[1].trim().toLowerCase());
+    if (!section) continue;
+    project.sectionStyles[section.name] = `${global.trim()}\n${match[2].trim()}`;
+    count++;
+  }
+  status(count ? `${count} secciones con estilo propio.` : "No hay líneas «[Sección] …» que coincidan con las secciones.", 1, !count);
+  draw();
 }
 
 function harmonyEnabled(voice, section) {
@@ -272,7 +298,7 @@ async function finishJob(promptId) {
 }
 
 function setBusy(busy) {
-  for (const id of ["render-song", "render-section", "analyze", "compose"]) $(id).disabled = busy;
+  for (const id of ["render-song", "render-section", "analyze", "compose", "voice-render"]) $(id).disabled = busy;
 }
 
 function connectSocket() {
@@ -396,6 +422,9 @@ function buildPrompt(prefix) {
       inputs: {
         clip: ["1", 1], style: project.style, lyrics: project.lyrics, abc: project.abc, seed: project.seed,
         mode: project.mode, ...project.sampling, section_seeds: overrides,
+        section_styles: Object.entries(project.sectionStyles)
+          .filter(([name, text]) => text.trim() && sections.some((section) => section.name === name))
+          .map(([name, text]) => `${name}: ${text.replace(/\s*\n\s*/g, " ").trim()}`).join("\n"),
       },
     },
     3: { class_type: "EmptyYuE2LatentAudio", inputs: { seconds: ["2", 1], batch_size: 1 } },
@@ -432,9 +461,11 @@ async function render(targets) {
   if (!sections.length) throw new Error("Hacen falta letra y ABC con secciones.");
   const id = Math.max(0, ...project.takes.map((take) => take.id)) + 1;
   const take = { id, created: Date.now(), harmonized: project.harmonize, files: {}, sectionLyrics: {}, sectionSeeds: {} };
+  take.sectionStyles = {};
   sections.forEach((section, index) => {
     take.sectionLyrics[section.name] = section.lyrics;
     take.sectionSeeds[section.name] = sectionSeed(section, index);
+    if (project.sectionStyles[section.name]) take.sectionStyles[section.name] = project.sectionStyles[section.name];
   });
   // A section takes the new render when asked for, edited since its take, or never rendered.
   const comped = new Set(sections.filter((section, index) =>
@@ -538,7 +569,7 @@ function muted(track) {
 }
 
 function mixerGain(track) {
-  const soloed = TRACKS.some((other) => project.mixer[other.id]?.solo);
+  const soloed = allTracks().some((other) => project.mixer[other.id]?.solo);
   if (muted(track) || (soloed && !project.mixer[track.id]?.solo)) return 0;
   return project.mixer[track.id]?.gain ?? track.gain;
 }
@@ -557,15 +588,47 @@ function buildGraph(target, destination, from, start) {
     source.start(start, from);
     sources.push(source);
   };
-  for (const track of TRACKS) {
+  // A voice plays section by section, each read at its own measured shift.
+  const connectVoice = (voice, trackGain) => {
+    const entry = voice.file && buffers.get(fileUrl(voice.file));
+    if (!entry) return;
+    const at = (time) => start + time - from;
+    for (const section of sections) {
+      if (!voiceEnabled(voice, section) || section.end + FADE / 2 <= from) continue;
+      const begin = Math.max(section.start - FADE / 2, from);
+      const end = section.end + FADE / 2;
+      const offset = begin + voiceShift(voice, section);
+      if (offset >= entry.buffer.duration) continue;
+      const source = target.createBufferSource();
+      source.buffer = entry.buffer;
+      const gain = target.createGain();
+      gain.gain.setValueAtTime(0, at(begin));
+      gain.gain.linearRampToValueAtTime(1, at(Math.min(begin + FADE, end)));
+      gain.gain.setValueAtTime(1, at(Math.max(end - FADE, begin + FADE)));
+      gain.gain.linearRampToValueAtTime(0, at(end));
+      source.connect(gain).connect(trackGain);
+      source.start(at(begin) + Math.max(0, -offset), Math.max(0, offset), end - begin);
+      sources.push(source);
+    }
+  };
+  for (const track of allTracks()) {
     const trackGain = target.createGain();
     trackGain.gain.value = mixerGain(track);
     trackGain.connect(destination);
     trackGains[track.id] = trackGain;
     if (track.source) connect(sourceEntry(), trackGain, null);
+    else if (track.voice) connectVoice(track.voice, trackGain);
     else for (const takeId of takeIds) connect(trackBuffer(track.id, takeId), trackGain, sectionGains(track.id, takeId));
   }
   return { sources, trackGains };
+}
+
+function voiceEnabled(voice, section) {
+  return voice.on[section.name] ?? !/^\(?instrumental\)?$/i.test(section.lyrics.trim() || "instrumental");
+}
+
+function voiceShift(voice, section) {
+  return voice.offset + (voice.sectionOffsets[section.name] ?? 0);
 }
 
 function position() {
@@ -672,7 +735,7 @@ function lane(className, head) {
 
 function draw() {
   $("lanes").innerHTML = "";
-  if (!duration()) { updatePlayhead(); drawInspector(); return; }
+  if (!duration()) { updatePlayhead(); drawInspector(); drawVoiceInspector(); return; }
   const ruler = lane("ruler", "m:ss");
   const step = pxPerSecond >= 20 ? 5 : pxPerSecond >= 8 ? 10 : 30;
   for (let time = 0; time < duration(); time += step) {
@@ -685,9 +748,10 @@ function draw() {
   ruler.body.onclick = (event) => seek(event.offsetX / pxPerSecond);
   if (sections.length) drawSections();
   if (score) drawScore();
-  for (const track of TRACKS) drawTrack(track);
+  for (const track of allTracks()) drawTrack(track);
   updatePlayhead();
   drawInspector();
+  drawVoiceInspector();
 }
 
 function drawSections() {
@@ -703,7 +767,7 @@ function drawSections() {
     const takeId = project.comp[section.name];
     if (takeId) block.insertAdjacentHTML("beforeend", `<span class="take">T${takeId}</span>`);
     if (isEdited(section, index)) block.insertAdjacentHTML("beforeend", `<span class="edited">editado</span>`);
-    block.onclick = () => { selected = section.name; draw(); };
+    block.onclick = () => { selected = section.name; selectedVoice = null; draw(); };
     if (index > 0 && score) {
       const handle = document.createElement("div");
       handle.className = "handle";
@@ -814,10 +878,10 @@ function drawTrack(track) {
   body.append(canvas);
   const graphics = canvas.getContext("2d");
   const middle = canvas.height / 2;
-  const paint = (entry, from, to) => {
+  const paint = (entry, from, to, shift = 0) => {
     for (let column = Math.floor(from * pxPerSecond); column < to * pxPerSecond; column++) {
-      const first = Math.floor((column / pxPerSecond) * PEAKS_PER_SECOND);
-      const last = Math.min(entry.peaks.length, Math.floor(((column + 1) / pxPerSecond) * PEAKS_PER_SECOND));
+      const first = Math.max(0, Math.floor((column / pxPerSecond + shift) * PEAKS_PER_SECOND));
+      const last = Math.min(entry.peaks.length, Math.floor(((column + 1) / pxPerSecond + shift) * PEAKS_PER_SECOND));
       let peak = 0;
       for (let index = first; index < last; index++) peak = Math.max(peak, entry.peaks[index]);
       const height = Math.min(1, peak) * (middle - 2);
@@ -828,6 +892,31 @@ function drawTrack(track) {
     const entry = sourceEntry();
     graphics.fillStyle = "#8a8d96";
     if (entry) paint(entry, 0, Math.min(duration(), entry.buffer.duration));
+    return;
+  }
+  if (track.voice) {
+    const voice = track.voice;
+    const name = head.querySelector(".name");
+    name.classList.add("link");
+    name.title = "Editar, generar o alinear esta voz";
+    name.onclick = () => { selectedVoice = voice.id; selected = null; draw(); };
+    const entry = voice.file && buffers.get(fileUrl(voice.file));
+    for (const section of sections) {
+      const enabled = voiceEnabled(voice, section);
+      graphics.fillStyle = enabled ? "#b07be0" : "#3a3d45";
+      if (entry) paint(entry, section.start, section.end, voiceShift(voice, section));
+      const toggle = document.createElement("div");
+      toggle.className = `toggle${enabled ? "" : " off"}`;
+      toggle.style.left = `${section.start * pxPerSecond}px`;
+      toggle.style.width = `${(section.end - section.start) * pxPerSecond}px`;
+      toggle.title = `${voice.name} · ${section.name}: ${enabled ? "encendida" : "apagada"} (clic para cambiar)`;
+      toggle.onclick = () => {
+        voice.on[section.name] = !enabled;
+        draw();
+        restartIfPlaying();
+      };
+      body.append(toggle);
+    }
     return;
   }
   sections.forEach((section) => {
@@ -853,7 +942,7 @@ function drawTrack(track) {
 
 function applyMixer() {
   if (!playback) return;
-  for (const track of TRACKS) playback.trackGains[track.id].gain.value = mixerGain(track);
+  for (const track of allTracks()) playback.trackGains[track.id].gain.value = mixerGain(track);
 }
 
 function drawInspector() {
@@ -865,6 +954,7 @@ function drawInspector() {
   $("section-arrangement").textContent = project.arrangement[section.name] ? `Agente: ${project.arrangement[section.name]}` : "";
   if (document.activeElement !== $("section-name")) $("section-name").value = section.name;
   if (document.activeElement !== $("section-lyrics")) $("section-lyrics").value = section.lyrics;
+  if (document.activeElement !== $("section-style")) $("section-style").value = project.sectionStyles[section.name] ?? "";
   if (document.activeElement !== $("section-seed")) $("section-seed").value = sectionSeed(section, index);
   $("section-merge").disabled = index === sections.length - 1;
   const takes = $("section-takes");
@@ -919,6 +1009,145 @@ async function mergeSection() {
   await applySections(edited);
 }
 
+// ---------- extra voices
+
+function selectedVoiceEntry() {
+  return project.voices.find((voice) => voice.id === selectedVoice);
+}
+
+function addVoice() {
+  readForm();
+  const id = Math.max(0, ...project.voices.map((voice) => voice.id)) + 1;
+  const global = project.style.split("\n").find((line) => line.trim() && !line.trim().startsWith("[")) ?? "";
+  project.voices.push({
+    id, name: `Voz ${id + 1}`, source: "lead", seed: project.seed + 1000 * id,
+    style: `${global.trim()}\nSpanish female soprano lead vocal, clear and bright`.trim(),
+    file: null, offset: 0, sectionOffsets: {}, on: {},
+  });
+  selectedVoice = id;
+  selected = null;
+  draw();
+}
+
+async function renderVoice(voice) {
+  readForm();
+  if (!project.name) throw new Error("Ponle nombre al proyecto antes de generar.");
+  await refreshSections();
+  const line = VOICE_LINES[voice.source];
+  const prompt = {
+    1: { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: project.ckpt } },
+    2: {
+      class_type: "HZ3_YuE2_GenerateMusicSections",
+      inputs: {
+        clip: ["1", 1], style: voice.style, lyrics: project.lyrics, abc: line ? ["20", line] : project.abc, seed: voice.seed,
+        mode: line ? "melody" : project.mode, ...project.sampling, section_seeds: "", section_styles: "",
+      },
+    },
+    3: { class_type: "EmptyYuE2LatentAudio", inputs: { seconds: ["2", 1], batch_size: 1 } },
+    4: {
+      class_type: "KSampler",
+      inputs: {
+        model: ["1", 0], seed: 42, steps: 79, cfg: 4.2, sampler_name: "dpm_2", scheduler: "sgm_uniform",
+        positive: ["2", 0], negative: ["2", 0], latent_image: ["3", 0], denoise: 1,
+      },
+    },
+    5: { class_type: "VAEDecodeAudioTiled", inputs: { samples: ["4", 0], vae: ["1", 2], tile_size: 256, overlap: 32 } },
+    7: { class_type: "AudioSeparation", inputs: { audio: ["5", 0] } },
+    8: { class_type: "SaveAudio", inputs: { audio: ["7", 3], filename_prefix: `HZ3-Studio/${project.name}/voice-${voice.id}/vocals` } },
+  };
+  if (line) {
+    // The harmony line keeps the song's bars and section markers, so its sections match the lead's.
+    prompt[20] = {
+      class_type: "HZ3_YuE2_VocalHarmony",
+      inputs: { score_abc: project.abc, arrangement: "close_harmony", active_sections: "", tenor_low: 60, tenor_high: 84,
+                baritone_low: 48, baritone_high: 76, bass_low: 36, bass_high: 64 },
+    };
+  }
+  await queue(prompt, { ...RENDER_LABELS, 2: `Tokens YuE2 (${voice.name})`, 20: "Línea de armonía" }, async (outputs) => {
+    const file = outputs[8]?.audio?.[0];
+    if (!file) throw new Error("La voz terminó sin audio.");
+    voice.file = file;
+    await loadUrl(fileUrl(file));
+    alignVoice(voice);
+    await saveProject();
+    draw();
+  });
+  status(`${voice.name} en cola…`, 0);
+}
+
+function onsets(values) {
+  const result = new Float32Array(values.length);
+  for (let index = 1; index < values.length; index++) result[index] = Math.max(0, values[index] - values[index - 1]);
+  return result;
+}
+
+function leadOnsets() {
+  const envelope = new Float32Array(Math.ceil(duration() * PEAKS_PER_SECOND));
+  for (const section of sections) {
+    const entry = trackBuffer("vocals", project.comp[section.name]);
+    if (!entry) continue;
+    for (let index = Math.floor(section.start * PEAKS_PER_SECOND); index < Math.min(envelope.length, section.end * PEAKS_PER_SECOND); index++) {
+      envelope[index] = entry.peaks[index] ?? 0;
+    }
+  }
+  return onsets(envelope);
+}
+
+function bestLag(reference, signal, from, to, center, radius) {
+  let best = center;
+  let bestScore = -Infinity;
+  for (let lag = center - radius; lag <= center + radius; lag++) {
+    let score = 0;
+    for (let index = Math.max(from, -lag); index < Math.min(to, signal.length - lag); index++) score += reference[index] * signal[index + lag];
+    if (score > bestScore) { bestScore = score; best = lag; }
+  }
+  return best;
+}
+
+function alignVoice(voice) {
+  // Like the lead's real phrasing: one global shift, then a fine shift per section.
+  const entry = voice.file && buffers.get(fileUrl(voice.file));
+  const reference = leadOnsets();
+  if (!entry || !reference.some((value) => value > 0)) throw new Error("Hace falta la voz generada y un take con voz principal para alinear.");
+  const signal = onsets(entry.peaks);
+  const global = bestLag(reference, signal, 0, reference.length, 0, 4 * PEAKS_PER_SECOND);
+  voice.offset = global / PEAKS_PER_SECOND;
+  voice.sectionOffsets = {};
+  for (const section of sections) {
+    if (!voiceEnabled(voice, section)) continue;
+    // Separate generations drift by seconds over a song, so each section searches widely.
+    const lag = bestLag(reference, signal, Math.floor(section.start * PEAKS_PER_SECOND), Math.floor(section.end * PEAKS_PER_SECOND),
+                        global, 4 * PEAKS_PER_SECOND);
+    voice.sectionOffsets[section.name] = (lag - global) / PEAKS_PER_SECOND;
+  }
+  status(`${voice.name} alineada: ${Math.round(voice.offset * 1000)} ms global.`, 1);
+  draw();
+  restartIfPlaying();
+}
+
+function drawVoiceInspector() {
+  const voice = selectedVoiceEntry();
+  $("voice-inspector").classList.toggle("hidden", !voice);
+  if (!voice) return;
+  $("voice-title").textContent = `${voice.name}${voice.file ? "" : " · sin generar"}`;
+  for (const [id, key] of [["voice-name", "name"], ["voice-source", "source"], ["voice-style", "style"], ["voice-seed", "seed"]]) {
+    if (document.activeElement !== $(id)) $(id).value = voice[key];
+  }
+  if (document.activeElement !== $("voice-offset")) $("voice-offset").value = Math.round(voice.offset * 1000);
+  const list = $("voice-sections");
+  list.innerHTML = "<span>Ajuste fino por sección (ms)</span>";
+  for (const section of sections.filter((item) => voiceEnabled(voice, item))) {
+    const label = document.createElement("label");
+    label.innerHTML = `${section.name} <input type="number" step="10" value="${Math.round((voice.sectionOffsets[section.name] ?? 0) * 1000)}">`;
+    label.querySelector("input").onchange = (event) => {
+      voice.sectionOffsets[section.name] = Number(event.target.value) / 1000;
+      draw();
+      restartIfPlaying();
+    };
+    list.append(label);
+  }
+}
+
 // ---------- projects (.mixmash packages)
 
 async function saveProject() {
@@ -943,7 +1172,8 @@ async function openProject(name) {
   writeForm();
   await refreshSections();
   status("Cargando audio…");
-  await Promise.all([loadSource(), ...project.takes.map(loadTake)]);
+  selectedVoice = null;
+  await Promise.all([loadSource(), ...project.takes.map(loadTake), ...project.voices.filter((voice) => voice.file).map((voice) => loadUrl(fileUrl(voice.file)))]);
   status(`Proyecto «${project.name}» · ${project.takes.length} takes`, 1);
   draw();
 }
@@ -1005,6 +1235,33 @@ async function init() {
     setSectionLyrics(sections.findIndex((section) => section.name === selected), event.target.value);
     scheduleSections();
   }));
+  $("section-style").addEventListener("change", (event) => {
+    if (event.target.value.trim()) project.sectionStyles[selected] = event.target.value.trim();
+    else delete project.sectionStyles[selected];
+    draw();
+  });
+  $("section-styles-from-cues").onclick = guard(stylesFromCues);
+  $("add-voice").onclick = addVoice;
+  for (const [id, key] of [["voice-name", "name"], ["voice-source", "source"], ["voice-style", "style"], ["voice-seed", "seed"]]) {
+    $(id).addEventListener("change", (event) => {
+      const voice = selectedVoiceEntry();
+      voice[key] = key === "seed" ? Number(event.target.value) || 0 : event.target.value;
+      draw();
+    });
+  }
+  $("voice-offset").addEventListener("change", (event) => {
+    selectedVoiceEntry().offset = Number(event.target.value) / 1000;
+    draw();
+    restartIfPlaying();
+  });
+  $("voice-render").onclick = guard(() => renderVoice(selectedVoiceEntry()));
+  $("voice-align").onclick = guard(() => alignVoice(selectedVoiceEntry()));
+  $("voice-delete").onclick = () => {
+    project.voices = project.voices.filter((voice) => voice.id !== selectedVoice);
+    selectedVoice = null;
+    draw();
+    restartIfPlaying();
+  };
   $("section-seed").addEventListener("change", (event) => {
     project.sectionSeeds[selected] = Number(event.target.value);
     draw();

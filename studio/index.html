@@ -32,6 +32,7 @@
   <aside class="song">
     <label>Indicaciones de estilo (MixMash)<textarea id="style-instructions" rows="3" placeholder="p. ej. intro en piano, romántico, big band después del solo"></textarea></label>
     <label>Estilo<textarea id="style" rows="6"></textarea></label>
+    <button id="section-styles-from-cues" title="Convierte cada línea «[Sección] …» del estilo en el estilo propio de esa sección">Estilos por sección desde [Sección]</button>
     <label>Letra (si está vacía al analizar, se transcribe con Whisper)<textarea id="lyrics" rows="12"></textarea></label>
     <label>ABC<textarea id="abc" rows="8" spellcheck="false"></textarea></label>
     <div class="row">
@@ -60,6 +61,7 @@
       <button id="play">▶</button>
       <button id="stop">■</button>
       <span id="clock">0:00 / 0:00</span>
+      <button id="add-voice" title="Agrega un cantante generado aparte, alineado con la voz principal">+ Voz</button>
       <label class="zoom">Zoom<input id="zoom" type="range" min="2" max="40" value="6"></label>
     </div>
     <div id="timeline" class="timeline">
@@ -75,12 +77,36 @@
         <button id="section-merge">Unir con la siguiente</button>
       </div>
       <label>Letra de la sección<textarea id="section-lyrics" rows="6"></textarea></label>
+      <label>Estilo de la sección (vacío = estilo general)<textarea id="section-style" rows="6" placeholder="p. ej. Spanish female soprano, modern Latin pop, bright full band"></textarea></label>
       <div class="row">
         <label>Semilla de la sección<input id="section-seed" type="number" min="0"></label>
         <button id="section-dice" title="Semilla nueva">🎲</button>
       </div>
       <div id="section-takes" class="takes"></div>
       <button id="render-section" class="primary">Regenerar sección</button>
+    </div>
+    <div id="voice-inspector" class="inspector hidden">
+      <h3 id="voice-title"></h3>
+      <div class="row">
+        <label>Nombre<input id="voice-name" maxlength="40"></label>
+        <label>Línea que canta<select id="voice-source">
+          <option value="lead">Melodía principal</option>
+          <option value="tenor">Armonía tenor</option>
+          <option value="baritone">Armonía barítono</option>
+          <option value="bass">Armonía bajo</option>
+        </select></label>
+      </div>
+      <label>Estilo de esta voz<textarea id="voice-style" rows="5"></textarea></label>
+      <div class="row">
+        <label>Semilla<input id="voice-seed" type="number" min="0"></label>
+        <label>Desfase global (ms)<input id="voice-offset" type="number" step="10"></label>
+      </div>
+      <div id="voice-sections" class="takes"></div>
+      <div class="row">
+        <button id="voice-render" class="primary">Generar voz</button>
+        <button id="voice-align" title="Estima el desfase con el audio de la voz principal">Alinear con la voz principal</button>
+        <button id="voice-delete">Eliminar voz</button>
+      </div>
     </div>
   </section>
 </main>

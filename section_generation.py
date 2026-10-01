@@ -174,6 +174,18 @@ def _parse_section_seeds(text: str) -> dict[str, int]:
     return seeds
 
 
+def _parse_section_styles(text: str) -> dict[str, str]:
+    styles = {}
+    for line in (text or "").splitlines():
+        if not line.strip():
+            continue
+        name, separator, value = line.partition(":")
+        if not separator or not name.strip() or not value.strip():
+            raise ValueError(f"Section style lines must look like 'Chorus 1: female soprano, Latin pop', got {line.strip()!r}.")
+        styles[name.strip().casefold()] = value.strip()
+    return styles
+
+
 def _patch_summary(value):
     if torch.is_tensor(value):
         return [list(value.shape), float(value.float().sum())]
@@ -315,6 +327,13 @@ class HZ3_YuE2_GenerateMusicSections:
                     "tooltip": "Optional per-section seed overrides, one 'Chorus 2 = 1234' per line, "
                                "to re-roll only those sections. Unchanged sections reuse their stored tokens.",
                 }),
+                "section_styles": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": "Optional per-section styles, one 'Chorus 1: female soprano, Latin pop' per line. "
+                               "That section is sampled with this style instead of the global one, still "
+                               "continuing from every earlier section's music.",
+                }),
             },
         }
 
@@ -332,6 +351,7 @@ class HZ3_YuE2_GenerateMusicSections:
         repetition_penalty,
         cfg_scale=1.0,
         section_seeds="",
+        section_styles="",
     ):
         specs = _build_section_specs(abc, lyrics)
         style = str(style or "").strip()
@@ -344,9 +364,12 @@ class HZ3_YuE2_GenerateMusicSections:
             "repetition_penalty": float(repetition_penalty),
         }
         seed_overrides = _parse_section_seeds(section_seeds)
-        unknown = set(seed_overrides) - {section["name"].casefold() for section in specs}
-        if unknown:
-            raise ValueError(f"section_seeds names unknown section(s): {', '.join(sorted(unknown))}.")
+        style_overrides = _parse_section_styles(section_styles)
+        names = {section["name"].casefold() for section in specs}
+        for label, overrides in (("section_seeds", seed_overrides), ("section_styles", style_overrides)):
+            unknown = set(overrides) - names
+            if unknown:
+                raise ValueError(f"{label} names unknown section(s): {', '.join(sorted(unknown))}.")
 
         total_frames = sum(section["frames"] for section in specs)
         tokens = clip.tokenize(
@@ -362,11 +385,18 @@ class HZ3_YuE2_GenerateMusicSections:
         abc_ids = tokens["abc_ids"]
         positive = tokens["prefix"] + abc_ids + [ABC_END, MUSIC_START]
         negative = tokens["negative"] + [ABC_START] + abc_ids + [ABC_END, MUSIC_START]
+        # Same lyrics and ABC under another style: only the [Tags] part of the prefix changes.
+        positives = {style: positive}
+        for section_style in set(style_overrides.values()) - {style}:
+            prefix = clip.tokenize(section_style, lyrics=lyrics, cot=mode, seed=seed, abc=abc, max_tokens=total_frames,
+                                   cfg_scale=cfg_scale, **sampling)["prefix"]
+            positives[section_style] = prefix + abc_ids + [ABC_END, MUSIC_START]
         model, device, dtype = _prepare_model(clip, tokens)
         context = model.config.max_position_embeddings
-        if max(len(positive), len(negative)) + total_frames > context:
+        longest = max(len(negative), *map(len, positives.values()))
+        if longest + total_frames > context:
             raise ValueError(
-                f"The song needs {max(len(positive), len(negative)) + total_frames} YuE2 context tokens, "
+                f"The song needs {longest + total_frames} YuE2 context tokens, "
                 f"above the model limit {context}. Shorten the lyrics, ABC, or score duration."
             )
 
@@ -374,9 +404,10 @@ class HZ3_YuE2_GenerateMusicSections:
         plan = []
         for index, section in enumerate(specs):
             section_seed = seed_overrides.get(section["name"].casefold(), (seed + index) & 0xFFFFFFFFFFFFFFFF)
+            section_style = style_overrides.get(section["name"].casefold(), style)
             path = _section_token_path(
                 {
-                    "style": style,
+                    "style": section_style,
                     "mode": mode,
                     "lyrics": section["lyrics"],
                     "abc": section["abc"],
@@ -386,17 +417,17 @@ class HZ3_YuE2_GenerateMusicSections:
                     "patches": patches,
                 }
             )
-            plan.append((section, section_seed, path, _load_section_tokens(path, section["frames"])))
+            plan.append((section, section_seed, section_style, path, _load_section_tokens(path, section["frames"])))
 
         progress = comfy.utils.ProgressBar(total_frames)
         history = []
         section_layout = []
         try:
             with comfy.model_management.cuda_device_context(device), comfy.ops.use_quantized_matmul(model, device):
-                for section, section_seed, path, stored in plan:
+                for section, section_seed, section_style, path, stored in plan:
                     start = len(history)
                     if stored is None:
-                        prefixes = [positive + history]
+                        prefixes = [positives[section_style] + history]
                         if cfg_scale != 1.0:
                             prefixes.append(negative + history)
                         stored = _sample_section(
@@ -418,6 +449,7 @@ class HZ3_YuE2_GenerateMusicSections:
                             "seconds": section["frames"] / FRAMES_PER_SECOND,
                             "bars": section["bars"],
                             "seed": section_seed,
+                            "own_style": section_style != style,
                             "reused": reused,
                         }
                     )
@@ -446,7 +478,7 @@ class HZ3_YuE2_GenerateMusicSections:
             report_lines.append(
                 f"{section['name']}: {section['bars']} bars · "
                 f"{start_seconds:.2f}-{end_seconds:.2f}s · seed {section['seed']}"
-                f"{' · reused' if section['reused'] else ''}"
+                f"{' · own style' if section['own_style'] else ''}{' · reused' if section['reused'] else ''}"
             )
         report = "\n".join(report_lines)
         return {

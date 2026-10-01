@@ -150,7 +150,7 @@ class FakeClip:
                  repetition_penalty, cfg_scale):
         self.calls.append({"lyrics": lyrics, "abc": abc, "max_tokens": max_tokens})
         return {
-            "prefix": [EOD, 42, ABC_START],
+            "prefix": [EOD, 42 if style == "same global style" else 43, ABC_START],
             "negative": [EOD],
             "abc_ids": [71, 72],
             "cot": cot,
@@ -278,9 +278,22 @@ class SectionGenerationTests(unittest.TestCase):
         self.assertIn("1 sampled, 1 reused", report)
         self.assertEqual(len(model.model.prefills), 1)
 
+    def test_section_style_samples_that_section_with_its_own_prefix(self):
+        run_sections(FakeSectionModel())
+        model = FakeSectionModel()
+        result = run_sections(model, section_styles="Verse 1: female soprano")["result"]
+        self.assertIn("1 sampled, 1 reused", result[2])
+        self.assertIn("own style", result[2])
+        # The verse continues from the stored intro but under the other style's prefix.
+        intro_tokens = model.acoustic_call[1][:50]
+        self.assertEqual(model.model.prefills, [[[EOD, 43, ABC_START, 71, 72, ABC_END, MUSIC_START] + intro_tokens]])
+        self.assertEqual(model.acoustic_call[0], POSITIVE)
+
     def test_rejects_seed_overrides_for_unknown_sections(self):
         with self.assertRaisesRegex(ValueError, "unknown section"):
             run_sections(FakeSectionModel(), section_seeds="bridge = 3")
+        with self.assertRaisesRegex(ValueError, "unknown section"):
+            run_sections(FakeSectionModel(), section_styles="bridge: rock")
 
 
 if __name__ == "__main__":

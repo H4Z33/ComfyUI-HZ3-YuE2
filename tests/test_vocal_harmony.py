@@ -88,6 +88,12 @@ class HarmonyTests(unittest.TestCase):
         for output in result[1:4]:
             self.assertEqual(len(abc.parse(output).voices["Vocal"].notes), 4)
 
+    def test_spelling_follows_key_signature(self):
+        text = score('"Eb"z8B8B4G4=B2B2c4|', section="verse 1").replace("K:C", "K:Eb")
+        result = self.check_timeline(text)
+        self.assertIn("\nz8B8B4G4=B2B2c4|\n", result[0])
+        self.assertNotRegex("".join(result[:4]), r"\^[DdAaGg]|[A-Ga-g][,']*1(?!\d)")
+
     def test_chord_change_during_tied_note(self):
         text = score('"C"E16-"F#"E16|')
         result = self.check_timeline(text)

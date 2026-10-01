@@ -5,7 +5,7 @@ from fractions import Fraction
 from itertools import product
 import re
 
-from .abc_score import AbcError, DURATIONS, NATURAL, TOKEN, parse
+from .abc_score import AbcError, DURATIONS, KEYS, NATURAL, TOKEN, key_accidentals, parse
 
 
 CHORD_INTERVALS = {
@@ -120,16 +120,26 @@ def _choose_voicing(melody, harmonies, ranges, previous, arrangement):
     return best[1:]
 
 
-def _note_name(pitch):
-    names = ("=C", "^C", "=D", "^D", "=E", "=F", "^F", "=G", "^G", "=A", "^A", "=B")
-    octave, pc = divmod(pitch - 60, 12)
-    name = names[pc]
+def _note_name(pitch, key, local):
+    """Spell like native ABC: key-signature letters first, explicit accidentals only when needed."""
+    signature = key_accidentals(key)
+    choices = []
+    for letter, natural in NATURAL.items():
+        alteration = (pitch - natural + 6) % 12 - 6
+        if abs(alteration) <= 1:
+            current = local.get(letter, signature[letter])
+            choices.append((alteration != current, alteration * KEYS[key] < 0, alteration != 0, letter, alteration))
+    marked, _, _, letter, alteration = min(choices)
+    if marked:
+        local[letter] = alteration
+    octave = (pitch - alteration - 60) // 12
+    accidental = "_=^"[alteration + 1] if marked else ""
     if octave >= 1:
-        return name.lower() + "'" * (octave - 1)
-    return name + "," * -octave
+        return accidental + letter.lower() + "'" * (octave - 1)
+    return accidental + letter + "," * -octave
 
 
-def _write_span(pitch, duration, unit, continues):
+def _write_span(pitch, duration, unit, continues, key, local):
     units = duration / (4 * unit)
     if units.denominator != 1:
         raise AbcError("A harmony boundary cannot be represented by the source L: unit.")
@@ -138,12 +148,12 @@ def _write_span(pitch, duration, unit, continues):
     while remaining:
         size = max(value for value in DURATIONS if value <= remaining)
         remaining -= size
-        result.append(("z" if pitch is None else _note_name(pitch)) + str(size)
+        result.append(("z" if pitch is None else _note_name(pitch, key, local)) + (str(size) if size != 1 else "")
                       + ("-" if pitch is not None and (remaining or continues) else ""))
     return "".join(result)
 
 
-def _render_bar(notes, start, length, inline_keys, unit):
+def _render_bar(notes, start, length, inline_keys, unit, keys):
     end = start + length
     sounding = [(time, pitch, duration) for time, pitch, duration in notes if time < end and time + duration > start]
     if not sounding and not inline_keys:
@@ -153,15 +163,20 @@ def _render_bar(notes, start, length, inline_keys, unit):
         boundaries.update((max(start, time), min(end, time + duration)))
     boundaries.update(time for time, _ in inline_keys)
     boundaries = sorted(boundaries)
+    key = keys[bisect_right([time for time, _ in keys], start) - 1][1]
+    local = {}
     result = []
     note_index = 0
     for left, right in zip(boundaries, boundaries[1:]):
-        result.extend(f"[K:{key}]" for time, key in inline_keys if time == left)
+        for time, inline_key in inline_keys:
+            if time == left:
+                result.append(f"[K:{inline_key}]")
+                key, local = inline_key, {}
         while note_index < len(sounding) and sounding[note_index][0] + sounding[note_index][2] <= left:
             note_index += 1
         event = sounding[note_index] if note_index < len(sounding) and sounding[note_index][0] <= left else None
         result.append(_write_span(event[1] if event else None, right - left, unit,
-                                  bool(event and event[0] + event[2] > right)))
+                                  bool(event and event[0] + event[2] > right), key, local))
     return "".join(result)
 
 
@@ -169,7 +184,7 @@ def _serialize(score, groups, notes):
     lines = score.text.splitlines()
     for line_index, voice_name, bars in groups:
         voice_notes = notes if voice_name == "Vocal" else []
-        lines[line_index] = "|".join(_render_bar(voice_notes, start, length, keys, score.unit)
+        lines[line_index] = "|".join(_render_bar(voice_notes, start, length, keys, score.unit, score.voices[voice_name].keys)
                                    for start, length, keys in bars) + "|"
     result = "\n".join(lines) + "\n"
     checked = parse(result)

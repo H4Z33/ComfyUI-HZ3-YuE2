@@ -53,7 +53,7 @@ function newProject() {
     style: "", lyrics: "", abc: "", seed: 60, mode: "full",
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
-    harmonize: true, sectionSeeds: {}, sectionStyles: {}, takes: [], comp: {}, harmonyOn: {}, mixer: {}, voices: [],
+    harmonize: true, sectionSeeds: {}, sectionStyles: {}, takes: [], comp: {}, trackOn: {}, mixer: {}, voices: [],
     arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {},
   };
 }
@@ -155,7 +155,7 @@ function editableSections() {
 }
 
 function renameKeys(from, to) {
-  const maps = [project.comp, project.sectionSeeds, project.sectionStyles, project.arrangement, ...Object.values(project.harmonyOn)];
+  const maps = [project.comp, project.sectionSeeds, project.sectionStyles, project.arrangement, ...Object.values(project.trackOn)];
   for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds, take.sectionStyles ?? {});
   for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets);
   for (const map of maps) {
@@ -249,9 +249,10 @@ function stylesFromCues() {
   draw();
 }
 
-function harmonyEnabled(voice, section) {
-  const value = project.harmonyOn[voice]?.[section.name];
-  return value ?? /^(chorus|coro|bridge|puente)/i.test(section.name);
+function trackEnabled(track, section) {
+  // Every track can be switched per section; harmonies start on only in choruses and bridges.
+  const value = project.trackOn[track]?.[section.name];
+  return value ?? (!VOICES.includes(track) || /^(chorus|coro|bridge|puente)/i.test(section.name));
 }
 
 async function arrange() {
@@ -267,7 +268,7 @@ async function arrange() {
     for (const section of sections) {
       const entry = plan[section.name];
       if (!entry) continue;
-      for (const voice of VOICES) (project.harmonyOn[voice] ??= {})[section.name] = entry.voices.includes(voice);
+      for (const voice of VOICES) (project.trackOn[voice] ??= {})[section.name] = entry.voices.includes(voice);
       project.arrangement[section.name] = entry.reason;
     }
     const summary = sections.filter((section) => plan[section.name]?.voices.length)
@@ -546,7 +547,7 @@ function trackBuffer(track, takeId) {
 
 function sectionGains(track, takeId) {
   return sections.map((section) => (project.comp[section.name] === takeId ? 1 : 0)
-    * (VOICES.includes(track) && !harmonyEnabled(track, section) ? 0 : 1));
+    * (trackEnabled(track, section) ? 1 : 0));
 }
 
 function scheduleGain(param, values, start, from) {
@@ -921,22 +922,20 @@ function drawTrack(track) {
   }
   sections.forEach((section) => {
     const entry = trackBuffer(track.id, project.comp[section.name]);
-    const enabled = !track.harmony || harmonyEnabled(track.id, section);
+    const enabled = trackEnabled(track.id, section);
     graphics.fillStyle = enabled ? (track.harmony ? "#4aa3e0" : "#c9a14a") : "#3a3d45";
     if (entry) paint(entry, section.start, section.end);
-    if (track.harmony) {
-      const toggle = document.createElement("div");
-      toggle.className = `toggle${enabled ? "" : " off"}`;
-      toggle.style.left = `${section.start * pxPerSecond}px`;
-      toggle.style.width = `${(section.end - section.start) * pxPerSecond}px`;
-      toggle.title = `${track.name} · ${section.name}: ${enabled ? "encendido" : "apagado"} (clic para cambiar)`;
-      toggle.onclick = () => {
-        (project.harmonyOn[track.id] ??= {})[section.name] = !enabled;
-        draw();
-        restartIfPlaying();
-      };
-      body.append(toggle);
-    }
+    const toggle = document.createElement("div");
+    toggle.className = `toggle${enabled ? "" : " off"}`;
+    toggle.style.left = `${section.start * pxPerSecond}px`;
+    toggle.style.width = `${(section.end - section.start) * pxPerSecond}px`;
+    toggle.title = `${track.name} · ${section.name}: ${enabled ? "encendido" : "apagado"} (clic para cambiar)`;
+    toggle.onclick = () => {
+      (project.trackOn[track.id] ??= {})[section.name] = !enabled;
+      draw();
+      restartIfPlaying();
+    };
+    body.append(toggle);
   });
 }
 

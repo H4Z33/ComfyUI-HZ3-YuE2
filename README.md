@@ -21,7 +21,8 @@ for a song editor on top of these nodes.
   Every render is a take of the whole song. Edit a section's lyrics or seed and
   `Regenerar sección`: only that section (and any other edited one) switches to
   the new take, with short crossfades at the boundaries.
-- Harmony voices are tracks switched on or off per section by clicking them;
+- Every track (lead, instrumental, harmonies, extra voices) is switched on or off per
+  section by clicking it, e.g. for a duet;
   each track has mute, solo and volume. `Armonías con agente` asks the local
   Ollama (model under `Avanzado`, prompt in `prompts/harmony_arranger_system.txt`)
   which voices sing in each section; its reason shows in the section inspector.

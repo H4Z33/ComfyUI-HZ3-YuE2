@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -31,15 +32,15 @@ STATIC = Path(__file__).parent / "studio"
 ARRANGER_PROMPT = Path(__file__).parent / "prompts" / "harmony_arranger_system.txt"
 VOICES = ("tenor", "baritone", "low", "bass", "countertenor")
 OLLAMA = "http://127.0.0.1:11434"
-PROJECT_NAME = re.compile(r"[\w \-]{1,64}")
+PROJECT_NAME = re.compile(r"[\w \-()]{1,64}")
 AUDIO_TYPES = (".mp3", ".wav", ".flac", ".ogg", ".opus", ".m4a", ".aac")
-SOURCE_FILE = re.compile(r"hz3studio_[\w \-]{1,64}_[\w \-]{1,80}(" + "|".join(re.escape(ext) for ext in AUDIO_TYPES) + ")")
+SOURCE_FILE = re.compile(r"hz3studio_[\w \-()]{1,64}_[\w \-]{1,80}(" + "|".join(re.escape(ext) for ext in AUDIO_TYPES) + ")")
 PACKAGE_FORMAT = "hz3-mixmash/1"
 
 
 def _package_path(name):
     if not PROJECT_NAME.fullmatch(name):
-        raise web.HTTPBadRequest(text="Project names may use letters, numbers, spaces, '-' and '_' (64 max).")
+        raise web.HTTPBadRequest(text="Project names may use letters, numbers, spaces, '-', '_' and parentheses (64 max).")
     return Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "studio" / f"{name}.mixmash"
 
 
@@ -167,6 +168,17 @@ def register(routes):
         await asyncio.to_thread(_write_package, project)
         return web.json_response({"saved": project["name"]})
 
+    @routes.post("/hz3/studio/rename")
+    async def rename_project(request):
+        body = await request.json()
+        source, target = _package_path(str(body.get("from", ""))), _package_path(str(body.get("to", "")))
+        if not source.is_file():
+            raise web.HTTPNotFound(text="Project not found.")
+        if target.exists():
+            raise web.HTTPConflict(text=f"A project named {target.stem!r} already exists.")
+        source.replace(target)
+        return web.json_response({"name": target.stem})
+
     @routes.post("/hz3/studio/source")
     async def upload_source(request):
         name = request.rel_url.query.get("project", "")
@@ -189,7 +201,7 @@ def register(routes):
         path = _package_path(request.rel_url.query.get("name", ""))
         if not path.is_file():
             raise web.HTTPNotFound(text="Project not found.")
-        return web.FileResponse(path, headers={"Content-Disposition": f'attachment; filename="{path.name}"'})
+        return web.FileResponse(path, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{urllib.parse.quote(path.name)}"})
 
     @routes.post("/hz3/studio/package")
     async def import_package(request):

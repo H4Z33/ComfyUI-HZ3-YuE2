@@ -327,7 +327,7 @@ function connectSocket() {
 async function uploadSource(file) {
   readForm();
   if (!project.name) {
-    project.name = file.name.replace(/\.[^.]+$/, "").replace(/[^\p{L}\p{N} _-]+/gu, "_").slice(0, 64).trim();
+    project.name = file.name.replace(/\.[^.]+$/, "").replace(/[^\p{L}\p{N} _()-]+/gu, "_").slice(0, 64).trim();
     $("project-name").value = project.name;
   }
   const form = new FormData();
@@ -1194,10 +1194,15 @@ function drawVoiceInspector() {
 
 // ---------- projects (.mixmash packages)
 
+let savedName = null;
+
 async function saveProject() {
   readForm();
   if (!project.name) throw new Error("Ponle nombre al proyecto.");
+  // A new name on an opened project renames its package instead of copying it.
+  if (savedName && savedName !== project.name) await postJson("/hz3/studio/rename", { from: savedName, to: project.name });
   await postJson("/hz3/studio/project", project);
+  savedName = project.name;
   await listProjects();
   status(`Proyecto «${project.name}» guardado.`, 1);
 }
@@ -1212,6 +1217,7 @@ async function openProject(name) {
   pause();
   pausedAt = 0;
   project = { ...newProject(), ...(await api(`/hz3/studio/project?name=${encodeURIComponent(name)}`)) };
+  savedName = project.name;
   selected = null;
   writeForm();
   await refreshSections();

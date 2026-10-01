@@ -2,6 +2,27 @@
 
 Independent ComfyUI node pack for YuE2 workflow preparation.
 
+## Installation
+
+1. Use a ComfyUI with the native YuE2 nodes (`YuE2 Generate Music`, `YuE2 Generate ABC`).
+2. Clone this repository into `ComfyUI/custom_nodes` and install its requirements with
+   ComfyUI's own Python (Comfy Desktop: `<install>\ComfyUI\.venv\Scripts\python.exe`):
+   ```
+   git clone https://github.com/H4Z33/ComfyUI-HZ3-YuE2
+   python -m pip install -r ComfyUI-HZ3-YuE2/requirements.txt
+   ```
+   `faster-whisper` is optional (the `fast` Whisper backend).
+3. Install [audio-separation-nodes-comfyui](https://github.com/christian-byrne/audio-separation-nodes-comfyui)
+   (`AudioSeparation`): HZ3 Studio and the cover workflows use it. Its Hybrid Demucs
+   weights download on first use.
+4. Models: a YuE2 checkpoint (e.g. `yue2_3b_int8_convrot.safetensors`) in `models/checkpoints`;
+   `sheetsage2_bf16.safetensors` in `models/audio_encoders` for audio analysis; the Discogs
+   EffNet files below for `Audio to Style`.
+5. A local [Ollama](https://ollama.com) with a chat model for MixMash and the harmony
+   arranger (default `deepseek-v4.1-flash:cloud`).
+6. Restart ComfyUI and open **HZ3 → Abrir HZ3 Studio** in the main menu (or `/hz3/studio`
+   on the same address as ComfyUI).
+
 ## HZ3 Studio
 
 Open `/hz3/studio` on the running ComfyUI (same host and port as the ComfyUI page)

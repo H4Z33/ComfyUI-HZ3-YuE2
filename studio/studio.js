@@ -22,7 +22,7 @@ const VOICE_LINES = { tenor: 1, baritone: 2, bass: 3 };
 
 // Extra singers are whole separate generations, aligned to the lead by audio.
 function allTracks() {
-  return [...TRACKS, ...project.voices.map((voice) => ({ id: `voice-${voice.id}`, name: voice.name, gain: 0.8, voice }))];
+  return [...TRACKS, ...project.voices.map((voice) => ({ id: `voice-${voice.id}`, name: voice.name, gain: voice.autoGain ?? 0.8, voice }))];
 }
 const FADE = 0.3;
 const PEAKS_PER_SECOND = 100;
@@ -1020,7 +1020,7 @@ function addVoice() {
   const id = Math.max(0, ...project.voices.map((voice) => voice.id)) + 1;
   const global = project.style.split("\n").find((line) => line.trim() && !line.trim().startsWith("[")) ?? "";
   project.voices.push({
-    id, name: `Voz ${id + 1}`, source: "lead", seed: project.seed + 1000 * id,
+    id, name: `Voz ${id + 1}`, source: "lead", octave: 0, role: "-4", seed: project.seed + 1000 * id,
     style: `${global.trim()}\nSpanish female soprano lead vocal, clear and bright`.trim(),
     file: null, offset: 0, sectionOffsets: {}, on: {},
   });
@@ -1033,14 +1033,16 @@ async function renderVoice(voice) {
   readForm();
   if (!project.name) throw new Error("Ponle nombre al proyecto antes de generar.");
   await refreshSections();
-  const line = VOICE_LINES[voice.source];
+  const octave = Number(voice.octave) || 0;
+  // Harmony lines and octave moves come from Vocal Harmony (melody-only ABC); the plain lead keeps the song ABC.
+  const line = VOICE_LINES[voice.source] ?? (octave ? 0 : undefined);
   const prompt = {
     1: { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: project.ckpt } },
     2: {
       class_type: "HZ3_YuE2_GenerateMusicSections",
       inputs: {
-        clip: ["1", 1], style: voice.style, lyrics: project.lyrics, abc: line ? ["20", line] : project.abc, seed: voice.seed,
-        mode: line ? "melody" : project.mode, ...project.sampling, section_seeds: "", section_styles: "",
+        clip: ["1", 1], style: voice.style, lyrics: project.lyrics, abc: line !== undefined ? ["20", line] : project.abc, seed: voice.seed,
+        mode: line !== undefined ? "melody" : project.mode, ...project.sampling, section_seeds: "", section_styles: "",
       },
     },
     3: { class_type: "EmptyYuE2LatentAudio", inputs: { seconds: ["2", 1], batch_size: 1 } },
@@ -1055,12 +1057,12 @@ async function renderVoice(voice) {
     7: { class_type: "AudioSeparation", inputs: { audio: ["5", 0] } },
     8: { class_type: "SaveAudio", inputs: { audio: ["7", 3], filename_prefix: `HZ3-Studio/${project.name}/voice-${voice.id}/vocals` } },
   };
-  if (line) {
+  if (line !== undefined) {
     // The harmony line keeps the song's bars and section markers, so its sections match the lead's.
     prompt[20] = {
       class_type: "HZ3_YuE2_VocalHarmony",
       inputs: { score_abc: project.abc, arrangement: "close_harmony", active_sections: "", tenor_low: 60, tenor_high: 84,
-                baritone_low: 48, baritone_high: 76, bass_low: 36, bass_high: 64 },
+                baritone_low: 48, baritone_high: 76, bass_low: 36, bass_high: 64, octave },
     };
   }
   await queue(prompt, { ...RENDER_LABELS, 2: `Tokens YuE2 (${voice.name})`, 20: "Línea de armonía" }, async (outputs) => {
@@ -1068,61 +1070,104 @@ async function renderVoice(voice) {
     if (!file) throw new Error("La voz terminó sin audio.");
     voice.file = file;
     await loadUrl(fileUrl(file));
-    alignVoice(voice);
+    await alignVoice(voice);
     await saveProject();
     draw();
   });
   status(`${voice.name} en cola…`, 0);
 }
 
-function onsets(values) {
-  const result = new Float32Array(values.length);
-  for (let index = 1; index < values.length; index++) result[index] = Math.max(0, values[index] - values[index - 1]);
+function interpolate(x, xs, ys) {
+  if (x <= xs[0]) return ys[0] + (x - xs[0]);
+  if (x >= xs[xs.length - 1]) return ys[ys.length - 1] + (x - xs[xs.length - 1]);
+  let high = 1;
+  while (xs[high] < x) high++;
+  const low = high - 1;
+  const span = xs[high] - xs[low];
+  return span ? ys[low] + (ys[high] - ys[low]) * (x - xs[low]) / span : ys[high];
+}
+
+function onsets(values, from, to) {
+  const result = new Float32Array(to - from);
+  for (let index = Math.max(1, from); index < to; index++) result[index - from] = Math.max(0, (values[index] ?? 0) - (values[index - 1] ?? 0));
   return result;
 }
 
-function leadOnsets() {
-  const envelope = new Float32Array(Math.ceil(duration() * PEAKS_PER_SECOND));
-  for (const section of sections) {
-    const entry = trackBuffer("vocals", project.comp[section.name]);
-    if (!entry) continue;
-    for (let index = Math.floor(section.start * PEAKS_PER_SECOND); index < Math.min(envelope.length, section.end * PEAKS_PER_SECOND); index++) {
-      envelope[index] = entry.peaks[index] ?? 0;
-    }
-  }
-  return onsets(envelope);
-}
-
-function bestLag(reference, signal, from, to, center, radius) {
-  let best = center;
+function refineShift(leadEntry, voiceEntry, section, shift) {
+  // Rhythm settles what pitch cannot (rap, spoken lines): best onset match within ±1.5 s.
+  const from = Math.floor(section.start * PEAKS_PER_SECOND);
+  const to = Math.floor(section.end * PEAKS_PER_SECOND);
+  const reference = onsets(leadEntry.peaks, from, to);
+  const radius = 1.5 * PEAKS_PER_SECOND;
+  const center = Math.round(shift * PEAKS_PER_SECOND);
+  const signal = onsets(voiceEntry.peaks, from + center - radius, to + center + radius);
+  let best = 0;
   let bestScore = -Infinity;
-  for (let lag = center - radius; lag <= center + radius; lag++) {
+  for (let lag = 0; lag <= 2 * radius; lag++) {
     let score = 0;
-    for (let index = Math.max(from, -lag); index < Math.min(to, signal.length - lag); index++) score += reference[index] * signal[index + lag];
+    for (let index = 0; index < reference.length; index++) score += reference[index] * signal[index + lag];
     if (score > bestScore) { bestScore = score; best = lag; }
   }
-  return best;
+  return (center + best - radius) / PEAKS_PER_SECOND;
 }
 
-function alignVoice(voice) {
-  // Like the lead's real phrasing: one global shift, then a fine shift per section.
-  const entry = voice.file && buffers.get(fileUrl(voice.file));
-  const reference = leadOnsets();
-  if (!entry || !reference.some((value) => value > 0)) throw new Error("Hace falta la voz generada y un take con voz principal para alinear.");
-  const signal = onsets(entry.peaks);
-  const global = bestLag(reference, signal, 0, reference.length, 0, 4 * PEAKS_PER_SECOND);
-  voice.offset = global / PEAKS_PER_SECOND;
-  voice.sectionOffsets = {};
-  for (const section of sections) {
-    if (!voiceEnabled(voice, section)) continue;
-    // Separate generations drift by seconds over a song, so each section searches widely.
-    const lag = bestLag(reference, signal, Math.floor(section.start * PEAKS_PER_SECOND), Math.floor(section.end * PEAKS_PER_SECOND),
-                        global, 4 * PEAKS_PER_SECOND);
-    voice.sectionOffsets[section.name] = (lag - global) / PEAKS_PER_SECOND;
+async function lineWarp(file, line) {
+  return postJson("/hz3/studio/warp", { file, abc: project.abc, line });
+}
+
+async function alignVoice(voice) {
+  // Lead and voice are each mapped onto the score by pitch; their difference is the shift.
+  if (!voice.file) throw new Error("Genera la voz antes de alinearla.");
+  status(`Alineando ${voice.name} con la voz principal…`);
+  for (const take of new Set(Object.values(project.comp).map(takeById))) {
+    if (take?.files.vocals && !take.warp) take.warp = await lineWarp(take.files.vocals, "lead");
   }
-  status(`${voice.name} alineada: ${Math.round(voice.offset * 1000)} ms global.`, 1);
+  voice.warp = await lineWarp(voice.file, voice.source);
+  const shifts = {};
+  for (const section of sections) {
+    const lead = takeById(project.comp[section.name])?.warp;
+    if (!lead || !voiceEnabled(voice, section)) continue;
+    const samples = [];
+    for (let time = section.start; time < section.end; time += 0.5) {
+      const scoreTime = interpolate(time, lead.audio, lead.abc);
+      samples.push(interpolate(scoreTime, voice.warp.abc, voice.warp.audio) - time);
+    }
+    samples.sort((a, b) => a - b);
+    const shift = samples[Math.floor(samples.length / 2)];
+    // Trust pitch where both lines matched the score; elsewhere (rap, spoken parts) refine by rhythm.
+    const sure = (warp, from, to) => {
+      const knots = warp.audio.map((time, index) => [time, warp.sure[index]]).filter(([time]) => time >= from && time < to);
+      return knots.length > 0 && knots.filter(([, flag]) => flag).length >= 0.6 * knots.length;
+    };
+    const voiceFrom = section.start + shift;
+    shifts[section.name] = sure(lead, section.start, section.end) && sure(voice.warp, voiceFrom, voiceFrom + section.end - section.start)
+      ? shift
+      : refineShift(trackBuffer("vocals", project.comp[section.name]), buffers.get(fileUrl(voice.file)), section, shift);
+  }
+  const values = Object.values(shifts).sort((a, b) => a - b);
+  voice.offset = values.length ? values[Math.floor(values.length / 2)] : 0;
+  voice.sectionOffsets = Object.fromEntries(Object.entries(shifts).map(([name, shift]) => [name, shift - voice.offset]));
+  levelVoice(voice, buffers.get(fileUrl(voice.file)));
+  status(`${voice.name} alineada: ${Math.round(voice.offset * 1000)} ms global · nivel ${voice.role} dB respecto a la principal.`, 1);
   draw();
   restartIfPlaying();
+}
+
+function levelVoice(voice, entry) {
+  // Match the voice's energy to the lead where both sing, then sit it at its role's level.
+  let lead = 0;
+  let own = 0;
+  for (const section of sections) {
+    const leadEntry = trackBuffer("vocals", project.comp[section.name]);
+    if (!voiceEnabled(voice, section) || !leadEntry) continue;
+    const shift = Math.round(voiceShift(voice, section) * PEAKS_PER_SECOND);
+    for (let index = Math.floor(section.start * PEAKS_PER_SECOND); index < section.end * PEAKS_PER_SECOND; index++) {
+      lead += (leadEntry.peaks[index] ?? 0) ** 2;
+      own += (entry.peaks[index + shift] ?? 0) ** 2;
+    }
+  }
+  voice.autoGain = own ? Math.min(1.5, Math.sqrt(lead / own) * 10 ** (Number(voice.role) / 20)) : 0.8;
+  delete project.mixer[`voice-${voice.id}`]?.gain;
 }
 
 function drawVoiceInspector() {
@@ -1130,7 +1175,7 @@ function drawVoiceInspector() {
   $("voice-inspector").classList.toggle("hidden", !voice);
   if (!voice) return;
   $("voice-title").textContent = `${voice.name}${voice.file ? "" : " · sin generar"}`;
-  for (const [id, key] of [["voice-name", "name"], ["voice-source", "source"], ["voice-style", "style"], ["voice-seed", "seed"]]) {
+  for (const [id, key] of [["voice-name", "name"], ["voice-source", "source"], ["voice-octave", "octave"], ["voice-role", "role"], ["voice-style", "style"], ["voice-seed", "seed"]]) {
     if (document.activeElement !== $(id)) $(id).value = voice[key];
   }
   if (document.activeElement !== $("voice-offset")) $("voice-offset").value = Math.round(voice.offset * 1000);
@@ -1173,6 +1218,10 @@ async function openProject(name) {
   await refreshSections();
   status("Cargando audio…");
   selectedVoice = null;
+  for (const voice of project.voices) {
+    voice.octave ??= 0;
+    voice.role ??= "-4";
+  }
   await Promise.all([loadSource(), ...project.takes.map(loadTake), ...project.voices.filter((voice) => voice.file).map((voice) => loadUrl(fileUrl(voice.file)))]);
   status(`Proyecto «${project.name}» · ${project.takes.length} takes`, 1);
   draw();
@@ -1242,11 +1291,14 @@ async function init() {
   });
   $("section-styles-from-cues").onclick = guard(stylesFromCues);
   $("add-voice").onclick = addVoice;
-  for (const [id, key] of [["voice-name", "name"], ["voice-source", "source"], ["voice-style", "style"], ["voice-seed", "seed"]]) {
+  for (const [id, key] of [["voice-name", "name"], ["voice-source", "source"], ["voice-octave", "octave"], ["voice-role", "role"], ["voice-style", "style"], ["voice-seed", "seed"]]) {
     $(id).addEventListener("change", (event) => {
       const voice = selectedVoiceEntry();
-      voice[key] = key === "seed" ? Number(event.target.value) || 0 : event.target.value;
+      voice[key] = ["seed", "octave"].includes(key) ? Number(event.target.value) || 0 : event.target.value;
+      const entry = voice.file && buffers.get(fileUrl(voice.file));
+      if (key === "role" && entry) levelVoice(voice, entry);
       draw();
+      restartIfPlaying();
     });
   }
   $("voice-offset").addEventListener("change", (event) => {

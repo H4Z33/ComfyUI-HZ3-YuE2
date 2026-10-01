@@ -63,7 +63,7 @@ class HarmonizerTests(unittest.TestCase):
         f0 = np.array([librosa.midi_to_hz(melody[int(time)] + 12) if 0 <= time < len(melody) else np.nan for time in times])
         warp = harmonizer._time_warp(f0, notes, 60)
         for score_time in (10, 20, 30):
-            self.assertAlmostEqual(float(np.interp(score_time, *warp)), score_time + 1.5, delta=0.2)
+            self.assertAlmostEqual(float(np.interp(score_time, *warp[:2])), score_time + 1.5, delta=0.2)
 
     def test_silence_returns_silent_tracks(self):
         voices, report = harmonizer.harmonize_audio(np.zeros((2, SAMPLE_RATE), dtype=np.float32), SAMPLE_RATE, SCORE)

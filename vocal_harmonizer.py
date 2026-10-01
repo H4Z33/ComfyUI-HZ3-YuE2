@@ -50,12 +50,13 @@ def _note_runs(f0, min_seconds=0.09):
 
 
 def _time_warp(f0, notes, bpm, window=8.0, hop=2.0, max_lag=10.0, step=0.05, floor=0.45):
-    """(abc_seconds, audio_seconds) knots mapping the nominal ABC timeline onto the sung vocal.
+    """(abc_seconds, audio_seconds, sure) knots mapping the nominal ABC timeline onto the sung vocal.
 
     Generated singers drift seconds away from the score. Windowed pitch-class
     cross-correlation of the ABC melody against the pitch track (octave-blind, so
     it also fits a line sung an octave away), Viterbi-smoothed over the lag;
-    windows without a confident match interpolate between their neighbours.
+    windows without a confident match interpolate between their neighbours and
+    are flagged in `sure`.
     """
     seconds = 60 / bpm
     total = max(len(f0) * FRAME_SECONDS, max((float(start + length) * seconds for start, _, length in notes), default=0))
@@ -108,7 +109,7 @@ def _time_warp(f0, notes, bpm, window=8.0, hop=2.0, max_lag=10.0, step=0.05, flo
     lag = lags[path] * step
     sure = corr.max(1) > floor + 0.1
     lag = np.interp(centers, centers[sure], lag[sure]) if sure.any() else np.zeros(len(centers))
-    return centers, np.maximum.accumulate(centers + lag)
+    return centers, np.maximum.accumulate(centers + lag), sure
 
 
 def _voice_shifts(runs, score, warp):
@@ -190,7 +191,8 @@ def harmonize_audio(waveform, sample_rate, score_abc):
         return {name: np.zeros_like(mono) for name in VOICES}, "No sung notes were detected in the vocal."
     score = parse(score_abc.strip() + "\n")
     runs = _note_runs(f0)
-    parts = _voice_shifts(runs, score, _time_warp(f0, score.voices["Vocal"].notes, score.bpm))
+    abc_times, audio_times, _ = _time_warp(f0, score.voices["Vocal"].notes, score.bpm)
+    parts = _voice_shifts(runs, score, (abc_times, audio_times))
     frame_index = np.minimum((np.arange(len(mono)) / sample_rate / FRAME_SECONDS).astype(np.int64), len(f0) - 1)
     period = sample_rate / np.interp(np.arange(len(f0)), np.flatnonzero(voiced), f0[voiced])[frame_index]
     marks = []

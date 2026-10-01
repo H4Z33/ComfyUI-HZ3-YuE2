@@ -16,11 +16,15 @@ import urllib.request
 import zipfile
 
 from aiohttp import web
+import soundfile
 
 import folder_paths
 from comfy.text_encoders.yue2 import FRAMES_PER_SECOND
 
+from .abc_score import parse
 from .section_generation import _build_section_specs
+from .vocal_harmonizer import _time_warp, _track
+from .vocal_harmony import PARTS, harmonize
 
 
 STATIC = Path(__file__).parent / "studio"
@@ -113,6 +117,14 @@ def _arrange(style, instructions, sections, model):
             for entry in plan if isinstance(entry, dict) and entry.get("name") in names}
 
 
+def _warp(path, score_abc, line):
+    """ABC-to-audio time warp of one sung line (the lead, or a Vocal Harmony part)."""
+    wave, sample_rate = soundfile.read(str(path), dtype="float32", always_2d=True)
+    abc = score_abc if line == "lead" else harmonize(score_abc)[1 + PARTS.index(line)]
+    score = parse(abc.strip() + "\n")
+    return _time_warp(_track(wave.mean(1), sample_rate), score.voices["Vocal"].notes, score.bpm)
+
+
 def register(routes):
     @routes.get("/hz3/studio")
     async def index(request):
@@ -195,6 +207,16 @@ def register(routes):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         return web.json_response({"name": path.stem})
+
+    @routes.post("/hz3/studio/warp")
+    async def warp(request):
+        body = await request.json()
+        output = Path(folder_paths.get_output_directory()).resolve()
+        path = (output / body["file"]["subfolder"] / body["file"]["filename"]).resolve()
+        if not path.is_relative_to(output) or not path.is_file():
+            raise web.HTTPBadRequest(text="Vocal file not found in the output folder.")
+        knots = await asyncio.to_thread(_warp, path, body["abc"], body.get("line", "lead"))
+        return web.json_response({"abc": knots[0].tolist(), "audio": knots[1].tolist(), "sure": knots[2].tolist()})
 
     @routes.post("/hz3/studio/arrange")
     async def arrange(request):

@@ -29,9 +29,12 @@ for a song editor on top of these nodes.
   `[Section] …` cue lines of the style) samples it under that style while continuing
   from the music before it.
 - `+ Voz` adds another singer: a whole separate generation with its own style and
-  seed, singing the lead melody or a Vocal Harmony line. It is aligned to the real
-  lead vocal by audio, one global shift plus a fine shift per section, editable in ms;
-  each voice track is switched per section like the harmonies.
+  seed, singing the lead melody or a Vocal Harmony line, optionally an octave up or
+  down (the written register decides the kind of voice YuE2 sings, more than the
+  style). Lead and voice are each mapped onto the score by pitch; their difference
+  gives a shift per section, refined by rhythm where pitch is unreliable (rap),
+  editable in ms. A role (equal, second voice −4 dB, choir −9 dB) sets its level
+  against the lead. Each voice track is switched per section like the harmonies.
 - `Exportar WAV` renders the current timeline.
 
 Projects are `.mixmash` packages under `output/HZ3-YuE2/studio`: a zip with the

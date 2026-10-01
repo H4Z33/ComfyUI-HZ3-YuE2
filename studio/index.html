@@ -12,6 +12,7 @@
   <button id="toggle-song" title="Mostrar u ocultar el panel de la canción">Canción</button>
   <select id="project-list" title="Proyectos guardados"></select>
   <input id="project-name" placeholder="nombre del proyecto" maxlength="64">
+  <button id="open-catalog" title="Todas las canciones guardadas">Catálogo</button>
   <button id="save-project">Guardar</button>
   <label class="file" title="Abre .mixmash desde tu disco">Abrir .mixmash<input id="import-package" type="file" accept=".mixmash"></label>
   <button id="download-package" title="Descarga el paquete con audio, letra, ABC y estado de la app">Descargar .mixmash</button>
@@ -120,6 +121,13 @@
     </div>
   </section>
 </main>
+<dialog id="catalog" class="catalog">
+  <header><strong>Catálogo</strong><button id="close-catalog">Cerrar</button></header>
+  <table>
+    <thead><tr><th>Canción</th><th>Modificada</th><th>Origen</th><th>Secciones</th><th>Takes</th><th>Voces</th><th>Estilo</th></tr></thead>
+    <tbody id="catalog-rows"></tbody>
+  </table>
+</dialog>
 <script src="/hz3/studio/static/studio.js"></script>
 </body>
 </html>

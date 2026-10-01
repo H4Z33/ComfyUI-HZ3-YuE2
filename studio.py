@@ -152,7 +152,21 @@ def register(routes):
     async def projects(request):
         folder = Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "studio"
         files = sorted(folder.glob("*.mixmash"), key=lambda path: path.stat().st_mtime, reverse=True) if folder.is_dir() else []
-        return web.json_response({"projects": [path.stem for path in files]})
+        catalog = []
+        for path in files:
+            with zipfile.ZipFile(path) as package:
+                project = json.loads(package.read("manifest.json"))["project"]
+            style = next((line.strip() for line in str(project.get("style", "")).splitlines() if line.strip()), "")
+            catalog.append({
+                "name": path.stem,
+                "updated": path.stat().st_mtime,
+                "source": (project.get("source") or {}).get("original"),
+                "takes": len(project.get("takes", [])),
+                "voices": len(project.get("voices", [])),
+                "sections": len(re.findall(r"^\s*\[[^\]\n]+\]\s*$", str(project.get("lyrics", "")), re.M)),
+                "style": style[:160],
+            })
+        return web.json_response({"projects": catalog})
 
     @routes.get("/hz3/studio/project")
     async def load_project(request):

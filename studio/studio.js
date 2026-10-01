@@ -1209,8 +1209,21 @@ async function saveProject() {
 
 async function listProjects() {
   const { projects } = await api("/hz3/studio/projects");
+  const escape = (text) => String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   $("project-list").innerHTML = `<option value="">— proyectos —</option>`
-    + projects.map((name) => `<option${name === project.name ? " selected" : ""}>${name.replace(/</g, "&lt;")}</option>`).join("");
+    + projects.map(({ name }) => `<option${name === project.name ? " selected" : ""}>${escape(name)}</option>`).join("");
+  $("catalog-rows").innerHTML = projects.map((entry) => `<tr>
+    <td><button data-name="${escape(entry.name)}">${escape(entry.name)}</button></td>
+    <td>${new Date(entry.updated * 1000).toLocaleString()}</td>
+    <td>${entry.source ? `Audio: ${escape(entry.source)}` : "Compuesta"}</td>
+    <td>${entry.sections}</td><td>${entry.takes}</td><td>${entry.voices}</td>
+    <td class="style">${escape(entry.style)}</td></tr>`).join("");
+  $("catalog-rows").querySelectorAll("button").forEach((button) => {
+    button.onclick = guard(async () => {
+      $("catalog").close();
+      await openProject(button.dataset.name);
+    });
+  });
 }
 
 async function openProject(name) {
@@ -1249,6 +1262,8 @@ async function init() {
   for (const id of ["lyrics", "abc"]) $(id).addEventListener("input", scheduleSections);
   $("project-list").onchange = guard((event) => event.target.value && openProject(event.target.value));
   $("save-project").onclick = guard(saveProject);
+  $("open-catalog").onclick = guard(async () => { await listProjects(); $("catalog").showModal(); });
+  $("close-catalog").onclick = () => $("catalog").close();
   $("toggle-song").onclick = () => document.querySelector(".song").classList.toggle("hidden");
   $("source-audio").onchange = guard(async (event) => {
     const [file] = event.target.files;

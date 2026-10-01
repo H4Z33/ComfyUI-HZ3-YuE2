@@ -66,3 +66,10 @@ main { flex: 1; display: flex; min-height: 0; }
 .handle:hover { background: rgba(224, 176, 74, .5); }
 .drag-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); z-index: 5; pointer-events: none; }
 .lane-head .name.link { cursor: pointer; text-decoration: underline dotted; }
+.catalog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; width: min(1100px, 95vw); max-height: 85vh; padding: 0; }
+.catalog::backdrop { background: rgba(0, 0, 0, .6); }
+.catalog header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+.catalog table { width: 100%; border-collapse: collapse; }
+.catalog th, .catalog td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.catalog td.style { color: var(--muted); font-size: 12px; }
+.catalog td button { text-align: left; }

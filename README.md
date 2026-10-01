@@ -38,7 +38,8 @@ for a song editor on top of these nodes.
   against the lead. Each voice track is switched per section like the harmonies.
 - `Exportar WAV` renders the current timeline.
 
-Projects are `.mixmash` packages under `output/HZ3-YuE2/studio`: a zip with the
+`Catálogo` lists every project (date, source audio or composed, sections, takes, voices,
+style) and opens it. Projects are `.mixmash` packages under `output/HZ3-YuE2/studio`: a zip with the
 source audio, `lyrics.txt`, `score.abc`, `style.txt` and the whole studio project
 (original analysis, takes, comping, harmonies, mixer). `Descargar .mixmash` and
 `Abrir .mixmash` move them between machines; take audio stays in the output folder.

@@ -343,7 +343,8 @@ function connectSocket() {
       status(`${job.labels[data.node] ?? "Procesando"} · ${data.value}/${data.max}`, data.value / data.max);
     } else if (type === "executing" && data.node) {
       status(`${job.labels[data.node] ?? "Procesando"}…`);
-    } else if (type === "execution_success") {
+    } else if (type === "executing") {
+      // Sent after the queue stores the history; execution_success comes before it.
       finishJob(data.prompt_id).catch((error) => status(error.message, null, true));
     } else if (type === "execution_error" || type === "execution_interrupted") {
       pending.delete(data.prompt_id);

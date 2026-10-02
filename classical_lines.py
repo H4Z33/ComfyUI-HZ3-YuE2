@@ -223,7 +223,7 @@ def load_library(folder):
 def add_lines(score_abc, library, plan, register_high=(72, 88), register_low=(48, 62)):
     """Write borrowed phrases into the Ins voice.
 
-    plan: {section name: "high" | "low" | "theme"}; "high" suits intros, endings and choruses
+    plan: {section name: "high" | "low" | "theme" | "theme:<reference name part>"}; "high" suits intros, endings and choruses
     (first violin), "low" a counter-line under the voice (viola / cello), "theme" a melody
     from an analyzed reference recording (see abc_phrases).
     Returns (abc, report lines).
@@ -241,8 +241,10 @@ def add_lines(score_abc, library, plan, register_high=(72, 88), register_low=(48
     used, report = set(), []
     for index, (start, name) in enumerate(sections):
         role = plan.get(name.strip().casefold())
-        if role is None:
+        if not role:
             continue
+        # "theme:habanera" narrows the themes to references whose name contains that text.
+        role, _, wanted = role.partition(":")
         end = section_starts[index + 1] if index + 1 < len(sections) else score.voices["Vocal"].time
         bar_length = Fraction(score.voices["Vocal"].meter[0] * 4, score.voices["Vocal"].meter[1])
         if bar_length != 4:
@@ -256,6 +258,8 @@ def add_lines(score_abc, library, plan, register_high=(72, 88), register_low=(48
             sources = {source for source, _ in used}
             best = None
             for phrase in candidates[role]:
+                if wanted and wanted.casefold() not in phrase["source"].casefold():
+                    continue
                 if any((phrase["source"], measure) in used for measure in range(phrase["measure"], phrase["last"] + 1)):
                     continue
                 fitted, clashes = fit_line(phrase, tonic, minor, chords, register)

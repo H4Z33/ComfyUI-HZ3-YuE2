@@ -94,6 +94,8 @@ class ClassicalLinesTests(unittest.TestCase):
         # G A B C (degrees 1-4 of G major) arrive as C D E F of C major.
         self.assertEqual([note[1] % 12 for note in verse[:4]], [0, 2, 4, 5])
         self.assertIn("Referencia (CC0), melody, m.5-8", report[0])
+        _, filtered = classical.add_lines(SONG, themes, {"verse": "theme:otra"})
+        self.assertEqual(filtered, ["verse: no unused theme phrase left."])
 
 
 if __name__ == "__main__":

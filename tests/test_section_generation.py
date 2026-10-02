@@ -270,6 +270,19 @@ class SectionGenerationTests(unittest.TestCase):
         intro_tokens = rerolled_model.acoustic_call[1][:50]
         self.assertEqual(rerolled_model.model.prefills, [[POSITIVE + intro_tokens]])
 
+    def test_rerolled_section_ending_is_matched_to_the_kept_next_section(self):
+        abc = ABC.replace("% intro\nV: Vocal\nZ|\nV: Ins\nZ|", "% intro\nV: Vocal\nZ|Z|\nV: Ins\nZ|Z|")
+        run_sections(FakeSectionModel(), abc=abc)
+        model = FakeSectionModel()
+        result = run_sections(model, abc=abc, section_seeds="intro = 9")["result"]
+        layout = result[0][0][1]["hz3_section_layout"]
+        self.assertEqual([(section["reused"], section["matched_ending"]) for section in layout], [(False, True), (True, False)])
+        self.assertIn("ending matched to the next section", result[2])
+        # The first bar is sampled once, then each candidate last bar continues from it.
+        body = model.acoustic_call[1][:50]
+        self.assertEqual(model.model.prefills, [[POSITIVE]] + [[POSITIVE + body]] * generation.SEAM_CANDIDATES)
+        self.assertEqual(len(model.acoustic_call[1]), 150)
+
     def test_edited_lyrics_invalidate_only_that_section(self):
         run_sections(FakeSectionModel())
         model = FakeSectionModel()

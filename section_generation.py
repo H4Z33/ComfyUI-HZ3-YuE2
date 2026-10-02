@@ -39,6 +39,8 @@ from .score_analysis import inspect_score
 from .sheetsage2_sections import split_abc_by_sections
 from .token_stream import _prepare_model
 
+SEAM_CANDIDATES = 4
+
 
 def _normalized_section_name(value: str) -> tuple[str, int | None]:
     normalized = unicodedata.normalize("NFKD", value or "")
@@ -268,6 +270,15 @@ def _sample_section(model, prefixes, cfg_scale, frames, seed, history, sampling,
     return tokens
 
 
+def _continuation_score(model, prefix, history, following, device, dtype):
+    """Log-likelihood of a kept section's opening tokens right after `history`."""
+    ids = prefix + history + following
+    cache = model.model.init_kv_cache(1, len(ids), device, dtype)
+    output = model.model(torch.tensor([ids], device=device, dtype=torch.long), past_key_values=cache, dtype=dtype)
+    log_probs = model.model.lm_head(output[0][0, -len(following) - 1:-1]).float().log_softmax(-1)
+    return log_probs[torch.arange(len(following), device=device), torch.tensor(following, device=device)].sum().item()
+
+
 class HZ3_YuE2_GenerateMusicSections:
     CATEGORY = "HZ3 YuE2/Generation"
     FUNCTION = "generate"
@@ -424,16 +435,34 @@ class HZ3_YuE2_GenerateMusicSections:
         section_layout = []
         try:
             with comfy.model_management.cuda_device_context(device), comfy.ops.use_quantized_matmul(model, device):
-                for section, section_seed, section_style, path, stored in plan:
+                for index, (section, section_seed, section_style, path, stored) in enumerate(plan):
                     start = len(history)
+                    following = plan[index + 1][4] if index + 1 < len(plan) else None
                     if stored is None:
-                        prefixes = [positives[section_style] + history]
-                        if cfg_scale != 1.0:
-                            prefixes.append(negative + history)
+                        bases = [positives[section_style]] if cfg_scale == 1.0 else [positives[section_style], negative]
+                        # A kept next section was sampled after the old ending: the last bar is
+                        # sampled several times and the ending that best leads into it is kept.
+                        tail = section["frames"] // section["bars"] if following and section["bars"] > 1 else 0
+                        matched = bool(tail)
                         stored = _sample_section(
-                            model, prefixes, cfg_scale, section["frames"], section_seed, history,
+                            model, [base + history for base in bases], cfg_scale, section["frames"] - tail, section_seed, history,
                             sampling, device, dtype, progress, start, section["name"],
                         )
+                        if tail:
+                            opening = following[:2 * FRAMES_PER_SECOND]
+                            best = None
+                            for candidate in range(SEAM_CANDIDATES):
+                                candidate_history = history.copy()
+                                ending = _sample_section(
+                                    model, [base + history for base in bases], cfg_scale, tail,
+                                    (section_seed + 1 + candidate) & 0xFFFFFFFFFFFFFFFF, candidate_history,
+                                    sampling, device, dtype, progress, start + len(stored), section["name"],
+                                )
+                                score = _continuation_score(model, positives[plan[index + 1][2]], candidate_history, opening, device, dtype)
+                                if best is None or score > best[0]:
+                                    best = (score, ending)
+                            stored += best[1]
+                            history.extend(best[1])
                         path.parent.mkdir(parents=True, exist_ok=True)
                         path.write_text(json.dumps(stored), encoding="utf-8")
                         reused = False
@@ -441,6 +470,7 @@ class HZ3_YuE2_GenerateMusicSections:
                         history.extend(stored)
                         progress.update_absolute(len(history))
                         reused = True
+                        matched = False
                     section_layout.append(
                         {
                             "name": section["name"],
@@ -451,6 +481,7 @@ class HZ3_YuE2_GenerateMusicSections:
                             "seed": section_seed,
                             "own_style": section_style != style,
                             "reused": reused,
+                            "matched_ending": matched,
                         }
                     )
                 conditioning, chunks = model._acoustic_conditioning(positive, history, dtype)
@@ -479,6 +510,7 @@ class HZ3_YuE2_GenerateMusicSections:
                 f"{section['name']}: {section['bars']} bars · "
                 f"{start_seconds:.2f}-{end_seconds:.2f}s · seed {section['seed']}"
                 f"{' · own style' if section['own_style'] else ''}{' · reused' if section['reused'] else ''}"
+                f"{' · ending matched to the next section' if section['matched_ending'] else ''}"
             )
         report = "\n".join(report_lines)
         return {

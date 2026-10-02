@@ -447,7 +447,7 @@ async function compose() {
   status("Composición en cola…", 0);
 }
 
-function buildPrompt(prefix) {
+function buildPrompt(prefix, kept) {
   const overrides = Object.entries(project.sectionSeeds)
     .filter(([name]) => sections.some((section) => section.name === name))
     .map(([name, seed]) => `${name} = ${seed}`).join("\n");
@@ -461,6 +461,7 @@ function buildPrompt(prefix) {
         section_styles: Object.entries(project.sectionStyles)
           .filter(([name, text]) => text.trim() && sections.some((section) => section.name === name))
           .map(([name, text]) => `${name}: ${text.replace(/\s*\n\s*/g, " ").trim()}`).join("\n"),
+        section_tokens: Object.entries(kept).map(([name, tokens]) => `${name} = ${tokens}`).join("\n"),
       },
     },
     3: { class_type: "EmptyYuE2LatentAudio", inputs: { seconds: ["2", 1], batch_size: 1 } },
@@ -508,7 +509,11 @@ async function render(targets) {
   const comped = new Set(sections.filter((section, index) =>
     !targets || targets.includes(section.name) || isEdited(section, index) || !takeById(project.comp[section.name])
   ).map((section) => section.name));
-  const { prompt, saves } = buildPrompt(`HZ3-Studio/${project.name}/take-${id}`);
+  // Untouched sections replay the tokens of their chosen take, so a new ending is matched to what plays next.
+  const kept = Object.fromEntries(sections.filter((section) => !comped.has(section.name))
+    .map((section) => [section.name, takeById(project.comp[section.name])?.sectionTokens?.[section.name]])
+    .filter(([, tokens]) => tokens));
+  const { prompt, saves } = buildPrompt(`HZ3-Studio/${project.name}/take-${id}`, kept);
   const owner = project.name;
   await queue(prompt, RENDER_LABELS, async (outputs) => {
     for (const [node, track] of Object.entries(saves)) {
@@ -516,6 +521,7 @@ async function render(targets) {
       if (file) take.files[track] = file;
     }
     if (!take.files.vocals) throw new Error("La generación terminó sin audio.");
+    take.sectionTokens = outputs[2]?.section_tokens?.[0] ?? {};
     const current = await updateProject(owner, (target) => {
       target.takes.push(take);
       for (const name of comped) target.comp[name] = take.id;

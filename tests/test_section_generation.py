@@ -283,6 +283,19 @@ class SectionGenerationTests(unittest.TestCase):
         self.assertEqual(model.model.prefills, [[POSITIVE]] + [[POSITIVE + body]] * generation.SEAM_CANDIDATES)
         self.assertEqual(len(model.acoustic_call[1]), 150)
 
+    def test_section_tokens_replay_a_chosen_take(self):
+        first_model = FakeSectionModel()
+        kept = run_sections(first_model)["ui"]["section_tokens"][0]
+        self.assertEqual(sorted(kept), ["intro", "verse 1"])
+        # Seed 9 was never sampled: the intro can only come from the kept tokens.
+        model = FakeSectionModel()
+        result = run_sections(model, section_seeds="intro = 9", section_tokens=f"Intro = {kept['intro']}")
+        self.assertEqual(model.model.prefills, [])
+        self.assertEqual(model.acoustic_call[1], first_model.acoustic_call[1])
+        self.assertEqual(result["ui"]["section_tokens"][0]["intro"], kept["intro"])
+        with self.assertRaisesRegex(ValueError, "Section token lines"):
+            run_sections(FakeSectionModel(), section_tokens="Intro = ../../secret")
+
     def test_edited_lyrics_invalidate_only_that_section(self):
         run_sections(FakeSectionModel())
         model = FakeSectionModel()

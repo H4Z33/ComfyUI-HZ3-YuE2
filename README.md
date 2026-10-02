@@ -42,6 +42,8 @@ for a song editor on top of these nodes.
   Every render is a take of the whole song. Edit a section's lyrics or seed and
   `Regenerar sección`: only that section (and any other edited one) switches to
   the new take, with short crossfades at the boundaries.
+  The other sections replay the exact tokens of their chosen take, and the new
+  section's last bar is picked from several tries to lead into the next one.
 - Every track (lead, instrumental, harmonies, extra voices) is switched on or off per
   section by clicking it, e.g. for a duet;
   each track has mute, solo and volume. `Armonías con agente` asks the local
@@ -228,7 +230,7 @@ For normal use, connect the original `YuE2 Generate Music.conditioning` directly
 
 `Section Plan` parses the native ABC into an ordered, timed section list (bars, seconds, and semantic frames per section). It merges optional per-section `style_overrides` lines (`Section: text`) into the plan and `sections` JSON. `Assemble Sections` is the complement: it concatenates one conditioning take per section into a single contiguous YuE2 conditioning, rebasing each chunk's KV offset and frame timestamps so the result feeds directly to KSampler with `seconds` for `Empty YuE2 Latent Audio`. Connect `Section Plan.sections` to label each take in the assembly report. Generate each section (optionally via `Conditioning Cut` on a single take) and tile the takes in order; sections must tile exactly.
 
-`Generate Music Sections` samples the whole song as one continuous YuE2 pass, stopping at each ABC section boundary, and stores each section's tokens under `output/HZ3-YuE2/section_tokens`. Editing a section's lyrics or ABC, or rerolling it with `section_seeds` (`Chorus 2 = 1234`), resamples only that section; the rest is replayed from storage. Sung words come from the sampled tokens, so a lyric edit always needs that section resampled. `section_styles` (`Chorus 1: female soprano, Latin pop`) samples a section under its own style while still continuing from the earlier sections' music.
+`Generate Music Sections` samples the whole song as one continuous YuE2 pass, stopping at each ABC section boundary, and stores each section's tokens under `output/HZ3-YuE2/section_tokens`. Editing a section's lyrics or ABC, or rerolling it with `section_seeds` (`Chorus 2 = 1234`), resamples only that section; the rest is replayed from storage. Sung words come from the sampled tokens, so a lyric edit always needs that section resampled. `section_styles` (`Chorus 1: female soprano, Latin pop`) samples a section under its own style while still continuing from the earlier sections' music. When a resampled section is followed by a stored one, its last bar is sampled several times and the ending under which YuE2 finds the next section's opening most likely is kept. The `section_tokens` output in the node's UI result names each section's stored tokens; passing them back (`Chorus 1 = <id>`) replays that take's section exactly.
 ABC -> Lyrics Prosody.score_abc
 ```
 

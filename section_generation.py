@@ -176,6 +176,18 @@ def _parse_section_seeds(text: str) -> dict[str, int]:
     return seeds
 
 
+def _parse_section_tokens(text: str) -> dict[str, str]:
+    tokens = {}
+    for line in (text or "").splitlines():
+        if not line.strip():
+            continue
+        name, separator, value = line.rpartition("=")
+        if not separator or not name.strip() or not re.fullmatch(r"[0-9a-f]{64}", value.strip()):
+            raise ValueError(f"Section token lines must look like 'Chorus 2 = <64 hex digits>', got {line.strip()!r}.")
+        tokens[name.strip().casefold()] = value.strip()
+    return tokens
+
+
 def _parse_section_styles(text: str) -> dict[str, str]:
     styles = {}
     for line in (text or "").splitlines():
@@ -207,7 +219,10 @@ def _patches_fingerprint(clip) -> list:
 
 
 def _section_token_path(fields: dict) -> Path:
-    digest = hashlib.sha256(json.dumps(fields, sort_keys=True).encode("utf-8")).hexdigest()
+    return _stored_tokens_path(hashlib.sha256(json.dumps(fields, sort_keys=True).encode("utf-8")).hexdigest())
+
+
+def _stored_tokens_path(digest: str) -> Path:
     return Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "section_tokens" / f"{digest}.json"
 
 
@@ -345,6 +360,13 @@ class HZ3_YuE2_GenerateMusicSections:
                                "That section is sampled with this style instead of the global one, still "
                                "continuing from every earlier section's music.",
                 }),
+                "section_tokens": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": "Optional stored tokens to replay, one 'Chorus 1 = <id>' per line, using the ids "
+                               "this node reports for an earlier render. Keeps a section exactly as in that take "
+                               "and makes a resampled previous section end into it.",
+                }),
             },
         }
 
@@ -363,6 +385,7 @@ class HZ3_YuE2_GenerateMusicSections:
         cfg_scale=1.0,
         section_seeds="",
         section_styles="",
+        section_tokens="",
     ):
         specs = _build_section_specs(abc, lyrics)
         style = str(style or "").strip()
@@ -376,8 +399,10 @@ class HZ3_YuE2_GenerateMusicSections:
         }
         seed_overrides = _parse_section_seeds(section_seeds)
         style_overrides = _parse_section_styles(section_styles)
+        token_overrides = _parse_section_tokens(section_tokens)
         names = {section["name"].casefold() for section in specs}
-        for label, overrides in (("section_seeds", seed_overrides), ("section_styles", style_overrides)):
+        for label, overrides in (("section_seeds", seed_overrides), ("section_styles", style_overrides),
+                                 ("section_tokens", token_overrides)):
             unknown = set(overrides) - names
             if unknown:
                 raise ValueError(f"{label} names unknown section(s): {', '.join(sorted(unknown))}.")
@@ -428,6 +453,10 @@ class HZ3_YuE2_GenerateMusicSections:
                     "patches": patches,
                 }
             )
+            # Tokens from a chosen take win; a removed or now mismatched file falls back to the keyed ones.
+            kept = token_overrides.get(section["name"].casefold())
+            if kept and _load_section_tokens(_stored_tokens_path(kept), section["frames"]) is not None:
+                path = _stored_tokens_path(kept)
             plan.append((section, section_seed, section_style, path, _load_section_tokens(path, section["frames"])))
 
         progress = comfy.utils.ProgressBar(total_frames)
@@ -482,6 +511,7 @@ class HZ3_YuE2_GenerateMusicSections:
                             "own_style": section_style != style,
                             "reused": reused,
                             "matched_ending": matched,
+                            "tokens": path.stem,
                         }
                     )
                 conditioning, chunks = model._acoustic_conditioning(positive, history, dtype)
@@ -514,7 +544,7 @@ class HZ3_YuE2_GenerateMusicSections:
             )
         report = "\n".join(report_lines)
         return {
-            "ui": {"text": [report]},
+            "ui": {"text": [report], "section_tokens": [{section["name"]: section["tokens"] for section in section_layout}]},
             "result": ([[conditioning, metadata]], seconds, report),
         }
 

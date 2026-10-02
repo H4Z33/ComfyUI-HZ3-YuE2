@@ -185,24 +185,26 @@ def build_library(paths):
 
 def abc_phrases(score_abc, source, length=16):
     """Melody windows of a native YuE2 ABC (e.g. SheetSage2's transcription of a reference
-    recording) as "theme" phrases, starting at bar lines of its 2/4, 4/4 or 2/2 bars."""
+    recording) as "theme" phrases, starting at bar lines of its 2/4, 4/4 or 2/2 bars. Both
+    lines count: SheetSage2 writes the tune of an instrumental recording into `Ins`."""
     score = parse(score_abc.strip() + "\n")
-    melody = score.voices["Vocal"].notes
     key = score.voices["Vocal"].keys[0][1]
     minor = key.endswith("m")
     result = []
     bars = score.voices["Vocal"].bars
-    for index, (start, bar_length, _) in enumerate(bars):
-        if bar_length not in (2, 4) or index % 2:
-            continue
-        line = [[float(onset - start), pitch, float(min(duration, start + length - onset))]
-                for onset, pitch, duration in melody if start <= onset < start + length]
-        if (len(line) < 6 or line[0][0] >= bar_length or sum(note[2] for note in line) < length / 2
-                or start + length > score.voices["Vocal"].time):
-            continue
-        result.append({"part": "melody", "measure": index + 1, "last": index + int(length / bar_length),
-                       "notes": line, "minor": minor, "tonic": _pitch_class(key[:-1] if minor else key),
-                       "role": "theme", "source": source})
+    for voice, part in (("Vocal", "melody"), ("Ins", "instrumental")):
+        melody = score.voices[voice].notes
+        for index, (start, bar_length, _) in enumerate(bars):
+            if bar_length not in (2, 4) or index % 2:
+                continue
+            line = [[float(onset - start), pitch, float(min(duration, start + length - onset))]
+                    for onset, pitch, duration in melody if start <= onset < start + length]
+            if (len(line) < 6 or line[0][0] >= bar_length or sum(note[2] for note in line) < length / 2
+                    or start + length > score.voices["Vocal"].time):
+                continue
+            result.append({"part": part, "measure": index + 1, "last": index + int(length / bar_length),
+                           "notes": line, "minor": minor, "tonic": _pitch_class(key[:-1] if minor else key),
+                           "role": "theme", "source": source})
     return result
 
 
@@ -270,6 +272,8 @@ def add_lines(score_abc, library, plan, register_high=(72, 88), register_low=(48
                 density = max(0, len(fitted) / 16 - 2)
                 leaps = sum(abs(b[1] - a[1]) > 5 for a, b in zip(fitted, fitted[1:])) / len(fitted)
                 cost = 2 * clashes + 3 * density + 4 * leaps + 2 * (phrase["source"] in sources)
+                if role == "theme":
+                    cost += 0.05 * phrase["measure"]  # a work states its theme early: prefer first statements
                 if best is None or cost < best[0]:
                     best = (cost, fitted, phrase, clashes)
             if best is None:

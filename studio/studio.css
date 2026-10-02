@@ -62,7 +62,7 @@ main { flex: 1; display: flex; min-height: 0; }
 .note { grid-column: 1 / -1; margin: 0; color: var(--muted); }
 .note:empty { display: none; }
 .lane.score { height: 120px; }
-.handle { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
+.handle { position: absolute; left: 0; top: 0; bottom: 0; width: 14px; cursor: ew-resize; background: linear-gradient(90deg, rgba(224, 176, 74, .35), transparent); }
 .handle:hover { background: rgba(224, 176, 74, .5); }
 .drag-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); z-index: 5; pointer-events: none; }
 .lane-head .name.link { cursor: pointer; text-decoration: underline dotted; }

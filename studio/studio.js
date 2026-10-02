@@ -157,7 +157,7 @@ function editableSections() {
 function renameKeys(from, to) {
   const maps = [project.comp, project.sectionSeeds, project.sectionStyles, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
   for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds, take.sectionStyles ?? {}, take.sectionAbc ?? {});
-  for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets);
+  for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
   for (const map of maps) {
     if (from in map) { map[to] = map[from]; delete map[from]; }
   }
@@ -298,6 +298,21 @@ async function arrange() {
 
 // ---------- jobs through ComfyUI
 
+// A job can finish after another project was opened: it must write into the project that queued it.
+async function updateProject(owner, change) {
+  if (project.name === owner) {
+    change(project);
+    await saveProject();
+    return true;
+  }
+  const stored = await api(`/hz3/studio/project?name=${encodeURIComponent(owner)}`);
+  change(stored);
+  await postJson("/hz3/studio/project", stored);
+  await listProjects();
+  status(`«${owner}» actualizado en segundo plano.`, 1);
+  return false;
+}
+
 async function queue(prompt, labels, finish) {
   const data = await postJson("/prompt", { prompt, client_id: clientId });
   pending.set(data.prompt_id, { labels, finish });
@@ -381,16 +396,20 @@ async function analyze() {
     13: { class_type: "PreviewAny", inputs: { source: ["3", 0] } },
     14: { class_type: "PreviewAny", inputs: { source: ["5", 0] } },
   };
+  const owner = project.name;
   await queue(prompt, ANALYSIS_LABELS, async (outputs) => {
     const text = (node) => outputs[node]?.text?.[0] ?? "";
     if (!text(12).trim()) throw new Error("El análisis terminó sin ABC.");
-    project.analysis = {
-      at: Date.now(), sheetsage_abc: text(13), whisper_lyrics: text(14),
-      mixmash: { style: text(10), lyrics: text(11), abc: text(12) },
-    };
-    project.style = text(10);
-    project.lyrics = text(11);
-    project.abc = text(12);
+    const current = await updateProject(owner, (target) => {
+      target.analysis = {
+        at: Date.now(), sheetsage_abc: text(13), whisper_lyrics: text(14),
+        mixmash: { style: text(10), lyrics: text(11), abc: text(12) },
+      };
+      target.style = text(10);
+      target.lyrics = text(11);
+      target.abc = text(12);
+    });
+    if (!current) return;
     writeForm();
     await refreshSections();
     await uniqueSectionNames();
@@ -414,10 +433,11 @@ async function compose() {
     },
     3: { class_type: "PreviewAny", inputs: { source: ["2", 0] } },
   };
+  const owner = project.name;
   await queue(prompt, COMPOSE_LABELS, async (outputs) => {
     const abc = outputs[3]?.text?.[0] ?? "";
     if (!abc.trim()) throw new Error("YuE2 no devolvió ABC.");
-    project.abc = abc;
+    if (!await updateProject(owner, (target) => { target.abc = abc; })) return;
     $("abc").value = abc;
     await refreshSections().catch((error) => status(`ABC generado; revisa las secciones: ${error.message}`, null, true));
     await uniqueSectionNames();
@@ -489,15 +509,18 @@ async function render(targets) {
     !targets || targets.includes(section.name) || isEdited(section, index) || !takeById(project.comp[section.name])
   ).map((section) => section.name));
   const { prompt, saves } = buildPrompt(`HZ3-Studio/${project.name}/take-${id}`);
+  const owner = project.name;
   await queue(prompt, RENDER_LABELS, async (outputs) => {
     for (const [node, track] of Object.entries(saves)) {
       const file = outputs[node]?.audio?.[0];
       if (file) take.files[track] = file;
     }
     if (!take.files.vocals) throw new Error("La generación terminó sin audio.");
-    project.takes.push(take);
-    for (const name of comped) project.comp[name] = take.id;
-    await saveProject();
+    const current = await updateProject(owner, (target) => {
+      target.takes.push(take);
+      for (const name of comped) target.comp[name] = take.id;
+    });
+    if (!current) return;
     await loadTake(take);
     status(`Take ${take.id} listo · ${[...comped].join(", ")}`, 1);
     draw();
@@ -595,6 +618,26 @@ function buildGraph(target, destination, from, start) {
   const sources = [];
   const trackGains = {};
   const takeIds = new Set(Object.values(project.comp));
+  // A limiter on the sum, so stacked voices never clip in playback or export.
+  const limiter = target.createDynamicsCompressor();
+  limiter.threshold.value = -3;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.002;
+  limiter.release.value = 0.12;
+  // The compressor still overshoots on stacked peaks: a ceiling that is transparent below
+  // 0.9 and bends softly into 1.0 (curve spans ±2, so the signal is halved around it).
+  const ceiling = target.createWaveShaper();
+  ceiling.curve = Float32Array.from({ length: 4097 }, (_, index) => {
+    const value = (index / 2048 - 1) * 2;
+    const size = Math.abs(value);
+    return Math.sign(value) * (size <= 0.9 ? size : 0.9 + 0.1 * Math.tanh((size - 0.9) / 0.1)) / 2;
+  });
+  const into = target.createGain();
+  const out = target.createGain();
+  into.gain.value = 0.5;
+  out.gain.value = 2;
+  limiter.connect(into).connect(ceiling).connect(out).connect(destination);
   const connect = (entry, trackGain, values) => {
     if (!entry || from >= entry.buffer.duration) return;
     const source = target.createBufferSource();
@@ -619,9 +662,10 @@ function buildGraph(target, destination, from, start) {
       const source = target.createBufferSource();
       source.buffer = entry.buffer;
       const gain = target.createGain();
+      const level = voice.sectionGains?.[section.name] ?? 1;
       gain.gain.setValueAtTime(0, at(begin));
-      gain.gain.linearRampToValueAtTime(1, at(Math.min(begin + FADE, end)));
-      gain.gain.setValueAtTime(1, at(Math.max(end - FADE, begin + FADE)));
+      gain.gain.linearRampToValueAtTime(level, at(Math.min(begin + FADE, end)));
+      gain.gain.setValueAtTime(level, at(Math.max(end - FADE, begin + FADE)));
       gain.gain.linearRampToValueAtTime(0, at(end));
       source.connect(gain).connect(trackGain);
       source.start(at(begin) + Math.max(0, -offset), Math.max(0, offset), end - begin);
@@ -631,7 +675,7 @@ function buildGraph(target, destination, from, start) {
   for (const track of allTracks()) {
     const trackGain = target.createGain();
     trackGain.gain.value = mixerGain(track);
-    trackGain.connect(destination);
+    trackGain.connect(limiter);
     trackGains[track.id] = trackGain;
     if (track.source) connect(sourceEntry(), trackGain, null);
     else if (track.voice) connectVoice(track.voice, trackGain);
@@ -973,6 +1017,7 @@ function drawInspector() {
   $("section-classical").value = project.classicalPlan[section.name] ?? "";
   if (document.activeElement !== $("section-seed")) $("section-seed").value = sectionSeed(section, index);
   $("section-merge").disabled = index === sections.length - 1;
+  $("section-earlier").disabled = $("section-later").disabled = index === 0;
   const takes = $("section-takes");
   takes.innerHTML = project.takes.length ? "<span>Take de esta sección</span>" : "<span>Sin takes todavía.</span>";
   for (const take of project.takes) {
@@ -1013,6 +1058,17 @@ async function splitSection() {
   edited.splice(index + 1, 0, { id: `section-${Date.now()}`, name, start_bar: bar, end_bar: edited[index].end_bar, lyrics: "" });
   edited[index].end_bar = bar - 1;
   selected = name;
+  await applySections(edited);
+}
+
+async function moveSectionStart(bars) {
+  const index = sections.findIndex((section) => section.name === selected);
+  if (index < 1) throw new Error("La primera sección empieza siempre en el compás 1.");
+  const edited = editableSections();
+  const start = edited[index].start_bar + bars;
+  if (start <= edited[index - 1].start_bar || start > edited[index].end_bar) throw new Error("No hay compases suficientes para mover ese límite.");
+  edited[index].start_bar = start;
+  edited[index - 1].end_bar = start - 1;
   await applySections(edited);
 }
 
@@ -1081,12 +1137,17 @@ async function renderVoice(voice) {
                 baritone_low: 48, baritone_high: 76, bass_low: 36, bass_high: 64, octave },
     };
   }
+  const owner = project.name;
   await queue(prompt, { ...RENDER_LABELS, 2: `Tokens YuE2 (${voice.name})`, 20: "Línea de armonía" }, async (outputs) => {
     const file = outputs[8]?.audio?.[0];
     if (!file) throw new Error("La voz terminó sin audio.");
-    voice.file = file;
+    const current = await updateProject(owner, (target) => {
+      const stored = target.voices.find((item) => item.id === voice.id);
+      if (stored) stored.file = file;
+    });
+    if (!current) return;  // aligned when that project is open again ("Alinear con la voz principal")
     await loadUrl(fileUrl(file));
-    await alignVoice(voice);
+    await alignVoice(project.voices.find((item) => item.id === voice.id));
     await saveProject();
     draw();
   });
@@ -1179,19 +1240,36 @@ async function alignVoice(voice) {
 }
 
 function levelVoice(voice, entry) {
-  // Match the voice's energy to the lead where both sing, then sit it at its role's level.
-  let lead = 0;
-  let own = 0;
+  // Section by section, sit the voice at its role's level against the lead's energy there;
+  // where the lead is switched off, against the lead's typical level.
+  // RMS of the real samples (every 16th, first channel); peaks would understate loudness gaps.
+  const energy = (target, from, to, shift = 0) => {
+    const data = target.buffer.getChannelData(0);
+    const rate = target.buffer.sampleRate / PEAKS_PER_SECOND;
+    const first = Math.max(0, Math.floor((from + shift) * rate));
+    const last = Math.min(data.length, Math.floor((to + shift) * rate));
+    let sum = 0;
+    let count = 0;
+    for (let index = first; index < last; index += 16) { sum += data[index] ** 2; count++; }
+    return Math.sqrt(sum / Math.max(1, count));
+  };
+  const leadLevels = {};
   for (const section of sections) {
     const leadEntry = trackBuffer("vocals", project.comp[section.name]);
-    if (!voiceEnabled(voice, section) || !leadEntry) continue;
-    const shift = Math.round(voiceShift(voice, section) * PEAKS_PER_SECOND);
-    for (let index = Math.floor(section.start * PEAKS_PER_SECOND); index < section.end * PEAKS_PER_SECOND; index++) {
-      lead += (leadEntry.peaks[index] ?? 0) ** 2;
-      own += (entry.peaks[index + shift] ?? 0) ** 2;
+    if (leadEntry && trackEnabled("vocals", section)) {
+      leadLevels[section.name] = energy(leadEntry, Math.floor(section.start * PEAKS_PER_SECOND), Math.floor(section.end * PEAKS_PER_SECOND));
     }
   }
-  voice.autoGain = own ? Math.min(1.5, Math.sqrt(lead / own) * 10 ** (Number(voice.role) / 20)) : 0.8;
+  const typical = Object.values(leadLevels).sort((a, b) => a - b)[Math.floor(Object.keys(leadLevels).length / 2)] ?? 0;
+  voice.sectionGains = {};
+  for (const section of sections) {
+    if (!voiceEnabled(voice, section)) continue;
+    const own = energy(entry, Math.floor(section.start * PEAKS_PER_SECOND), Math.floor(section.end * PEAKS_PER_SECOND),
+                       Math.round(voiceShift(voice, section) * PEAKS_PER_SECOND));
+    const lead = leadLevels[section.name] ?? typical;
+    voice.sectionGains[section.name] = own ? Math.min(2, (lead / own) * 10 ** (Number(voice.role) / 20)) : 1;
+  }
+  voice.autoGain = 1;
   delete project.mixer[`voice-${voice.id}`]?.gain;
 }
 
@@ -1368,6 +1446,8 @@ async function init() {
   $("section-name").addEventListener("change", guard((event) => renameSection(event.target.value)));
   $("section-split").onclick = guard(splitSection);
   $("section-merge").onclick = guard(mergeSection);
+  $("section-earlier").onclick = guard(() => moveSectionStart(-1));
+  $("section-later").onclick = guard(() => moveSectionStart(1));
   $("section-lyrics").addEventListener("input", guard((event) => {
     setSectionLyrics(sections.findIndex((section) => section.name === selected), event.target.value);
     scheduleSections();

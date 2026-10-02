@@ -34,8 +34,8 @@ for a song editor on top of these nodes.
   lyrics and let `Generar ABC (YuE2)` compose the score, or import a
   `{style, lyrics, abc}` JSON.
 - The piano roll above the tracks shows the score under the original audio.
-  Drag a section's left edge to move its start (snapped to bars); rename,
-  split at the cursor or merge sections in the inspector. ABC markers and lyric
+  Drag a section's left edge, or use `◀ Un compás antes` / `Un compás después ▶` in the
+  inspector, to move its start by bars; rename, split at the cursor or merge sections there. ABC markers and lyric
   headers are rewritten together.
 - `Generar canción` queues Generate Music Sections, KSampler, separation into
   lead and instrumental, and (with `Armonías` on) the Vocal Harmonizer voices.
@@ -55,8 +55,9 @@ for a song editor on top of these nodes.
   down (the written register decides the kind of voice YuE2 sings, more than the
   style). Lead and voice are each mapped onto the score by pitch; their difference
   gives a shift per section, refined by rhythm where pitch is unreliable (rap),
-  editable in ms. A role (equal, second voice −4 dB, choir −9 dB) sets its level
-  against the lead. Each voice track is switched per section like the harmonies.
+  editable in ms. A role (equal, second voice −4 dB, choir −9 dB) sets its level against
+  the lead section by section (against the lead's typical level where the lead is off). A
+  limiter on the sum keeps playback and `Exportar WAV` from clipping. Each voice track is switched per section like the harmonies.
 - Classical instrumental lines: put public-domain MusicXML scores (`.mxl`/`.musicxml`,
   e.g. CC0 [OpenScore String Quartets](https://github.com/OpenScore/StringQuartets)) in
   `references/`, mark sections in the inspector as `Alta` (first violin: intros, endings,

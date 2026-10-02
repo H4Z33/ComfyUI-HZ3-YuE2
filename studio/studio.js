@@ -301,7 +301,10 @@ async function arrange() {
 // A job can finish after another project was opened: it must write into the project that queued it.
 async function updateProject(owner, change) {
   if (project.name === owner) {
+    // Keep what is being typed, then apply the result; saving reads the form back.
+    readForm();
     change(project);
+    writeForm();
     await saveProject();
     return true;
   }

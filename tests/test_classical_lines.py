@@ -85,5 +85,16 @@ class ClassicalLinesTests(unittest.TestCase):
         self.assertIn("quartet, Violin 1, m.1-4", report[0])
 
 
+    def test_reference_melody_becomes_a_theme_in_the_song_key(self):
+        reference = SONG.replace("K:C", "K:G").replace('"C"c8d8e8f8|"F"f32|"G"g32|"C"c32|', '"G"G8A8B8c8|"C"c8B8A8G8|"D"F8G8A8B8|"G"G32|')
+        themes = classical.abc_phrases(reference, "Referencia (CC0)")
+        self.assertEqual([(theme["measure"], theme["tonic"], theme["role"]) for theme in themes], [(5, 7, "theme")])
+        result, report = classical.add_lines(SONG, themes, {"verse": "theme"})
+        verse = [note for note in abc.parse(result).voices["Ins"].notes if note[0] >= 16]
+        # G A B C (degrees 1-4 of G major) arrive as C D E F of C major.
+        self.assertEqual([note[1] % 12 for note in verse[:4]], [0, 2, 4, 5])
+        self.assertIn("Referencia (CC0), melody, m.5-8", report[0])
+
+
 if __name__ == "__main__":
     unittest.main()

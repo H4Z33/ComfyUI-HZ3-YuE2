@@ -23,7 +23,7 @@ import folder_paths
 from comfy.text_encoders.yue2 import FRAMES_PER_SECOND
 
 from .abc_score import parse
-from .classical_lines import add_lines, load_library
+from .classical_lines import abc_phrases, add_lines, load_library
 from .section_generation import _build_section_specs
 from .vocal_harmonizer import _time_warp, _track
 from .vocal_harmony import PARTS, harmonize
@@ -120,6 +120,19 @@ def _arrange(style, instructions, sections, model):
             for entry in plan if isinstance(entry, dict) and entry.get("name") in names}
 
 
+def _reference_themes():
+    """Melody phrases of every analyzed reference recording in the catalog."""
+    folder = Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "studio"
+    themes = []
+    for path in sorted(folder.glob("*.mixmash")):
+        with zipfile.ZipFile(path) as package:
+            project = json.loads(package.read("manifest.json"))["project"]
+        if project.get("kind") == "reference" and project.get("abc", "").strip():
+            license = (project.get("license") or {}).get("name", "?")
+            themes += abc_phrases(project["abc"], f"{path.stem} ({license})")
+    return themes
+
+
 def _warp(path, score_abc, line):
     """ABC-to-audio time warp of one sung line (the lead, or a Vocal Harmony part)."""
     wave, sample_rate = soundfile.read(str(path), dtype="float32", always_2d=True)
@@ -167,6 +180,8 @@ def register(routes):
                 "voices": len(project.get("voices", [])),
                 "sections": len(re.findall(r"^\s*\[[^\]\n]+\]\s*$", str(project.get("lyrics", "")), re.M)),
                 "style": style[:160],
+                "kind": project.get("kind", "song"),
+                "license": project.get("license"),
             })
         return web.json_response({"projects": catalog})
 
@@ -249,9 +264,10 @@ def register(routes):
     @routes.post("/hz3/studio/classical")
     async def classical(request):
         body = await request.json()
-        if not any(REFERENCES.rglob("*.mxl")) and not any(REFERENCES.rglob("*.musicxml")):
-            return web.json_response({"error": f"Put public-domain MusicXML scores (.mxl/.musicxml) in {REFERENCES}."}, status=400)
-        library = await asyncio.to_thread(load_library, REFERENCES)
+        library = await asyncio.to_thread(load_library, REFERENCES) if REFERENCES.is_dir() else []
+        library += await asyncio.to_thread(_reference_themes)
+        if not library:
+            return web.json_response({"error": f"Add analyzed reference recordings or MusicXML scores in {REFERENCES}."}, status=400)
         abc, report = add_lines(body["abc"], library, {name.casefold(): role for name, role in body["plan"].items()})
         return web.json_response({"abc": abc, "report": report})
 

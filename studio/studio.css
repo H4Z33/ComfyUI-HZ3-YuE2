@@ -73,3 +73,5 @@ main { flex: 1; display: flex; min-height: 0; }
 .catalog th, .catalog td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .catalog td.style { color: var(--muted); font-size: 12px; }
 .catalog td button { text-align: left; }
+.catalog .references { display: block; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.catalog .references .row { flex-wrap: wrap; }

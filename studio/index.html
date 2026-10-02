@@ -77,7 +77,7 @@
         <label>Nombre<input id="section-name" maxlength="100"></label>
         <button id="section-split" title="Divide la sección en el compás del cursor">Dividir en el cursor</button>
         <button id="section-merge">Unir con la siguiente</button>
-        <label>Línea clásica<select id="section-classical"><option value="">Ninguna</option><option value="high">Alta (violín 1)</option><option value="low">Baja (viola / chelo)</option></select></label>
+        <label>Línea clásica<select id="section-classical"><option value="">Ninguna</option><option value="high">Alta (violín 1)</option><option value="low">Baja (viola / chelo)</option><option value="theme">Tema (referencias analizadas)</option></select></label>
       </div>
       <label>Letra de la sección<textarea id="section-lyrics" rows="6"></textarea></label>
       <label>Estilo de la sección (vacío = estilo general)<textarea id="section-style" rows="6" placeholder="p. ej. Spanish female soprano, modern Latin pop, bright full band"></textarea></label>
@@ -125,8 +125,19 @@
 </main>
 <dialog id="catalog" class="catalog">
   <header><strong>Catálogo</strong><button id="close-catalog">Cerrar</button></header>
+  <section class="references">
+    <strong>Agregar grabaciones de referencia (nuestro dataset)</strong>
+    <p class="note">Solo grabaciones con licencia libre explícita de la grabación. Se analizan con SheetSage2 (melodía y acordes) y sus melodías quedan disponibles como «Tema» en la línea clásica.</p>
+    <div class="row">
+      <label>Audios<input id="reference-files" type="file" accept="audio/*" multiple></label>
+      <label>Licencia<select id="reference-license"><option value="">—</option><option>CC0</option><option>Dominio público</option><option>CC-BY</option><option>CC-BY-SA</option></select></label>
+      <label>Obra / intérprete<input id="reference-work" placeholder="p. ej. Chaikovski, Lago de los cisnes · Musopen"></label>
+      <label>URL de origen<input id="reference-url" placeholder="https://…"></label>
+      <button id="import-references" class="primary">Importar y analizar</button>
+    </div>
+  </section>
   <table>
-    <thead><tr><th>Canción</th><th>Modificada</th><th>Origen</th><th>Secciones</th><th>Takes</th><th>Voces</th><th>Estilo</th></tr></thead>
+    <thead><tr><th>Canción</th><th>Modificada</th><th>Tipo</th><th>Origen</th><th>Secciones</th><th>Takes</th><th>Voces</th><th>Estilo</th></tr></thead>
     <tbody id="catalog-rows"></tbody>
   </table>
 </dialog>

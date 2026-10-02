@@ -183,6 +183,29 @@ def build_library(paths):
     return library
 
 
+def abc_phrases(score_abc, source, length=16):
+    """Melody windows of a native YuE2 ABC (e.g. SheetSage2's transcription of a reference
+    recording) as "theme" phrases, starting at bar lines of its 2/4, 4/4 or 2/2 bars."""
+    score = parse(score_abc.strip() + "\n")
+    melody = score.voices["Vocal"].notes
+    key = score.voices["Vocal"].keys[0][1]
+    minor = key.endswith("m")
+    result = []
+    bars = score.voices["Vocal"].bars
+    for index, (start, bar_length, _) in enumerate(bars):
+        if bar_length not in (2, 4) or index % 2:
+            continue
+        line = [[float(onset - start), pitch, float(min(duration, start + length - onset))]
+                for onset, pitch, duration in melody if start <= onset < start + length]
+        if (len(line) < 6 or line[0][0] >= bar_length or sum(note[2] for note in line) < length / 2
+                or start + length > score.voices["Vocal"].time):
+            continue
+        result.append({"part": "melody", "measure": index + 1, "last": index + int(length / bar_length),
+                       "notes": line, "minor": minor, "tonic": _pitch_class(key[:-1] if minor else key),
+                       "role": "theme", "source": source})
+    return result
+
+
 def load_library(folder):
     """Phrases of every score under `folder`, kept in folder/phrases.json until a score changes."""
     folder = Path(folder)
@@ -200,8 +223,9 @@ def load_library(folder):
 def add_lines(score_abc, library, plan, register_high=(72, 88), register_low=(48, 62)):
     """Write borrowed phrases into the Ins voice.
 
-    plan: {section name: "high" | "low"}; "high" suits intros, endings and choruses
-    (first violin), "low" a counter-line under the voice (viola / cello).
+    plan: {section name: "high" | "low" | "theme"}; "high" suits intros, endings and choruses
+    (first violin), "low" a counter-line under the voice (viola / cello), "theme" a melody
+    from an analyzed reference recording (see abc_phrases).
     Returns (abc, report lines).
     """
     score = parse(score_abc.strip() + "\n")
@@ -210,7 +234,7 @@ def add_lines(score_abc, library, plan, register_high=(72, 88), register_low=(48
     key = score.voices["Vocal"].keys[0][1]
     minor = key.endswith("m")
     tonic = _pitch_class(key[:-1] if minor else key)
-    candidates = {"high": [], "low": []}
+    candidates = {"high": [], "low": [], "theme": []}
     for phrase in library:
         candidates[phrase["role"]].append(phrase)
     ins = [list(note) for note in score.voices["Ins"].notes]
@@ -224,7 +248,7 @@ def add_lines(score_abc, library, plan, register_high=(72, 88), register_low=(48
         if bar_length != 4:
             report.append(f"{name}: skipped, only 4/4 songs take 4/4 phrases.")
             continue
-        register = register_high if role == "high" else register_low
+        register = register_low if role == "low" else register_high
         ins = [note for note in ins if not start <= note[0] < end]
         cursor = start
         while cursor + 16 <= end:

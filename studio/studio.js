@@ -49,7 +49,7 @@ let pausedAt = 0;
 
 function newProject() {
   return {
-    name: "", source: null, styleInstructions: "", analysis: null,
+    name: "", kind: "song", license: null, source: null, styleInstructions: "", analysis: null,
     style: "", lyrics: "", abc: "", seed: 60, mode: "full",
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
@@ -259,7 +259,7 @@ function trackEnabled(track, section) {
 async function applyClassical() {
   readForm();
   const plan = Object.fromEntries(Object.entries(project.classicalPlan).filter(([name, role]) => role && sections.some((section) => section.name === name)));
-  if (!Object.keys(plan).length) throw new Error("Elige en el inspector qué secciones llevan línea clásica (alta o baja).");
+  if (!Object.keys(plan).length) throw new Error("Elige en el inspector qué secciones llevan línea clásica (alta, baja o tema).");
   status("Buscando frases en las partituras de referencia…");
   const { abc, report } = await postJson("/hz3/studio/classical", { abc: project.abc, plan });
   project.abc = abc;
@@ -1218,6 +1218,40 @@ function drawVoiceInspector() {
   }
 }
 
+// ---------- reference recordings (our own dataset)
+
+async function importReferences(files, license) {
+  const { projects } = await api("/hz3/studio/projects");
+  const taken = new Set(projects.map(({ name }) => name));
+  for (const file of files) {
+    let name = file.name.replace(/\.[^.]+$/, "").replace(/[^\p{L}\p{N} _()-]+/gu, "_").slice(0, 56).trim() || "referencia";
+    for (let count = 2; taken.has(name); count++) name = `${name.replace(/ \(\d+\)$/, "")} (${count})`;
+    taken.add(name);
+    const form = new FormData();
+    form.append("file", file);
+    const source = await api(`/hz3/studio/source?project=${encodeURIComponent(name)}`, { method: "POST", body: form });
+    await postJson("/hz3/studio/project", { ...newProject(), name, kind: "reference", license, source });
+    // Melody and chords only: a reference is a source of themes, not a song to sing.
+    const prompt = {
+      1: { class_type: "LoadAudio", inputs: { audio: source.filename } },
+      2: { class_type: "AudioEncoderLoader", inputs: { audio_encoder_name: "sheetsage2_bf16.safetensors" } },
+      3: { class_type: "HZ3_YuE2_SheetSage2Sections", inputs: { audio_encoder: ["2", 0], audio: ["1", 0], mode: "full" } },
+      13: { class_type: "PreviewAny", inputs: { source: ["3", 0] } },
+      14: { class_type: "PreviewAny", inputs: { source: ["3", 4] } },
+    };
+    await queue(prompt, { 3: `SheetSage2 · ${name}` }, async (outputs) => {
+      const text = (node) => outputs[node]?.text?.[0] ?? "";
+      const reference = await api(`/hz3/studio/project?name=${encodeURIComponent(name)}`);
+      reference.abc = text(13);
+      reference.analysis = { at: Date.now(), sheetsage_abc: text(13), sheetsage_report: text(14) };
+      await postJson("/hz3/studio/project", reference);
+      await listProjects();
+      status(`Referencia «${name}» analizada.`, 1);
+    });
+  }
+  status(`${files.length} referencias en cola para análisis.`, 0);
+}
+
 // ---------- projects (.mixmash packages)
 
 let savedName = null;
@@ -1241,7 +1275,8 @@ async function listProjects() {
   $("catalog-rows").innerHTML = projects.map((entry) => `<tr>
     <td><button data-name="${escape(entry.name)}">${escape(entry.name)}</button></td>
     <td>${new Date(entry.updated * 1000).toLocaleString()}</td>
-    <td>${entry.source ? `Audio: ${escape(entry.source)}` : "Compuesta"}</td>
+    <td>${entry.kind === "reference" ? "Referencia" : "Canción"}</td>
+    <td>${entry.source ? `Audio: ${escape(entry.source)}` : "Compuesta"}${entry.license ? `<br><small>${escape(entry.license.name)}${entry.license.work ? ` · ${escape(entry.license.work)}` : ""}</small>` : ""}</td>
     <td>${entry.sections}</td><td>${entry.takes}</td><td>${entry.voices}</td>
     <td class="style">${escape(entry.style)}</td></tr>`).join("");
   $("catalog-rows").querySelectorAll("button").forEach((button) => {
@@ -1290,6 +1325,13 @@ async function init() {
   $("save-project").onclick = guard(saveProject);
   $("open-catalog").onclick = guard(async () => { await listProjects(); $("catalog").showModal(); });
   $("close-catalog").onclick = () => $("catalog").close();
+  $("import-references").onclick = guard(async () => {
+    const files = [...$("reference-files").files];
+    if (!files.length) throw new Error("Elige uno o más audios de referencia.");
+    if (!$("reference-license").value) throw new Error("Indica la licencia de las grabaciones.");
+    await importReferences(files, { name: $("reference-license").value, work: $("reference-work").value.trim(), url: $("reference-url").value.trim() });
+    $("reference-files").value = "";
+  });
   $("toggle-song").onclick = () => document.querySelector(".song").classList.toggle("hidden");
   $("source-audio").onchange = guard(async (event) => {
     const [file] = event.target.files;

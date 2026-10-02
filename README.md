@@ -67,6 +67,10 @@ for a song editor on top of these nodes.
   YuE2's ABC has a single instrumental line, so this shapes melodic material; the rest of
   the accompaniment still follows the chords and style. `references/phrases.json` caches
   the phrases until a score changes.
+- Our own dataset: `Catálogo` → *Agregar grabaciones de referencia* imports several audio
+  files at once with their recording license (CC0, public domain, CC-BY, CC-BY-SA), work
+  and source URL, and analyzes each with SheetSage2. Their melodies become `Tema` phrases
+  for the classical line, with the reference and license in the report.
 - `Exportar WAV` renders the current timeline.
 
 `Catálogo` lists every project (date, source audio or composed, sections, takes, voices,

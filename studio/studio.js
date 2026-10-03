@@ -652,6 +652,8 @@ async function runAction(action) {
     case "get_abc":
       return action.section ? sectionNamed(action.section).abc : project.abc;
     case "set_abc":
+      // The section parser rejects a broken score before it replaces the current one.
+      await postJson("/hz3/studio/sections", { abc: String(action.abc ?? ""), lyrics: project.lyrics });
       setAbc(String(action.abc ?? ""), "antes de que el asistente editara el ABC");
       await refreshSections();
       return `ABC reemplazado · ${sections.length} secciones`;

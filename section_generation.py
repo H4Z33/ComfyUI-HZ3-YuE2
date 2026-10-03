@@ -100,16 +100,41 @@ def _split_lyrics_by_sections(lyrics: str) -> list[dict]:
     return sections
 
 
+def _align_lyrics(abc_sections, lyric_sections) -> list[int | None]:
+    """The lyric block each ABC section sings, or None.
+
+    YuE2 reads the whole lyrics and score, so they need not correspond one to one: blocks are paired in order with
+    ABC sections of the same kind (longest common subsequence), an ABC section left over (a solo, an interlude) has
+    no lyrics of its own, and a block left over still reaches the model through the full lyrics.
+    """
+    def same(abc_name, lyric_name):
+        (abc_family, abc_ordinal), (lyric_family, lyric_ordinal) = _normalized_section_name(abc_name), _normalized_section_name(lyric_name)
+        return abc_family == lyric_family and (abc_ordinal is None or lyric_ordinal is None or abc_ordinal == lyric_ordinal)
+
+    rows, columns = len(abc_sections), len(lyric_sections)
+    best = [[0] * (columns + 1) for _ in range(rows + 1)]
+    for row in range(rows - 1, -1, -1):
+        for column in range(columns - 1, -1, -1):
+            matched = best[row + 1][column + 1] + 1 if same(abc_sections[row][0], lyric_sections[column]["name"]) else 0
+            best[row][column] = max(matched, best[row + 1][column], best[row][column + 1])
+    pairs, row, column = [None] * rows, 0, 0
+    while row < rows and column < columns:
+        if same(abc_sections[row][0], lyric_sections[column]["name"]) and best[row][column] == best[row + 1][column + 1] + 1:
+            pairs[row] = column
+            row, column = row + 1, column + 1
+        elif best[row + 1][column] >= best[row][column + 1]:
+            row += 1
+        else:
+            column += 1
+    return pairs
+
+
 def _build_section_specs(score_abc: str, lyrics: str) -> list[dict]:
     abc_sections = split_abc_by_sections(score_abc)
     lyric_sections = _split_lyrics_by_sections(lyrics)
     if not abc_sections:
         raise ValueError("No ABC sections were found. Add one '% section name' marker per section.")
-    if len(abc_sections) != len(lyric_sections):
-        raise ValueError(
-            f"ABC has {len(abc_sections)} section(s), but lyrics have "
-            f"{len(lyric_sections)} [Section] block(s). They must match one-to-one."
-        )
+    pairs = _align_lyrics(abc_sections, lyric_sections)
 
     # Validate and time the complete score before splitting it for YuE2. A
     # tied note may legitimately continue across a section marker; parsing each
@@ -123,21 +148,8 @@ def _build_section_specs(score_abc: str, lyrics: str) -> list[dict]:
 
     specs = []
     bar_cursor = 0
-    for index, ((abc_name, raw_fragment), lyric_section) in enumerate(
-        zip(abc_sections, lyric_sections), 1
-    ):
-        abc_family, abc_ordinal = _normalized_section_name(abc_name)
-        lyric_family, lyric_ordinal = _normalized_section_name(lyric_section["name"])
-        if abc_family != lyric_family or (
-            abc_ordinal is not None
-            and lyric_ordinal is not None
-            and abc_ordinal != lyric_ordinal
-        ):
-            raise ValueError(
-                f"Section {index} does not match: ABC says {abc_name!r}, "
-                f"lyrics say {lyric_section['name']!r}. Keep the section names and order aligned."
-            )
-
+    for index, ((abc_name, raw_fragment), lyric_index) in enumerate(zip(abc_sections, pairs), 1):
+        lyric_section = lyric_sections[lyric_index] if lyric_index is not None else {"name": "", "lyrics": ""}
         section_abc = raw_fragment
         score_section = score_sections[index - 1]
         bars = len(score_section["vocal"])
@@ -158,6 +170,7 @@ def _build_section_specs(score_abc: str, lyrics: str) -> list[dict]:
                 "name": abc_name,
                 "lyrics_name": lyric_section["name"],
                 "lyrics": lyric_section["lyrics"],
+                "lyrics_index": lyric_index,
                 "abc": section_abc,
                 "bars": bars,
                 "seconds": seconds,

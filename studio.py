@@ -219,7 +219,7 @@ def register(routes):
         timeline = []
         frame = 0
         for spec in specs:
-            timeline.append({"name": spec["name"], "lyrics": spec["lyrics"], "abc": spec["abc"], "bars": spec["bars"],
+            timeline.append({"name": spec["name"], "lyrics": spec["lyrics"], "lyrics_index": spec["lyrics_index"], "abc": spec["abc"], "bars": spec["bars"],
                              "start": frame / FRAMES_PER_SECOND, "end": (frame + spec["frames"]) / FRAMES_PER_SECOND})
             frame += spec["frames"]
         return web.json_response({"sections": timeline})

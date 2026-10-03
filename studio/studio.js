@@ -280,17 +280,28 @@ function lyricBlocks(text) {
   let match;
   while ((match = pattern.exec(text))) {
     if (blocks.length) blocks[blocks.length - 1].end = match.index;
-    blocks.push({ bodyStart: match.index + match[0].length, end: text.length });
+    blocks.push({ name: match[1].trim(), start: match.index, bodyStart: match.index + match[0].length, end: text.length });
   }
   return blocks;
 }
 
+// Sections and lyric blocks are paired by the server (lyrics_index); an ABC section without lyrics
+// gets a block of its own, written before the block of the next section that has one.
 function setSectionLyrics(index, body) {
   const blocks = lyricBlocks(project.lyrics);
-  if (blocks.length !== sections.length) throw new Error("La letra no tiene un encabezado [Sección] por cada sección del ABC.");
-  const block = blocks[index];
-  const tail = index === blocks.length - 1 ? "\n" : "\n\n";
-  project.lyrics = project.lyrics.slice(0, block.bodyStart) + "\n" + body.trim() + tail + project.lyrics.slice(block.end);
+  const section = sections[index];
+  if (section.lyrics_index === null) {
+    if (!body.trim()) return;
+    const next = sections.slice(index + 1).find((item) => item.lyrics_index !== null);
+    const at = next ? blocks[next.lyrics_index].start : project.lyrics.length;
+    const before = project.lyrics.slice(0, at).replace(/\s*$/, at ? "\n\n" : "");
+    const name = section.name.replace(/^./, (letter) => letter.toUpperCase());
+    project.lyrics = `${before}[${name}]\n${body.trim()}\n${next ? "\n" : ""}${project.lyrics.slice(at)}`;
+  } else {
+    const block = blocks[section.lyrics_index];
+    const tail = section.lyrics_index === blocks.length - 1 ? "\n" : "\n\n";
+    project.lyrics = project.lyrics.slice(0, block.bodyStart) + "\n" + body.trim() + tail + project.lyrics.slice(block.end);
+  }
   $("lyrics").value = project.lyrics;
 }
 
@@ -390,12 +401,11 @@ async function setSectionSinger(name, id) {
   readForm();
   const singer = catalogStyle(id);
   let lyrics = project.lyrics;
-  const blocks = [...lyrics.matchAll(/^[ \t]*\[([^\]\n]+)\][ \t]*$/gm)];
-  if (blocks.length === sections.length) {
-    const header = blocks[index];
-    const base = header[1].split(/\s+[–—-]\s+|\s*[:|(]/)[0].trim();
+  const block = sections[index].lyrics_index === null ? null : lyricBlocks(lyrics)[sections[index].lyrics_index];
+  if (block) {
+    const base = block.name.split(/\s+[–—-]\s+|\s*[:|(]/)[0].trim();
     const tag = singer ? `[${base} – ${singerCue(singer)}]` : `[${base}]`;
-    lyrics = lyrics.slice(0, header.index) + tag + lyrics.slice(header.index + header[0].length);
+    lyrics = lyrics.slice(0, block.start) + tag + lyrics.slice(block.bodyStart);
   }
   const notes = singer && score ? (() => {
     const from = score.bars[score.sections[index].start_bar].start;
@@ -1426,11 +1436,39 @@ function draw() {
   }
   ruler.body.onclick = (event) => seek(event.offsetX / pxPerSecond);
   if (sections.length) drawSections();
+  if (sections.length) drawLyrics();
   if (score) drawScore();
   for (const track of allTracks()) drawTrack(track);
   updatePlayhead();
   drawInspector();
   drawVoiceInspector();
+}
+
+// Each section's lyrics, editable in place, so words can be moved to the ABC section that should sing them.
+function drawLyrics() {
+  const used = new Set(sections.map((section) => section.lyrics_index));
+  const orphans = lyricBlocks(project.lyrics).filter((_, index) => !used.has(index)).map((block) => block.name);
+  const head = document.createElement("span");
+  head.className = "name";
+  head.textContent = orphans.length ? `Letra · ${orphans.length} sin sección` : "Letra";
+  head.title = orphans.length
+    ? `Bloques de la letra sin sección del ABC (YuE2 los recibe igual, en la letra completa): ${orphans.join(", ")}`
+    : "Letra de cada sección: edítala aquí para acomodarla con las secciones del ABC";
+  const { body } = lane("lyrics", head);
+  sections.forEach((section, index) => {
+    const area = document.createElement("textarea");
+    area.className = `lyric-block${section.lyrics_index === null ? " empty" : ""}`;
+    area.style.left = `${section.start * pxPerSecond}px`;
+    area.style.width = `${(section.end - section.start) * pxPerSecond}px`;
+    area.value = section.lyrics;
+    area.placeholder = "sin letra";
+    area.title = `${section.name}: ${section.lyrics_index === null ? "sin bloque en la letra (escribe aquí para crearlo)" : "letra de esta sección"}`;
+    area.onchange = guard(async () => {
+      setSectionLyrics(index, area.value);
+      await refreshSections();
+    });
+    body.append(area);
+  });
 }
 
 function drawSections() {
@@ -1531,7 +1569,9 @@ function drawScore() {
 
 function drawTrack(track) {
   const head = document.createElement("div");
-  head.innerHTML = `<span class="name">${track.name}</span><span class="controls">
+  const singer = track.voice && catalogStyle(track.voice.singer);
+  const who = track.voice ? (singer ? `${singer.name} · ${singerCue(singer)}` : track.voice.style.split("\n").filter((line) => line.trim()).at(-1) ?? "") : "";
+  head.innerHTML = `<span class="name">${escapeHtml(track.name)}</span>${who ? `<span class="who" title="${escapeHtml(who)}">${escapeHtml(who)}</span>` : ""}<span class="controls">
     <button data-action="mute" class="${muted(track) ? "active" : ""}" title="Silenciar">M</button>
     <button data-action="solo" class="${project.mixer[track.id]?.solo ? "active" : ""}" title="Solo">S</button>
     <input type="range" min="0" max="1.5" step="0.01" value="${project.mixer[track.id]?.gain ?? track.gain}" title="Volumen"></span>`;
@@ -2407,7 +2447,13 @@ async function init() {
   $("apply-classical").onclick = guard(applyClassical);
   $("section-classical").addEventListener("change", (event) => { project.classicalPlan[selected] = event.target.value; });
   $("section-singer").addEventListener("change", guard(async (event) => { await setSectionSinger(selected, event.target.value || null); draw(); }));
-  $("voice-singer").addEventListener("change", (event) => { selectedVoiceEntry().singer = event.target.value || null; draw(); });
+  $("voice-singer").addEventListener("change", (event) => {
+    const voice = selectedVoiceEntry();
+    voice.singer = event.target.value || null;
+    // A voice still under its default name takes its singer's name.
+    if (voice.singer && /^Voz \d+$/.test(voice.name)) voice.name = catalogStyle(voice.singer).name.slice(0, 40);
+    draw();
+  });
   $("add-voice").onclick = addVoice;
   for (const [id, key] of [["voice-name", "name"], ["voice-source", "source"], ["voice-octave", "octave"], ["voice-role", "role"], ["voice-style", "style"], ["voice-seed", "seed"]]) {
     $(id).addEventListener("change", (event) => {

@@ -42,10 +42,13 @@ from .token_stream import _prepare_model
 
 SEAM_CANDIDATES = 4
 PENALTY_WINDOW = 50
+SECTION_CUE = re.compile(r"\s+[–—-]\s+|\s*[:|(]")
 
 
 def _normalized_section_name(value: str) -> tuple[str, int | None]:
-    normalized = unicodedata.normalize("NFKD", value or "")
+    # A lyric tag may say who sings after the name, as YuE2's own duets do: "Verse 1 – Him", "Chorus: Both".
+    value = SECTION_CUE.split(value or "", maxsplit=1)[0]
+    normalized = unicodedata.normalize("NFKD", value)
     normalized = normalized.encode("ascii", "ignore").decode("ascii").lower()
     words = re.findall(r"[a-z]+|\d+", normalized)
     aliases = {

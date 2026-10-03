@@ -252,7 +252,8 @@ async function uniqueSectionNames() {
   // Sections are keyed by name (takes, seeds, harmonies); YuE2 may repeat "% chorus".
   if (!score || new Set(sections.map((section) => section.name)).size === sections.length) return;
   const edited = editableSections();
-  const headers = [...project.lyrics.matchAll(/^[ \t]*\[([^\]\n]+)\][ \t]*$/gm)].map((match) => match[1].trim());
+  // A tag may say who sings after the name ("Verse 1 – Him"); the section is named without it.
+  const headers = [...project.lyrics.matchAll(/^[ \t]*\[([^\]\n]+)\][ \t]*$/gm)].map((match) => match[1].split(/\s+[–—-]\s+|\s*[:|(]/)[0].trim());
   if (headers.length === edited.length && new Set(headers.map((name) => name.toLowerCase())).size === headers.length) {
     edited.forEach((section, index) => { section.name = headers[index]; });
     await applySections(edited);

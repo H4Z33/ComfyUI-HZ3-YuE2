@@ -62,7 +62,9 @@ const ASSISTANT_TOOLS = [
     seed: num("composition seed; a new one gives a different melody"), temperature: num("default 0.7; higher = further from the usual"),
     keep_key_meter_tempo: { type: "boolean", description: "keep the key, meter and tempo of the current ABC" },
   }),
-  tool("compose_abc", "Queue YuE2 to compose a new ABC from the style and lyrics with the compose settings (the current ABC is kept in the ABC versions)."),
+  tool("compose_abc", "Queue YuE2 to compose a new ABC from the style and lyrics with the compose settings (the current ABC is kept in the ABC versions).", {
+    from_section: str("keep the score before this section and compose this section and everything after it; omit to compose the whole score"),
+  }),
   tool("set_base_style", "Set the song's base style to a catalog group or genre (null for none).", { style: str("catalog style name") }),
   tool("set_singer", "Choose who sings: a catalog singer for the lead or an extra voice, in one section or all.", {
     track: str("'lead' or an extra voice name"), section: str("section name, omit for every section"), style: str("catalog singer name, omit for none"),
@@ -659,9 +661,11 @@ async function runAction(action) {
       if (typeof action.keep_key_meter_tempo === "boolean") project.compose.keep = action.keep_key_meter_tempo;
       writeForm();
       return `Composición: semilla ${project.compose.seed}, temperatura ${project.compose.temperature}, ${project.compose.keep ? "conserva" : "no conserva"} tonalidad, compás y tempo`;
-    case "compose_abc":
-      await compose();
-      return `Composición del ABC en cola (semilla ${project.compose.seed}, temperatura ${project.compose.temperature})`;
+    case "compose_abc": {
+      const from = action.from_section ? sectionNamed(action.from_section).name : null;
+      await compose(from);
+      return `Composición del ABC${from ? ` desde «${from}»` : ""} en cola (semilla ${project.compose.seed}, temperatura ${project.compose.temperature})`;
+    }
     case "analyze_audio":
       await analyze();
       return "Análisis del audio en cola";
@@ -822,7 +826,7 @@ async function finishJob(promptId) {
 }
 
 function setBusy(busy) {
-  for (const id of ["render-song", "render-section", "analyze", "compose", "voice-render"]) $(id).disabled = busy;
+  for (const id of ["render-song", "render-section", "analyze", "compose", "section-recompose", "voice-render"]) $(id).disabled = busy;
 }
 
 function connectSocket() {
@@ -927,25 +931,30 @@ function setAbc(abc, label) {
   writeForm();
 }
 
-// Key, meter and tempo of a score in the "BPM: …, Meter: …, Key: …" style YuE2 reads.
-function abcHeader(abc) {
-  const field = (name) => abc.match(new RegExp(`^${name}:[ \\t]*(.+)$`, "m"))?.[1].trim();
-  const bpm = field("Q")?.match(/(\d+)\s*$/)?.[1];
-  return [bpm && `BPM: ${bpm}`, field("M") && `Meter: ${field("M")}`, field("K") && `Key: ${field("K")}`].filter(Boolean).join(", ");
+// The written beginning YuE2 continues: the current header (key, meter, tempo), or the whole score
+// before a section's "% name" marker plus the marker itself.
+function abcStart(fromSection) {
+  const lines = project.abc.split("\n");
+  if (fromSection) {
+    const marker = lines.findIndex((line) => line.trim().startsWith("% ") && line.trim().slice(2).trim() === fromSection);
+    if (marker < 0) throw new Error(`El ABC no tiene la marca «% ${fromSection}».`);
+    return lines.slice(0, marker + 1).join("\n") + "\n";
+  }
+  const key = lines.findIndex((line) => line.startsWith("K:"));
+  return project.compose.keep && key >= 0 ? lines.slice(0, key + 1).join("\n") + "\n" : "";
 }
 
-async function compose() {
+async function compose(fromSection = null) {
   readForm();
   if (!project.style.trim() || !project.lyrics.trim()) throw new Error("Escribe estilo y letra con encabezados [Sección] antes de generar el ABC.");
-  const { seed, temperature, keep } = project.compose;
+  const { seed, temperature } = project.compose;
   const prompt = {
     1: { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: project.ckpt } },
     2: {
-      class_type: "YuE2GenerateABC",
+      class_type: "HZ3_YuE2_ContinueABC",
       inputs: {
-        clip: ["1", 1], style: [keep ? abcHeader(project.abc) : "", globalStyle()].filter(Boolean).join("\n"),
-        lyrics: project.lyrics, seed, mode: project.mode,
-        max_abc_tokens: 8192, temperature, top_p: 0.9, top_k: 30, repetition_penalty: 1.005, penalty_window: 100,
+        clip: ["1", 1], style: globalStyle(), lyrics: project.lyrics, abc_start: abcStart(fromSection), seed, mode: project.mode,
+        max_abc_tokens: 8192, temperature, top_p: 0.9, top_k: 30, repetition_penalty: 1.005,
       },
     },
     3: { class_type: "PreviewAny", inputs: { source: ["2", 0] } },
@@ -955,7 +964,7 @@ async function compose() {
     const abc = outputs[3]?.text?.[0] ?? "";
     if (!abc.trim()) throw new Error("YuE2 no devolvió ABC.");
     const replaced = (target) => {
-      keepAbcVersion(target, `antes de componer con semilla ${seed}`);
+      keepAbcVersion(target, fromSection ? `antes de recomponer desde «${fromSection}»` : `antes de componer con semilla ${seed}`);
       target.abc = abc;
     };
     if (!await updateProject(owner, replaced)) return;
@@ -963,7 +972,7 @@ async function compose() {
     await refreshSections().catch((error) => status(`ABC generado; revisa las secciones: ${error.message}`, null, true));
     await uniqueSectionNames();
     await saveProject();
-    remember("YuE2 compuso un ABC nuevo");
+    remember(fromSection ? `YuE2 recompuso el ABC desde «${fromSection}»` : "YuE2 compuso un ABC nuevo");
     status("ABC generado: revisa las secciones en la partitura.", 1);
   });
   status("Composición en cola…", 0);
@@ -2143,7 +2152,8 @@ async function init() {
     if (file) await uploadSource(file);
   });
   $("analyze").onclick = guard(analyze);
-  $("compose").onclick = guard(compose);
+  $("compose").onclick = guard(() => compose());
+  $("section-recompose").onclick = guard(() => compose(selected));
   $("compose-dice").onclick = () => { $("compose-seed").value = Math.floor(Math.random() * 2 ** 31); readForm(); };
   $("abc-versions").onchange = guard(async (event) => {
     if (event.target.value === "") return;

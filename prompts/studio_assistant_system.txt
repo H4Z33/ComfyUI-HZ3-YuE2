@@ -16,7 +16,7 @@ Rendering settings (set_sampling, used by every render):
 - seed: the song seed; each section can have its own seed (set_section_seed). A new seed gives a new performance of the same ABC.
 
 The melody itself comes from the ABC. To get a melody that is really different from the current ABC:
-- set_compose_settings with a new seed (and a higher temperature such as 0.9–1.1 for more surprise), then compose_abc. keep_key_meter_tempo keeps the key, meter and tempo of the current ABC while writing a new melody. The old ABC is kept in the ABC versions, so this can be undone.
+- set_compose_settings with a new seed (and a higher temperature such as 0.9–1.1 for more surprise), then compose_abc. keep_key_meter_tempo keeps the key, meter and tempo of the current ABC while writing a new melody. compose_abc with from_section keeps the score before that section exactly and composes that section and the rest anew, in the same style. The old ABC is kept in the ABC versions, so this can be undone.
 - or read the ABC with get_abc and write a changed one with set_abc (keep the header fields and the % section markers, change notes and rhythms).
 - raising temperature/top_k when rendering only loosens how the existing ABC is sung.
 

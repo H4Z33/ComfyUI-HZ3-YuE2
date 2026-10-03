@@ -555,10 +555,54 @@ class HZ3_YuE2_GenerateMusicSections:
         }
 
 
+class HZ3_YuE2_ContinueABC:
+    CATEGORY = "HZ3 YuE2/Generation"
+    FUNCTION = "compose"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("abc",)
+    DESCRIPTION = (
+        "Compose an ABC from style and lyrics like YuE2 Generate ABC, but starting from a written "
+        "beginning: a header fixes key, meter and tempo, earlier sections are kept and YuE2 composes the rest."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "clip": ("CLIP",),
+                "style": ("STRING", {"multiline": True, "default": ""}),
+                "lyrics": ("STRING", {"multiline": True, "default": ""}),
+                "abc_start": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": "Beginning of the ABC that YuE2 continues: its header lines, or the score up to a '% section' marker.",
+                }),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "control_after_generate": True}),
+                "mode": (["full", "melody"], {"default": "full"}),
+                "max_abc_tokens": ("INT", {"default": 8192, "min": 1, "max": 20000}),
+                "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 5.0, "step": 0.05}),
+                "top_p": ("FLOAT", {"default": 0.9, "min": 0.01, "max": 1.0, "step": 0.01}),
+                "top_k": ("INT", {"default": 30, "min": 1, "max": 32768}),
+                "repetition_penalty": ("FLOAT", {"default": 1.005, "min": 0.01, "max": 10.0, "step": 0.005}),
+            }
+        }
+
+    def compose(self, clip, style, lyrics, abc_start, seed, mode, max_abc_tokens, temperature, top_p, top_k, repetition_penalty):
+        start = abc_start if not abc_start or abc_start.endswith("\n") else abc_start + "\n"
+        tokens = clip.tokenize(style, lyrics=lyrics, abc=start, cot=mode, seed=seed, max_tokens=max_abc_tokens)
+        # The written beginning becomes part of the prompt, so sampling continues right after it.
+        tokens["prefix"] = tokens["prefix"] + tokens["abc_ids"]
+        ids = clip.generate(tokens, max_length=max_abc_tokens, temperature=temperature, top_p=top_p, top_k=top_k,
+                            repetition_penalty=repetition_penalty, seed=seed)
+        return (start + clip.decode(ids),)
+
+
 NODE_CLASS_MAPPINGS = {
     "HZ3_YuE2_GenerateMusicSections": HZ3_YuE2_GenerateMusicSections,
+    "HZ3_YuE2_ContinueABC": HZ3_YuE2_ContinueABC,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "HZ3_YuE2_GenerateMusicSections": "HZ3 YuE2 · Generate Music Sections",
+    "HZ3_YuE2_ContinueABC": "HZ3 YuE2 · Continue ABC",
 }

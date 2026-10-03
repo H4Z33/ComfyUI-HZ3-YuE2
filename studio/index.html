@@ -47,7 +47,7 @@
       <button id="compose-dice" title="Semilla nueva: «Generar ABC» saldrá con otra melodía">🎲</button>
       <label>Temperatura<input id="compose-temperature" type="number" step="0.05" min="0" title="Más alta = melodías menos previsibles (0.7 por defecto)"></label>
     </div>
-    <label class="switch" title="Pasa a YuE2 la tonalidad, el compás y el tempo del ABC actual; la melodía es nueva"><input id="compose-keep" type="checkbox"> Conservar tonalidad, compás y tempo del ABC actual</label>
+    <label class="switch" title="YuE2 compone a partir del encabezado del ABC actual (K:, M:, Q:): misma tonalidad, compás y tempo, melodía nueva"><input id="compose-keep" type="checkbox"> Conservar tonalidad, compás y tempo del ABC actual</label>
     <label>Versiones anteriores del ABC (elige una para restaurarla)<select id="abc-versions"></select></label>
     <div class="row">
       <label>Semilla<input id="seed" type="number" min="0" value="60"></label>
@@ -101,7 +101,10 @@
         <button id="section-dice" title="Semilla nueva">🎲</button>
       </div>
       <div id="section-takes" class="takes"></div>
-      <button id="render-section" class="primary">Regenerar sección</button>
+      <div class="row">
+        <button id="section-recompose" title="Conserva el ABC anterior a esta sección y YuE2 compone esta sección y todo lo que sigue (semilla y temperatura de «Componer ABC»)">Recomponer el ABC desde aquí</button>
+        <button id="render-section" class="primary">Regenerar sección</button>
+      </div>
     </div>
     <div id="voice-inspector" class="inspector hidden">
       <h3 id="voice-title"></h3>

@@ -2,6 +2,7 @@
 
 import importlib
 from pathlib import Path
+import re
 import sys
 import tempfile
 import types
@@ -91,6 +92,20 @@ class ClassicalLinesTests(unittest.TestCase):
         self.assertEqual((len(piece["measures"]), piece["measures"][0][1:3]), (4, (4, 1)))
         self.assertEqual(classical.slow_passages(piece), [(0, 4)])
         self.assertEqual([phrase["part"] for phrase in classical.phrases(piece, "bass")], ["bass"])
+
+    def test_waltz_takes_three_four_phrases(self):
+        waltz = musicxml().replace("<beats>4</beats>", "<beats>3</beats>").replace(
+            VIOLIN, VIOLIN[:VIOLIN.rindex("<note>")]).replace(CELLO, CELLO.replace("<duration>2</duration>", "<duration>1</duration>", 1))
+        self.reference.write_text(waltz, encoding="utf-8")
+        library = classical.build_library([self.reference])
+        self.assertTrue(library and all(phrase["triple"] for phrase in library))
+        song = re.sub(r"([a-gz])32", r"\g<1>24", SONG.replace("M:4/4", "M:3/4").replace('"C"c8d8e8f8', '"C"c8d8e8'))
+        result, report = classical.add_lines(song, library, {"intro": "high"})
+        ins = abc.parse(result).voices["Ins"].notes
+        self.assertTrue(ins and all(note[0] < 12 for note in ins))
+        self.assertIn("intro bars at 1", report[0])
+        # A 4/4 song finds no 3/4 phrase.
+        self.assertIn("no unused high phrase", classical.add_lines(SONG, library, {"intro": "high"})[1][0])
 
     def test_writes_a_transposed_line_only_into_the_planned_section(self):
         result, report = classical.add_lines(SONG, classical.build_library([self.reference]), {"intro": "high"})

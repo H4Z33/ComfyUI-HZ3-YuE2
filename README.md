@@ -65,7 +65,7 @@ for a song editor on top of these nodes.
   [Mutopia](https://www.mutopiaproject.org) chorales and guitar studies) in
   `references/`, mark sections in the inspector as `Alta` (first violin: intros, endings,
   choruses) or `Baja` (viola/cello counter-line), and `Aplicar líneas clásicas`. Phrases
-  from slow duple-meter passages (the whole piece when it has no tempo words; a one-track MIDI
+  from slow passages in 2/4, 4/4 or 3/4, matching the song's meter (the whole piece when it has no tempo words; a one-track MIDI
   splits into its upper and bass lines) are moved to the song's key by scale degree, their beats
   1 and 3 fitted to the song's chords, and written into the ABC `Ins` line; the vocal line
   and chords are untouched and the project keeps which bars of which work were used.

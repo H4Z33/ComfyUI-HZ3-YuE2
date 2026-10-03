@@ -190,19 +190,20 @@ def _chord_of(notes, start, end):
     return root, quality
 
 
-def phrases(piece, part, length=16):
-    """Windows of `length` quarters of `part` in slow duple-meter passages (2/4, 4/4, 2/2 bars summing
-    exactly to the window): dicts with notes relative to the window, tonic and mode."""
+def phrases(piece, part, length=16, bars=(2, 4)):
+    """Windows of `length` quarters of `part` in slow passages whose bars (in quarters) are all in `bars`:
+    duple 2/4, 4/4, 2/2 by default, (3,) with length 12 for 3/4. Dicts with notes relative to the window,
+    tonic and mode."""
     measures = piece["measures"]
     every = [note for line in piece["parts"].values() for note in line]
     result = []
     for first, end in slow_passages(piece):
         for index in range(first, end):
             start, last = measures[index][0], index
-            while last < end and measures[last][0] + measures[last][1] - start < length and measures[last][1] in (2, 4):
+            while last < end and measures[last][0] + measures[last][1] - start < length and measures[last][1] in bars:
                 last += 1
             stop = measures[last][0] + measures[last][1] if last < end else None
-            if stop is None or stop - start != length or measures[last][1] not in (2, 4) or (index - first) % 2:
+            if stop is None or stop - start != length or measures[last][1] not in bars or (index - first) % 2:
                 continue
             line = [[onset - start, midi, min(duration, stop - onset)] for onset, midi, duration in piece["parts"][part] if start <= onset < stop]
             if len(line) < 6 or sum(note[2] for note in line) < length * 3 / 4:
@@ -213,7 +214,7 @@ def phrases(piece, part, length=16):
             last_chord = _chord_of(every, stop - 4, stop)
             minor = (major_tonic + 9) % 12 in (first_chord[0], last_chord[0]) and "m" in (first_chord[1], last_chord[1])
             result.append({"part": part, "measure": index + 1, "last": last + 1, "notes": line, "minor": minor,
-                           "tonic": (major_tonic + 9) % 12 if minor else major_tonic})
+                           "tonic": (major_tonic + 9) % 12 if minor else major_tonic, "triple": bars == (3,)})
     return result
 
 
@@ -240,7 +241,7 @@ def fit_line(phrase, tonic, minor, chords, register):
     for onset, pitch, duration in moved:
         pitch += shift
         tones = chords[min(int(onset), len(chords) - 1)]
-        if onset % 2 == 0 and pitch % 12 not in tones:  # beats 1 and 3; passing tones stay elsewhere
+        if onset % (3 if phrase.get("triple") else 2) == 0 and pitch % 12 not in tones:  # beats 1 and 3 (1 in 3/4); passing tones stay elsewhere
             clashes += 1
             pitch = min((candidate for candidate in range(pitch - 2, pitch + 3) if candidate % 12 in tones), key=lambda candidate: abs(candidate - pitch))
         fitted.append([onset, pitch, duration])
@@ -269,7 +270,7 @@ def build_library(paths):
         names = list(piece["parts"])
         for role, wanted in (("high", names[:1]), ("low", names[1:])):
             for part in wanted:
-                for phrase in phrases(piece, part):
+                for phrase in phrases(piece, part) + phrases(piece, part, 12, (3,)):
                     phrase["notes"] = [[float(onset), pitch, float(duration)] for onset, pitch, duration in phrase["notes"]]
                     library.append({**phrase, "role": role, "source": Path(path).stem})
     return library
@@ -341,17 +342,22 @@ def add_lines(score_abc, library, plan, register_high=(72, 88), register_low=(48
         role, _, wanted = role.partition(":")
         end = section_starts[index + 1] if index + 1 < len(sections) else score.voices["Vocal"].time
         bar_length = Fraction(score.voices["Vocal"].meter[0] * 4, score.voices["Vocal"].meter[1])
-        if bar_length != 4:
-            report.append(f"{name}: skipped, only 4/4 songs take 4/4 phrases.")
+        # 4-bar windows: duple phrases for 2/4, 4/4 and 2/2 songs, 3/4 phrases for waltzes.
+        if bar_length not in (2, 3, 4):
+            report.append(f"{name}: skipped, its {bar_length}-quarter bars take no 2/4, 3/4 or 4/4 phrases.")
             continue
+        triple = bar_length == 3
+        window = 12 if triple else 16
         register = register_low if role == "low" else register_high
         ins = [note for note in ins if not start <= note[0] < end]
         cursor = start
-        while cursor + 16 <= end:
-            chords = _beat_chords(score, cursor, 16, tonic, minor)
+        while cursor + window <= end:
+            chords = _beat_chords(score, cursor, window, tonic, minor)
             sources = {source for source, _ in used}
             best = None
             for phrase in candidates[role]:
+                if phrase.get("triple", False) != triple:
+                    continue
                 if wanted and wanted.casefold() not in phrase["source"].casefold():
                     continue
                 if any((phrase["source"], measure) in used for measure in range(phrase["measure"], phrase["last"] + 1)):
@@ -361,7 +367,7 @@ def add_lines(score_abc, library, plan, register_high=(72, 88), register_low=(48
                 if max(pitches) - min(pitches) > 17 or min(pitches) < register[0] - 5 or max(pitches) > register[1] + 5:
                     continue
                 # Singable lines over figuration: few notes per beat, mostly steps, and new pieces first.
-                density = max(0, len(fitted) / 16 - 2)
+                density = max(0, len(fitted) / window - 2)
                 leaps = sum(abs(b[1] - a[1]) > 5 for a, b in zip(fitted, fitted[1:])) / len(fitted)
                 cost = 2 * clashes + 3 * density + 4 * leaps + 2 * (phrase["source"] in sources)
                 if role == "theme":
@@ -375,11 +381,11 @@ def add_lines(score_abc, library, plan, register_high=(72, 88), register_low=(48
             used.update((phrase["source"], measure) for measure in range(phrase["measure"], phrase["last"] + 1))
             for onset, pitch, duration in fitted:
                 onset, duration = _quantize(onset), _quantize(duration)
-                if duration > 0 and onset < 16:
-                    ins.append([cursor + onset, pitch, min(duration, 16 - onset)])
-            report.append(f"{name} bars at {float(cursor) / 4 + 1:.0f}: {phrase['source']}, {phrase['part']}, "
+                if duration > 0 and onset < window:
+                    ins.append([cursor + onset, pitch, min(duration, window - onset)])
+            report.append(f"{name} bars at {float(cursor / bar_length) + 1:.0f}: {phrase['source']}, {phrase['part']}, "
                           f"m.{phrase['measure']}-{phrase['last']} ({clashes} strong-beat notes adjusted)")
-            cursor += 16
+            cursor += window
     ins.sort()
     # Overlapping notes would not fit one line: cut each note at the next onset.
     for current, following in zip(ins, ins[1:]):

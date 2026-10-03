@@ -236,6 +236,8 @@ def register(routes):
                 "name": path.stem,
                 "updated": path.stat().st_mtime,
                 "source": (project.get("source") or {}).get("original"),
+                "source_file": (project.get("source") or {}).get("filename"),
+                "analyzed": bool(project.get("analysis")),
                 "takes": len(project.get("takes", [])),
                 "voices": len(project.get("voices", [])),
                 "sections": len(re.findall(r"^\s*\[[^\]\n]+\]\s*$", str(project.get("lyrics", "")), re.M)),

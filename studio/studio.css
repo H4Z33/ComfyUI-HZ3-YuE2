@@ -101,3 +101,8 @@ main { flex: 1; display: flex; min-height: 0; }
 .catalog tr.archived td { opacity: .55; }
 .catalog td.actions { white-space: nowrap; }
 .catalog td input + button { margin-top: 4px; }
+details.source { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; margin-bottom: 6px; }
+details.source summary { cursor: pointer; }
+details.source .row { flex-wrap: wrap; margin: 8px 0; align-items: center; }
+details.source .parts { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }

@@ -18,7 +18,7 @@
   <button id="save-project">Guardar</button>
   <label class="file" title="Abre .mixmash desde tu disco">Abrir .mixmash<input id="import-package" type="file" accept=".mixmash"></label>
   <button id="download-package" title="Descarga el paquete con audio, letra, ABC y estado de la app">Descargar .mixmash</button>
-  <label class="file" title="Canción de origen a analizar">Audio original<input id="source-audio" type="file" accept="audio/*"></label>
+  <label class="file" title="Sube un audio a la biblioteca y úsalo como audio original de esta canción">Audio original<input id="source-audio" type="file" accept="audio/*"></label>
   <button id="analyze" title="SheetSage2 (ABC) + Whisper (letra) + MixMash (estilo)">Analizar audio</button>
   <button id="compose" title="YuE2 compone el ABC (melodía y acordes) a partir del estilo y la letra">Generar ABC (YuE2)</button>
   <label class="file" title="JSON con style, lyrics y abc">Importar JSON<input id="import-json" type="file" accept=".json"></label>
@@ -34,6 +34,10 @@
 
 <main>
   <aside class="song">
+    <div class="row">
+      <label>Audio original (biblioteca)<select id="source-pick"></select></label>
+      <button id="source-bring" title="Copia a esta canción el ABC, la letra y el estilo analizados de ese audio (el ABC actual queda en las versiones)">Traer análisis</button>
+    </div>
     <label>Indicaciones de estilo (MixMash y asistente)<textarea id="style-instructions" rows="3" placeholder="p. ej. intro en piano, romántico, big band después del solo"></textarea></label>
     <button id="apply-style-instructions" title="El asistente reescribe el estilo general y los de sección según las indicaciones">Aplicar indicaciones con el asistente</button>
     <label>Estilo base (grupo o género del catálogo)<select id="base-style"></select></label>
@@ -151,7 +155,7 @@
 </main>
 <dialog id="catalog" class="catalog">
   <header><strong>Catálogo</strong>
-    <span class="tabs"><button data-tab="manage" class="active">Álbumes y canciones</button><button data-tab="references">Referencias</button></span>
+    <span class="tabs"><button data-tab="manage" class="active">Álbumes y canciones</button><button data-tab="sources">Audios</button><button data-tab="references">Referencias</button></span>
     <button id="close-catalog">Cerrar</button></header>
   <div id="tab-manage" class="manage">
     <nav id="album-nav" class="album-nav"></nav>
@@ -170,6 +174,15 @@
       </table>
     </section>
   </div>
+  <section id="tab-sources" class="album-detail hidden">
+    <div class="row">
+      <label>Agregar audios a la biblioteca<input id="source-files" type="file" accept="audio/*" multiple></label>
+      <label class="switch"><input id="source-analyze" type="checkbox" checked> Analizar al importar</label>
+      <button id="import-sources" class="primary">Importar</button>
+    </div>
+    <p class="note">Cada audio se analiza una vez (ABC con SheetSage2, letra con Whisper, estilo con MixMash). Su ABC, letra y estilo quedan aquí para corregirlos y llevarlos a cualquier canción sin volver a subir ni analizar.</p>
+    <div id="source-rows"></div>
+  </section>
   <section id="tab-references" class="references hidden">
     <strong>Agregar grabaciones de referencia (nuestro dataset)</strong>
     <p class="note">Solo grabaciones con licencia libre explícita de la grabación. Se analizan con SheetSage2 (melodía y acordes) y sus melodías quedan disponibles como «Tema» en la línea clásica.</p>

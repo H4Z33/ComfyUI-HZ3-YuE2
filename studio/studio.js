@@ -108,7 +108,7 @@ let pausedAt = 0;
 
 function newProject() {
   return {
-    name: "", kind: "song", album: DEFAULT_ALBUM, notes: "", archived: false, license: null, source: null, styleInstructions: "", analysis: null,
+    name: "", kind: "song", album: DEFAULT_ALBUM, notes: "", archived: false, license: null, source: null, sourceName: null, styleInstructions: "", analysis: null,
     style: "", baseStyle: null, lyrics: "", abc: "", abcVersions: [], seed: 60, mode: "full",
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
@@ -855,24 +855,22 @@ function connectSocket() {
 async function uploadSource(file) {
   readForm();
   if (!project.name) {
-    project.name = file.name.replace(/\.[^.]+$/, "").replace(/[^\p{L}\p{N} _()-]+/gu, "_").slice(0, 64).trim();
+    project.name = audioName(file, new Set(catalog.map((entry) => entry.name)));
     $("project-name").value = project.name;
   }
-  const form = new FormData();
-  form.append("file", file);
-  project.source = await api(`/hz3/studio/source?project=${encodeURIComponent(project.name)}`, { method: "POST", body: form });
-  await loadSource();
-  await saveProject();
-  status(`Audio «${project.source.original}» listo. Pulsa «Analizar audio».`, 1);
-  draw();
+  const [name] = await addAudios([file], { kind: "source" });
+  await useSource(name, { audio: true });
+  status(`Audio «${name}» agregado a la biblioteca y asignado a la canción. Pulsa «Analizar audio».`, 1);
 }
 
-async function analyze() {
+// Analyses the open song's audio, or the library audio / song named `owner` without opening it.
+async function analyze(owner = project.name) {
   readForm();
-  if (!project.source) throw new Error("Abre primero el audio original.");
-  const lyrics = project.lyrics.trim();
+  const target = owner === project.name ? project : await api(`/hz3/studio/project?name=${encodeURIComponent(owner)}`);
+  if (!target.source) throw new Error("Abre primero el audio original.");
+  const lyrics = target.lyrics.trim();
   const prompt = {
-    1: { class_type: "LoadAudio", inputs: { audio: project.source.filename } },
+    1: { class_type: "LoadAudio", inputs: { audio: target.source.filename } },
     2: { class_type: "AudioEncoderLoader", inputs: { audio_encoder_name: "sheetsage2_bf16.safetensors" } },
     3: { class_type: "HZ3_YuE2_SheetSage2Sections", inputs: { audio_encoder: ["2", 0], audio: ["1", 0], mode: "full" } },
     4: { class_type: "AudioSeparation", inputs: { audio: ["1", 0] } },
@@ -884,7 +882,7 @@ async function analyze() {
       class_type: "HZ3_YuE2_MixMashStyle",
       inputs: {
         model: project.arranger.model, endpoint: "http://127.0.0.1:11434", temperature: 0.35, timeout: 180, force_redo: false,
-        lora_trigger: "", abc_report: ["3", 4], abc: ["3", 0], instructions: project.styleInstructions,
+        lora_trigger: "", abc_report: ["3", 4], abc: ["3", 0], instructions: target.styleInstructions,
         lyrics: lyrics || ["5", 0], extend_abc: false, karaoke_mode: false,
       },
     },
@@ -894,7 +892,6 @@ async function analyze() {
     13: { class_type: "PreviewAny", inputs: { source: ["3", 0] } },
     14: { class_type: "PreviewAny", inputs: { source: ["5", 0] } },
   };
-  const owner = project.name;
   await queue(prompt, ANALYSIS_LABELS, async (outputs) => {
     const text = (node) => outputs[node]?.text?.[0] ?? "";
     if (!text(12).trim()) throw new Error("El análisis terminó sin ABC.");
@@ -1848,17 +1845,33 @@ function drawVoiceInspector() {
 
 // ---------- reference recordings (our own dataset)
 
-async function importReferences(files, license) {
+function audioName(file, taken) {
+  let name = file.name.replace(/\.[^.]+$/, "").replace(/[^\p{L}\p{N} _()-]+/gu, "_").slice(0, 56).trim() || "audio";
+  for (let count = 2; taken.has(name); count++) name = `${name.replace(/ \(\d+\)$/, "")} (${count})`;
+  taken.add(name);
+  return name;
+}
+
+// Each file becomes a package of its own (a library audio or a reference) holding the audio.
+async function addAudios(files, fields) {
   const { projects } = await api("/hz3/studio/projects");
   const taken = new Set(projects.map(({ name }) => name));
+  const names = [];
   for (const file of files) {
-    let name = file.name.replace(/\.[^.]+$/, "").replace(/[^\p{L}\p{N} _()-]+/gu, "_").slice(0, 56).trim() || "referencia";
-    for (let count = 2; taken.has(name); count++) name = `${name.replace(/ \(\d+\)$/, "")} (${count})`;
-    taken.add(name);
+    const name = audioName(file, taken);
     const form = new FormData();
     form.append("file", file);
     const source = await api(`/hz3/studio/source?project=${encodeURIComponent(name)}`, { method: "POST", body: form });
-    await postJson("/hz3/studio/project", { ...newProject(), name, kind: "reference", license, source });
+    await postJson("/hz3/studio/project", { ...newProject(), name, ...fields, source });
+    names.push(name);
+  }
+  await listProjects();
+  return names;
+}
+
+async function importReferences(files, license) {
+  for (const name of await addAudios(files, { kind: "reference", license })) {
+    const { source } = await api(`/hz3/studio/project?name=${encodeURIComponent(name)}`);
     // Melody and chords only: a reference is a source of themes, not a song to sing.
     const prompt = {
       1: { class_type: "LoadAudio", inputs: { audio: source.filename } },
@@ -1903,9 +1916,103 @@ async function listProjects() {
   const inAlbum = (name) => projects.filter((entry) => entry.album === name);
   // Archived songs stay out of the quick list (unless open); the catalog shows them.
   $("project-list").innerHTML = `<option value="">— proyectos —</option><option value="${NEW_SONG}">+ Canción nueva</option>`
-    + albums.map((name) => `<optgroup label="${escapeHtml(name)}">` + inAlbum(name).filter((entry) => !entry.archived || entry.name === project.name)
+    + albums.map((name) => `<optgroup label="${escapeHtml(name)}">` + inAlbum(name).filter((entry) => entry.kind !== "source" && (!entry.archived || entry.name === project.name))
       .map((entry) => `<option${entry.name === project.name ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("") + "</optgroup>").join("");
+  const sources = projects.filter((entry) => entry.kind === "source");
+  $("source-pick").innerHTML = `<option value="">— sin audio de la biblioteca —</option>`
+    + sources.map((entry) => `<option${entry.name === project.sourceName ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("");
   if ($("catalog").open) await drawCatalog();
+  if ($("catalog").open && !$("tab-sources").classList.contains("hidden")) await drawSources();
+}
+
+// ---------- audio library: each audio is analysed once; songs take its audio, ABC, lyrics or style
+
+async function useSource(name, parts) {
+  const source = await api(`/hz3/studio/project?name=${encodeURIComponent(name)}`);
+  readForm();
+  if (parts.audio) {
+    project.source = source.source;
+    project.sourceName = name;
+    await loadSource();
+  }
+  if (parts.style && source.style.trim()) project.style = source.style;
+  if (parts.lyrics && source.lyrics.trim()) project.lyrics = source.lyrics;
+  if (parts.abc && source.abc.trim()) setAbc(source.abc, `antes de traer el ABC de «${name}»`);
+  writeForm();
+  await refreshSections().catch((error) => status(`Revisa las secciones: ${error.message}`, null, true));
+  if (parts.abc || parts.lyrics) await uniqueSectionNames();
+  if (project.name) await saveProject();
+  const taken = Object.entries(parts).filter(([, on]) => on).map(([part]) => ({ audio: "audio", abc: "ABC", lyrics: "letra", style: "estilo" })[part]);
+  remember(`De la biblioteca «${name}»: ${taken.join(", ")}`);
+  status(`«${name}» → ${taken.join(", ")}.`, 1);
+  draw();
+}
+
+async function songFromSource(name) {
+  await newSong();
+  project.name = audioName({ name }, new Set(catalog.map((entry) => entry.name)));
+  $("project-name").value = project.name;
+  await useSource(name, { audio: true, abc: true, lyrics: true, style: true });
+}
+
+const openSources = new Set();
+
+async function drawSources() {
+  const rows = $("source-rows");
+  const sources = catalog.filter((entry) => entry.kind === "source");
+  rows.innerHTML = sources.length ? "" : `<p class="note">La biblioteca está vacía.</p>`;
+  for (const entry of sources) {
+    const users = catalog.filter((other) => other.kind !== "source" && other.source_file === entry.source_file).map((other) => other.name);
+    const item = document.createElement("details");
+    item.className = "source";
+    item.innerHTML = `<summary><b>${escapeHtml(entry.name)}</b> · ${escapeHtml(entry.source ?? "")} ·
+        ${entry.analyzed ? `analizado, ${entry.sections} secciones` : "sin analizar"}${users.length ? ` · usado en ${users.map(escapeHtml).join(", ")}` : ""}</summary>
+      <div class="row">
+        <button data-action="analyze">${entry.analyzed ? "Analizar de nuevo" : "Analizar"}</button>
+        <span class="parts">Traer a la canción abierta:
+          <label class="switch"><input type="checkbox" value="audio" checked> audio</label>
+          <label class="switch"><input type="checkbox" value="abc" checked> ABC</label>
+          <label class="switch"><input type="checkbox" value="lyrics" checked> letra</label>
+          <label class="switch"><input type="checkbox" value="style" checked> estilo</label>
+          <button data-action="use">Traer</button></span>
+        <button data-action="song" class="primary">Nueva canción con este audio</button>
+        <button data-action="delete">Eliminar</button>
+      </div>
+      <div class="fields">
+        <label>Estilo<textarea data-field="style" rows="4"></textarea></label>
+        <label>Letra<textarea data-field="lyrics" rows="8"></textarea></label>
+        <label>ABC<textarea data-field="abc" rows="8" spellcheck="false"></textarea></label>
+      </div>`;
+    // The texts load when the entry is opened, so the list stays light.
+    const fill = async () => {
+      const stored = await api(`/hz3/studio/project?name=${encodeURIComponent(entry.name)}`);
+      item.querySelectorAll("textarea").forEach((area) => { area.value = stored[area.dataset.field] ?? ""; });
+    };
+    item.ontoggle = guard(async () => {
+      if (item.open) {
+        openSources.add(entry.name);
+        await fill();
+      } else {
+        openSources.delete(entry.name);
+      }
+    });
+    item.querySelectorAll("textarea").forEach((area) => {
+      area.onchange = guard(() => updateProject(entry.name, (stored) => {
+        if (area.dataset.field === "abc") keepAbcVersion(stored, "antes de editarlo en la biblioteca");
+        stored[area.dataset.field] = area.value;
+      }));
+    });
+    item.querySelector('[data-action="analyze"]').onclick = guard(() => analyze(entry.name));
+    item.querySelector('[data-action="use"]').onclick = guard(() => useSource(entry.name,
+      Object.fromEntries([...item.querySelectorAll(".parts input")].map((box) => [box.value, box.checked]))));
+    item.querySelector('[data-action="song"]').onclick = guard(async () => {
+      $("catalog").close();
+      await songFromSource(entry.name);
+    });
+    item.querySelector('[data-action="delete"]').onclick = guard(() => deleteSong(entry.name));
+    rows.append(item);
+    if (openSources.has(entry.name)) item.open = true;
+  }
 }
 
 // ---------- catalog: albums and their songs
@@ -1916,7 +2023,7 @@ async function drawCatalog() {
   const { albums } = await api("/hz3/studio/albums");
   if (!albums.includes(managedAlbum)) managedAlbum = DEFAULT_ALBUM;
   const info = await albumData(managedAlbum);
-  const songs = catalog.filter((entry) => entry.album === managedAlbum);
+  const songs = catalog.filter((entry) => entry.album === managedAlbum && entry.kind !== "source");
   $("album-nav").innerHTML = albums.map((name) => `<button data-album="${escapeHtml(name)}" class="${name === managedAlbum ? "active" : ""}">${escapeHtml(name)}
     <small>${catalog.filter((entry) => entry.album === name && !entry.archived).length}</small></button>`).join("")
     + `<button data-album="${NEW_ALBUM}">+ Nuevo álbum</button>`;
@@ -2104,11 +2211,28 @@ async function init() {
   document.querySelectorAll("#catalog .tabs button").forEach((button) => {
     button.onclick = () => {
       document.querySelectorAll("#catalog .tabs button").forEach((other) => other.classList.toggle("active", other === button));
-      $("tab-manage").classList.toggle("hidden", button.dataset.tab !== "manage");
-      $("tab-references").classList.toggle("hidden", button.dataset.tab !== "references");
+      for (const tab of ["manage", "sources", "references"]) $(`tab-${tab}`).classList.toggle("hidden", button.dataset.tab !== tab);
+      if (button.dataset.tab === "sources") guard(drawSources)();
     };
   });
   $("show-archived").onchange = guard(drawCatalog);
+  $("import-sources").onclick = guard(async () => {
+    const files = [...$("source-files").files];
+    if (!files.length) throw new Error("Elige uno o más audios.");
+    const names = await addAudios(files, { kind: "source" });
+    $("source-files").value = "";
+    if ($("source-analyze").checked) for (const name of names) await analyze(name);
+    await drawSources();
+    status(`${names.length} audios en la biblioteca${$("source-analyze").checked ? ", análisis en cola" : ""}.`, $("source-analyze").checked ? 0 : 1);
+  });
+  $("source-pick").onchange = guard(async (event) => {
+    if (event.target.value) await useSource(event.target.value, { audio: true });
+  });
+  $("source-bring").onclick = guard(async () => {
+    readForm();
+    if (!project.sourceName) throw new Error("Elige primero un audio de la biblioteca.");
+    await useSource(project.sourceName, { abc: true, lyrics: true, style: true });
+  });
   $("album-rename").onclick = guard(() => renameAlbum($("album-name").value));
   $("album-delete").onclick = guard(deleteAlbum);
   $("album-notes").onchange = guard((event) => saveAlbumNotes(event.target.value));
@@ -2151,7 +2275,7 @@ async function init() {
     event.target.value = "";
     if (file) await uploadSource(file);
   });
-  $("analyze").onclick = guard(analyze);
+  $("analyze").onclick = guard(() => analyze());
   $("compose").onclick = guard(() => compose());
   $("section-recompose").onclick = guard(() => compose(selected));
   $("compose-dice").onclick = () => { $("compose-seed").value = Math.floor(Math.random() * 2 ** 31); readForm(); };

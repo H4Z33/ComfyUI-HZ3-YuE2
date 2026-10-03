@@ -147,8 +147,27 @@
   </aside>
 </main>
 <dialog id="catalog" class="catalog">
-  <header><strong>Catálogo</strong><button id="close-catalog">Cerrar</button></header>
-  <section class="references">
+  <header><strong>Catálogo</strong>
+    <span class="tabs"><button data-tab="manage" class="active">Álbumes y canciones</button><button data-tab="references">Referencias</button></span>
+    <button id="close-catalog">Cerrar</button></header>
+  <div id="tab-manage" class="manage">
+    <nav id="album-nav" class="album-nav"></nav>
+    <section class="album-detail">
+      <div class="row">
+        <label>Nombre del álbum<input id="album-name" maxlength="64"></label>
+        <button id="album-rename">Renombrar álbum</button>
+        <button id="album-delete" title="Sus canciones pasan a «General»; el álbum se mueve a la carpeta deleted">Eliminar álbum</button>
+      </div>
+      <label>Notas del álbum<textarea id="album-notes" rows="2"></textarea></label>
+      <div><span class="note">Estilos y cantantes del álbum</span><div id="album-styles" class="chips"></div></div>
+      <label class="switch"><input id="show-archived" type="checkbox"> Mostrar canciones archivadas</label>
+      <table>
+        <thead><tr><th>Canción</th><th>Notas</th><th>Estilos y cantantes</th><th>Modificada · origen</th><th>Contenido</th><th>Álbum</th><th></th></tr></thead>
+        <tbody id="catalog-rows"></tbody>
+      </table>
+    </section>
+  </div>
+  <section id="tab-references" class="references hidden">
     <strong>Agregar grabaciones de referencia (nuestro dataset)</strong>
     <p class="note">Solo grabaciones con licencia libre explícita de la grabación. Se analizan con SheetSage2 (melodía y acordes) y sus melodías quedan disponibles como «Tema» en la línea clásica.</p>
     <div class="row">
@@ -158,11 +177,8 @@
       <label>URL de origen<input id="reference-url" placeholder="https://…"></label>
       <button id="import-references" class="primary">Importar y analizar</button>
     </div>
+    <p class="note">Las referencias analizadas aparecen como canciones de tipo «Referencia» en su álbum.</p>
   </section>
-  <table>
-    <thead><tr><th>Canción</th><th>Modificada</th><th>Tipo</th><th>Origen</th><th>Secciones</th><th>Takes</th><th>Voces</th><th>Estilo</th></tr></thead>
-    <tbody id="catalog-rows"></tbody>
-  </table>
 </dialog>
 <dialog id="styles" class="catalog">
   <header><strong>Estilos del álbum <span id="styles-album"></span></strong>

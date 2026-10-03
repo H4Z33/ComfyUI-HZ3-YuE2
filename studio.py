@@ -13,6 +13,7 @@ import io
 import json
 from pathlib import Path
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,16 +45,20 @@ PACKAGE_FORMAT = "hz3-mixmash/1"
 DEFAULT_ALBUM = "General"
 
 
+def _studio_folder():
+    return Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "studio"
+
+
 def _package_path(name):
     if not PROJECT_NAME.fullmatch(name):
         raise web.HTTPBadRequest(text="Project names may use letters, numbers, spaces, '-', '_' and parentheses (64 max).")
-    return Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "studio" / f"{name}.mixmash"
+    return _studio_folder() / f"{name}.mixmash"
 
 
 def _album_path(name):
     if not PROJECT_NAME.fullmatch(name):
         raise web.HTTPBadRequest(text="Album names may use letters, numbers, spaces, '-', '_' and parentheses (64 max).")
-    return Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "studio" / "albums" / f"{name}.json"
+    return _studio_folder() / "albums" / f"{name}.json"
 
 
 def _source_path(filename):
@@ -152,13 +157,33 @@ def _assist(model, state, messages, tools):
             "tool_calls": [call["function"] for call in message.get("tool_calls") or []]}
 
 
+def _project_of(path):
+    with zipfile.ZipFile(path) as package:
+        return json.loads(package.read("manifest.json"))["project"]
+
+
+def _move_album_songs(old, new):
+    """Rewrite every song of album `old` into album `new`."""
+    for path in _studio_folder().glob("*.mixmash"):
+        project = _project_of(path)
+        if (project.get("album") or DEFAULT_ALBUM) == old:
+            project["album"] = new
+            _write_package(project)
+
+
+def _discard(path):
+    """Deleted songs and albums go to studio/deleted, so a mistake can be undone by hand."""
+    target = _studio_folder() / "deleted" / f"{path.stem} {time.strftime('%Y%m%d-%H%M%S')}{path.suffix}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    path.replace(target)
+
+
 def _reference_themes():
     """Melody phrases of every analyzed reference recording in the catalog."""
-    folder = Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "studio"
+    folder = _studio_folder()
     themes = []
     for path in sorted(folder.glob("*.mixmash")):
-        with zipfile.ZipFile(path) as package:
-            project = json.loads(package.read("manifest.json"))["project"]
+        project = _project_of(path)
         if project.get("kind") == "reference" and project.get("abc", "").strip():
             license = (project.get("license") or {}).get("name", "?")
             themes += abc_phrases(project["abc"], f"{path.stem} ({license})")
@@ -176,7 +201,11 @@ def _warp(path, score_abc, line):
 def register(routes):
     @routes.get("/hz3/studio")
     async def index(request):
-        return web.FileResponse(STATIC / "index.html")
+        # Asset URLs carry their modification time, so a new page is never paired with a cached script or stylesheet.
+        page = (STATIC / "index.html").read_text(encoding="utf-8")
+        for name in ("studio.css", "studio.js"):
+            page = page.replace(f"/static/{name}", f"/static/{name}?v={int((STATIC / name).stat().st_mtime)}")
+        return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-cache"})
 
     routes.static("/hz3/studio/static", STATIC)
 
@@ -197,12 +226,11 @@ def register(routes):
 
     @routes.get("/hz3/studio/projects")
     async def projects(request):
-        folder = Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "studio"
+        folder = _studio_folder()
         files = sorted(folder.glob("*.mixmash"), key=lambda path: path.stat().st_mtime, reverse=True) if folder.is_dir() else []
         catalog = []
         for path in files:
-            with zipfile.ZipFile(path) as package:
-                project = json.loads(package.read("manifest.json"))["project"]
+            project = _project_of(path)
             style = next((line.strip() for line in str(project.get("style", "")).splitlines() if line.strip()), "")
             catalog.append({
                 "name": path.stem,
@@ -215,12 +243,16 @@ def register(routes):
                 "kind": project.get("kind", "song"),
                 "license": project.get("license"),
                 "album": project.get("album") or DEFAULT_ALBUM,
+                "notes": project.get("notes", ""),
+                "archived": bool(project.get("archived")),
+                "styles": [{"id": style.get("id"), "name": style.get("name"), "kind": style.get("kind")}
+                           for style in project.get("styles") or [] if isinstance(style, dict)],
             })
         return web.json_response({"projects": catalog})
 
     @routes.get("/hz3/studio/albums")
     async def albums(request):
-        folder = Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "studio" / "albums"
+        folder = _studio_folder() / "albums"
         names = {path.stem for path in folder.glob("*.json")} if folder.is_dir() else set()
         return web.json_response({"albums": sorted(names | {DEFAULT_ALBUM}, key=str.casefold)})
 
@@ -264,7 +296,42 @@ def register(routes):
         if target.exists():
             raise web.HTTPConflict(text=f"A project named {target.stem!r} already exists.")
         source.replace(target)
+        # The manifest carries the name too; a stale one would write the song back under its old name.
+        project = _project_of(target)
+        project["name"] = target.stem
+        await asyncio.to_thread(_write_package, project)
         return web.json_response({"name": target.stem})
+
+    @routes.post("/hz3/studio/delete")
+    async def delete_project(request):
+        path = _package_path(str((await request.json()).get("name", "")))
+        if not path.is_file():
+            raise web.HTTPNotFound(text="Project not found.")
+        _discard(path)
+        return web.json_response({"deleted": path.stem})
+
+    @routes.post("/hz3/studio/album/rename")
+    async def rename_album(request):
+        body = await request.json()
+        source, target = _album_path(str(body.get("from", ""))), _album_path(str(body.get("to", "")))
+        if target.exists():
+            raise web.HTTPConflict(text=f"An album named {target.stem!r} already exists.")
+        await asyncio.to_thread(_move_album_songs, source.stem, target.stem)
+        album = json.loads(source.read_text(encoding="utf-8")) if source.is_file() else {"styles": [], "chat": [], "log": []}
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({**album, "name": target.stem}, ensure_ascii=False, indent=1), encoding="utf-8")
+        source.unlink(missing_ok=True)
+        return web.json_response({"name": target.stem})
+
+    @routes.post("/hz3/studio/album/delete")
+    async def delete_album(request):
+        path = _album_path(str((await request.json()).get("name", "")))
+        if path.stem == DEFAULT_ALBUM:
+            raise web.HTTPBadRequest(text=f"The {DEFAULT_ALBUM!r} album cannot be deleted.")
+        await asyncio.to_thread(_move_album_songs, path.stem, DEFAULT_ALBUM)
+        if path.is_file():
+            _discard(path)
+        return web.json_response({"deleted": path.stem})
 
     @routes.post("/hz3/studio/source")
     async def upload_source(request):

@@ -36,6 +36,7 @@ const COMPOSE_LABELS = { 1: "Cargando modelo", 2: "YuE2 compone el ABC" };
 const STYLE_KINDS = { singer: "Cantante", group: "Grupo", genre: "Género" };
 const DEFAULT_ALBUM = "General";
 const NEW_ALBUM = "*nuevo*";
+const NEW_SONG = "*nueva*";
 const CHAT_MEMORY = 24;
 const ASSISTANT_STEPS = 8;
 
@@ -105,7 +106,7 @@ let pausedAt = 0;
 
 function newProject() {
   return {
-    name: "", kind: "song", album: DEFAULT_ALBUM, license: null, source: null, styleInstructions: "", analysis: null,
+    name: "", kind: "song", album: DEFAULT_ALBUM, notes: "", archived: false, license: null, source: null, styleInstructions: "", analysis: null,
     style: "", baseStyle: null, lyrics: "", abc: "", abcVersions: [], seed: 60, mode: "full",
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
@@ -363,16 +364,26 @@ function referencedStyles() {
   return album.styles.filter((style) => ids.has(style.id));
 }
 
+async function fetchAlbum(name) {
+  return { styles: [], chat: [], log: [], ...(await api(`/hz3/studio/album?name=${encodeURIComponent(name)}`)), name };
+}
+
+// The open album is edited in memory and saved as it changes; any other one is read from disk.
+async function albumData(name) {
+  return name === album.name ? album : fetchAlbum(name);
+}
+
 // Songs carry a copy of the styles they use, so opening them in another album (or another install) keeps their singers.
-async function adoptStyles(styles) {
-  const missing = (styles ?? []).filter((style) => !catalogStyle(style.id));
+async function addStylesToAlbum(name, styles) {
+  const target = await albumData(name);
+  const missing = (styles ?? []).filter((style) => !target.styles.some((item) => item.id === style.id));
   if (!missing.length) return;
-  album.styles.push(...missing.map((style) => ({ ...style })));
-  await saveAlbum();
+  target.styles.push(...missing.map((style) => ({ ...style })));
+  await postJson("/hz3/studio/album", target);
 }
 
 async function loadAlbum(name) {
-  album = { styles: [], chat: [], log: [], ...(await api(`/hz3/studio/album?name=${encodeURIComponent(name)}`)), name };
+  album = await fetchAlbum(name);
   drawChat();
 }
 
@@ -396,7 +407,7 @@ async function moveToAlbum(name) {
   const used = referencedStyles();
   project.album = name;
   await loadAlbum(name);
-  await adoptStyles(used);
+  await addStylesToAlbum(name, used);
   await saveAlbum();
   if (project.name) await saveProject();
   await listAlbums();
@@ -483,13 +494,13 @@ function assistantState() {
   const styleName = (id) => catalogStyle(id)?.name ?? null;
   return {
     album: {
-      name: album.name,
+      name: album.name, notes: album.notes ?? "",
       styles: album.styles.map(({ name, kind, text }) => ({ name, type: kind, text })),
-      songs: catalog.filter((entry) => entry.album === album.name).map((entry) => entry.name),
+      songs: catalog.filter((entry) => entry.album === album.name).map((entry) => entry.archived ? `${entry.name} (archivada)` : entry.name),
       log: album.log.slice(-40).map((entry) => `${new Date(entry.at).toLocaleString()} · ${entry.song || "—"} · ${entry.text}`),
     },
     song: {
-      name: project.name, base_style: styleName(project.baseStyle), style: project.style, style_instructions: project.styleInstructions,
+      name: project.name, notes: project.notes, base_style: styleName(project.baseStyle), style: project.style, style_instructions: project.styleInstructions,
       seed: project.seed, mode: project.mode, sampling: project.sampling, compose: project.compose, abc_versions: project.abcVersions.length,
       lyrics: sections.length ? undefined : project.lyrics, has_abc: Boolean(project.abc.trim()), source_audio: Boolean(project.source),
       harmonize: project.harmonize, jobs_running: pending.size, takes: project.takes.map((take) => take.id),
@@ -1881,23 +1892,158 @@ async function listProjects() {
   catalog = projects;
   const albums = [...new Set(projects.map((entry) => entry.album))].sort((a, b) => a.localeCompare(b));
   const inAlbum = (name) => projects.filter((entry) => entry.album === name);
-  const escape = escapeHtml;
-  $("project-list").innerHTML = `<option value="">— proyectos —</option>` + albums.map((name) => `<optgroup label="${escape(name)}">`
-    + inAlbum(name).map((entry) => `<option${entry.name === project.name ? " selected" : ""}>${escape(entry.name)}</option>`).join("") + "</optgroup>").join("");
-  $("catalog-rows").innerHTML = albums.map((name) => `<tr class="album"><th colspan="8">Álbum «${escape(name)}» · ${inAlbum(name).length}</th></tr>`
-    + inAlbum(name).map((entry) => `<tr>
-    <td><button data-name="${escape(entry.name)}">${escape(entry.name)}</button></td>
-    <td>${new Date(entry.updated * 1000).toLocaleString()}</td>
-    <td>${entry.kind === "reference" ? "Referencia" : "Canción"}</td>
-    <td>${entry.source ? `Audio: ${escape(entry.source)}` : "Compuesta"}${entry.license ? `<br><small>${escape(entry.license.name)}${entry.license.work ? ` · ${escape(entry.license.work)}` : ""}</small>` : ""}</td>
-    <td>${entry.sections}</td><td>${entry.takes}</td><td>${entry.voices}</td>
-    <td class="style">${escape(entry.style)}</td></tr>`).join("")).join("");
-  $("catalog-rows").querySelectorAll("button").forEach((button) => {
+  // Archived songs stay out of the quick list (unless open); the catalog shows them.
+  $("project-list").innerHTML = `<option value="">— proyectos —</option><option value="${NEW_SONG}">+ Canción nueva</option>`
+    + albums.map((name) => `<optgroup label="${escapeHtml(name)}">` + inAlbum(name).filter((entry) => !entry.archived || entry.name === project.name)
+      .map((entry) => `<option${entry.name === project.name ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("") + "</optgroup>").join("");
+  if ($("catalog").open) await drawCatalog();
+}
+
+// ---------- catalog: albums and their songs
+
+let managedAlbum = DEFAULT_ALBUM;
+
+async function drawCatalog() {
+  const { albums } = await api("/hz3/studio/albums");
+  if (!albums.includes(managedAlbum)) managedAlbum = DEFAULT_ALBUM;
+  const info = await albumData(managedAlbum);
+  const songs = catalog.filter((entry) => entry.album === managedAlbum);
+  $("album-nav").innerHTML = albums.map((name) => `<button data-album="${escapeHtml(name)}" class="${name === managedAlbum ? "active" : ""}">${escapeHtml(name)}
+    <small>${catalog.filter((entry) => entry.album === name && !entry.archived).length}</small></button>`).join("")
+    + `<button data-album="${NEW_ALBUM}">+ Nuevo álbum</button>`;
+  $("album-nav").querySelectorAll("button").forEach((button) => {
     button.onclick = guard(async () => {
-      $("catalog").close();
-      await openProject(button.dataset.name);
+      let name = button.dataset.album;
+      if (name === NEW_ALBUM) {
+        name = (prompt("Nombre del nuevo álbum") ?? "").trim();
+        if (!name) return;
+        if (!albums.includes(name)) await postJson("/hz3/studio/album", { name, notes: "", styles: [], chat: [], log: [] });
+        await listAlbums();
+      }
+      managedAlbum = name;
+      await drawCatalog();
     });
   });
+  $("album-name").value = managedAlbum;
+  $("album-notes").value = info.notes ?? "";
+  $("album-delete").disabled = managedAlbum === DEFAULT_ALBUM;
+  $("album-styles").innerHTML = info.styles.map((style) => {
+    const users = songs.filter((entry) => entry.styles.some((used) => used.id === style.id)).map((entry) => escapeHtml(entry.name));
+    return `<span class="chip" title="${escapeHtml(style.text)}"><b>${escapeHtml(style.name)}</b> · ${STYLE_KINDS[style.kind]} · ${users.length ? users.join(", ") : "sin usar"}</span>`;
+  }).join("") || `<span class="note">Sin estilos: créalos en «Estilos» con una canción de este álbum abierta, o pídeselos al asistente.</span>`;
+  const albumOptions = albums.map((name) => `<option${name === managedAlbum ? " selected" : ""}>${escapeHtml(name)}</option>`).join("");
+  const rows = $("catalog-rows");
+  rows.innerHTML = songs.length ? "" : `<tr><td colspan="7" class="style">Este álbum no tiene canciones.</td></tr>`;
+  for (const entry of songs.filter((item) => $("show-archived").checked || !item.archived)) {
+    const row = document.createElement("tr");
+    row.className = entry.archived ? "archived" : "";
+    row.innerHTML = `<td><input maxlength="64" title="Cambia el nombre y pulsa Enter"><button data-action="open">Abrir</button>${entry.archived ? " <small>archivada</small>" : ""}</td>
+      <td><textarea rows="2" placeholder="Notas de la canción"></textarea></td>
+      <td class="style">${entry.styles.map((style) => `${escapeHtml(style.name)} <small>(${STYLE_KINDS[style.kind] ?? style.kind})</small>`).join(", ") || "—"}
+        <br><small>${escapeHtml(entry.style)}</small></td>
+      <td>${new Date(entry.updated * 1000).toLocaleString()}<br><small>${entry.kind === "reference" ? "Referencia" : "Canción"} ·
+        ${entry.source ? `audio: ${escapeHtml(entry.source)}` : "compuesta"}${entry.license ? ` · ${escapeHtml(entry.license.name)}` : ""}</small></td>
+      <td>${entry.sections} secciones<br>${entry.takes} takes · ${entry.voices} voces</td>
+      <td><select title="Mover a otro álbum">${albumOptions}</select></td>
+      <td class="actions"><button data-action="archive">${entry.archived ? "Desarchivar" : "Archivar"}</button>
+        <button data-action="delete" title="El paquete se mueve a la carpeta deleted">Eliminar</button></td>`;
+    const [name, notes, target] = [row.querySelector("input"), row.querySelector("textarea"), row.querySelector("select")];
+    name.value = entry.name;
+    notes.value = entry.notes;
+    row.querySelector('[data-action="open"]').onclick = guard(async () => {
+      $("catalog").close();
+      await openProject(entry.name);
+    });
+    name.onchange = guard(() => renameSong(entry.name, name.value));
+    notes.onchange = guard(() => updateProject(entry.name, (stored) => { stored.notes = notes.value; }));
+    target.onchange = guard(() => moveSong(entry.name, target.value));
+    row.querySelector('[data-action="archive"]').onclick = guard(() => updateProject(entry.name, (stored) => { stored.archived = !entry.archived; }));
+    row.querySelector('[data-action="delete"]').onclick = guard(() => deleteSong(entry.name));
+    rows.append(row);
+  }
+}
+
+async function renameSong(from, to) {
+  to = to.trim();
+  if (!to || to === from) return;
+  if (from === project.name) {
+    $("project-name").value = to;
+    await saveProject();
+  } else {
+    await postJson("/hz3/studio/rename", { from, to });
+    await listProjects();
+  }
+  status(`«${from}» ahora se llama «${to}».`, 1);
+}
+
+async function moveSong(name, target) {
+  if (name === project.name) return moveToAlbum(target);
+  let styles = [];
+  await updateProject(name, (stored) => {
+    stored.album = target;
+    styles = stored.styles;
+  });
+  await addStylesToAlbum(target, styles);
+  status(`«${name}» está ahora en el álbum «${target}».`, 1);
+}
+
+async function deleteSong(name) {
+  if (!confirm(`¿Eliminar «${name}»? El paquete se mueve a la carpeta deleted del estudio (output/HZ3-YuE2/studio/deleted).`)) return;
+  await postJson("/hz3/studio/delete", { name });
+  if (name === project.name) await newSong();
+  await listProjects();
+  status(`«${name}» eliminada (está en la carpeta deleted).`, 1);
+}
+
+async function renameAlbum(to) {
+  const from = managedAlbum;
+  to = to.trim();
+  if (!to || to === from) return;
+  await postJson("/hz3/studio/album/rename", { from, to });
+  if (project.album === from) project.album = to;
+  if (album.name === from) await loadAlbum(to);
+  managedAlbum = to;
+  await listAlbums();
+  await listProjects();
+  status(`El álbum «${from}» ahora se llama «${to}».`, 1);
+}
+
+async function deleteAlbum() {
+  const name = managedAlbum;
+  if (!confirm(`¿Eliminar el álbum «${name}»? Sus canciones pasan a «${DEFAULT_ALBUM}» y el álbum (estilos, chat y bitácora) se mueve a la carpeta deleted.`)) return;
+  const used = referencedStyles();
+  await postJson("/hz3/studio/album/delete", { name });
+  if (project.album === name) project.album = DEFAULT_ALBUM;
+  if (album.name === name) {
+    await loadAlbum(DEFAULT_ALBUM);
+    await addStylesToAlbum(DEFAULT_ALBUM, used);
+  }
+  managedAlbum = DEFAULT_ALBUM;
+  await listAlbums();
+  await listProjects();
+  writeForm();
+  draw();
+  status(`Álbum «${name}» eliminado; sus canciones están en «${DEFAULT_ALBUM}».`, 1);
+}
+
+async function saveAlbumNotes(notes) {
+  const info = await albumData(managedAlbum);
+  info.notes = notes;
+  await postJson("/hz3/studio/album", info);
+}
+
+async function newSong() {
+  pause();
+  pausedAt = 0;
+  project = { ...newProject(), album: album.name };
+  savedName = null;
+  selected = null;
+  selectedVoice = null;
+  writeForm();
+  await refreshSections();
+  await listProjects();
+  draw();
+  status(`Canción nueva en el álbum «${album.name}»: ponle nombre, estilo y letra.`, 1);
 }
 
 async function openProject(name) {
@@ -1907,7 +2053,7 @@ async function openProject(name) {
   savedName = project.name;
   selected = null;
   if (album.name !== project.album) await loadAlbum(project.album);
-  await adoptStyles(project.styles);
+  await addStylesToAlbum(album.name, project.styles);
   await listAlbums();
   writeForm();
   await refreshSections();
@@ -1939,9 +2085,24 @@ async function init() {
   connectSocket();
 
   for (const id of ["lyrics", "abc"]) $(id).addEventListener("input", scheduleSections);
-  $("project-list").onchange = guard((event) => event.target.value && openProject(event.target.value));
+  $("project-list").onchange = guard((event) => event.target.value === NEW_SONG ? newSong() : event.target.value && openProject(event.target.value));
   $("save-project").onclick = guard(saveProject);
-  $("open-catalog").onclick = guard(async () => { await listProjects(); $("catalog").showModal(); });
+  $("open-catalog").onclick = guard(async () => {
+    managedAlbum = project.album;
+    $("catalog").showModal();
+    await listProjects();
+  });
+  document.querySelectorAll("#catalog .tabs button").forEach((button) => {
+    button.onclick = () => {
+      document.querySelectorAll("#catalog .tabs button").forEach((other) => other.classList.toggle("active", other === button));
+      $("tab-manage").classList.toggle("hidden", button.dataset.tab !== "manage");
+      $("tab-references").classList.toggle("hidden", button.dataset.tab !== "references");
+    };
+  });
+  $("show-archived").onchange = guard(drawCatalog);
+  $("album-rename").onclick = guard(() => renameAlbum($("album-name").value));
+  $("album-delete").onclick = guard(deleteAlbum);
+  $("album-notes").onchange = guard((event) => saveAlbumNotes(event.target.value));
   $("close-catalog").onclick = () => $("catalog").close();
   $("album-list").onchange = guard((event) => moveToAlbum(event.target.value));
   $("open-styles").onclick = () => { drawStyles(); $("styles").showModal(); };

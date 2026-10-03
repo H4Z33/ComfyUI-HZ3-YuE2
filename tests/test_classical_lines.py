@@ -72,6 +72,26 @@ class ClassicalLinesTests(unittest.TestCase):
         phrase = classical.phrases(piece, "Violin 1")[0]
         self.assertEqual((phrase["tonic"], phrase["minor"], phrase["measure"], phrase["last"]), (7, False, 1, 4))
 
+    def test_reads_a_single_track_midi_as_upper_and_bass_lines(self):
+        # One track, 480 ticks per quarter: four bars of a G-major quarter-note scale over half-note bass notes.
+        events = b""
+        for bar in range(4):
+            for beat, pitch in enumerate((67, 69, 71, 72)):
+                events += (b"\x00\x90" + bytes([pitch, 80]) if beat % 2 else b"\x00\x90" + bytes([pitch, 80]) + b"\x00\x90" + bytes([43 if beat == 0 else 50, 80]))
+                events += b"\x83\x60\x80" + bytes([pitch, 0])
+                if beat % 2:
+                    events += b"\x00\x80" + bytes([43 if beat == 1 else 50, 0])
+        track = b"\x00\xff\x58\x04\x04\x02\x18\x08\x00\xff\x59\x02\x01\x00" + events + b"\x00\xff\x2f\x00"
+        path = self.reference.with_suffix(".mid")
+        path.write_bytes(b"MThd" + (6).to_bytes(4, "big") + b"\x00\x00\x00\x01\x01\xe0" + b"MTrk" + len(track).to_bytes(4, "big") + track)
+        piece = classical.read_midi(path)
+        self.assertEqual(list(piece["parts"]), ["upper", "bass"])
+        self.assertEqual([note[1] for note in piece["parts"]["upper"][:4]], [67, 69, 71, 72])
+        self.assertEqual([note[1] for note in piece["parts"]["bass"][:4]], [43, 69, 50, 72])
+        self.assertEqual((len(piece["measures"]), piece["measures"][0][1:3]), (4, (4, 1)))
+        self.assertEqual(classical.slow_passages(piece), [(0, 4)])
+        self.assertEqual([phrase["part"] for phrase in classical.phrases(piece, "bass")], ["bass"])
+
     def test_writes_a_transposed_line_only_into_the_planned_section(self):
         result, report = classical.add_lines(SONG, classical.build_library([self.reference]), {"intro": "high"})
         song, original = abc.parse(result), abc.parse(SONG)

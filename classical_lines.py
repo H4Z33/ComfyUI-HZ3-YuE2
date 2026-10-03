@@ -1,6 +1,6 @@
 """Instrumental lines borrowed from public-domain classical scores.
 
-Reads MusicXML string quartets / Lieder, finds 4-bar phrases in their slow
+Reads MusicXML or MIDI scores (string quartets, chorales, guitar studies), finds 4-bar phrases in their slow
 passages, and writes them into the `Ins` voice of a native YuE2 ABC: moved to
 the song's key by scale degree, strong beats snapped to the song's chords, and
 placed in a register away from the singer. YuE2 ABC has one instrumental line,
@@ -13,6 +13,7 @@ from fractions import Fraction
 import json
 from pathlib import Path
 import re
+import struct
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -77,9 +78,100 @@ def read_musicxml(path):
     return {"parts": parts, "measures": measures}
 
 
+def _monophonic(notes, top):
+    """One line from a part that may hold chords: the top (or bottom) note of each onset, cut at the next onset."""
+    by_onset = {}
+    for onset, midi, duration in sorted(notes):
+        if onset not in by_onset or (midi > by_onset[onset][1]) == top:
+            by_onset[onset] = [onset, midi, duration]
+    line = [by_onset[onset] for onset in sorted(by_onset)]
+    for note, following in zip(line, line[1:]):
+        note[2] = min(note[2], following[0] - note[0])
+    return line
+
+
+def read_midi(path):
+    """Same shape as read_musicxml for a standard MIDI file. Each pitched track becomes one line
+    (its top notes); a single-track piece (lute, guitar, piano) is split into its upper and bass lines."""
+    data = Path(path).read_bytes()
+    division = struct.unpack(">H", data[12:14])[0]
+    position, tracks, meters, fifths = 14, [], [], None
+    while position + 8 <= len(data):
+        chunk, length = struct.unpack(">4sI", data[position:position + 8])
+        body, position = data[position + 8:position + 8 + length], position + 8 + length
+        if chunk != b"MTrk":
+            continue
+        tick, index, status, active, notes = 0, 0, 0, {}, []
+        while index < len(body):
+            delta = 0
+            while True:
+                byte = body[index]; index += 1
+                delta = (delta << 7) | (byte & 0x7F)
+                if byte < 0x80:
+                    break
+            tick += delta
+            if body[index] >= 0x80:
+                status = body[index]; index += 1
+            if status == 0xFF:
+                kind, size = body[index], body[index + 1]
+                value = body[index + 2:index + 2 + size]
+                index += 2 + size
+                if kind == 0x58:
+                    meters.append((tick, Fraction(value[0] * 4, 2 ** value[1])))
+                elif kind == 0x59 and fifths is None:
+                    fifths = struct.unpack("b", value[:1])[0]
+                continue
+            if status in (0xF0, 0xF7):
+                size = 0
+                while True:
+                    byte = body[index]; index += 1
+                    size = (size << 7) | (byte & 0x7F)
+                    if byte < 0x80:
+                        break
+                index += size
+                continue
+            kind, channel = status & 0xF0, status & 0x0F
+            if kind in (0xC0, 0xD0):
+                index += 1
+                continue
+            first, second = body[index], body[index + 1]
+            index += 2
+            if channel == 9 or kind not in (0x80, 0x90):
+                continue
+            if kind == 0x90 and second:
+                active.setdefault(first, []).append(tick)
+            elif active.get(first):
+                start = active[first].pop(0)
+                if tick > start:
+                    notes.append([Fraction(start, division), first, Fraction(tick - start, division)])
+        if notes:
+            tracks.append(notes)
+    every = [note for track in tracks for note in track]
+    end = max(onset + duration for onset, _, duration in every)
+    if fifths is None:
+        weight = [0.0] * 12
+        for _, midi, duration in every:
+            weight[midi % 12] += float(duration)
+        tonic = max(range(12), key=lambda root: sum(weight[(root + step) % 12] for step in MAJOR))
+        fifths = (tonic * 7 + 5) % 12 - 5
+    measures, time = [], Fraction(0)
+    meters = sorted((Fraction(tick, division), length) for tick, length in meters) or [(Fraction(0), Fraction(4))]
+    while time < end:
+        length = [length for start, length in meters if start <= time][-1] if meters[0][0] <= time else meters[0][1]
+        measures.append((time, length, fifths, ""))
+        time += length
+    if len(tracks) == 1:
+        parts = {"upper": _monophonic(tracks[0], True), "bass": _monophonic(tracks[0], False)}
+    else:
+        parts = {f"track {number}": _monophonic(track, True) for number, track in enumerate(tracks, 1)}
+    return {"parts": parts, "measures": measures}
+
+
 def slow_passages(piece):
-    """(first_measure, end_measure) ranges whose tempo words are slow."""
+    """(first_measure, end_measure) ranges whose tempo words are slow; a score without tempo words counts whole."""
     marks = [(index, words) for index, (_, _, _, words) in enumerate(piece["measures"]) if TEMPO.search(words)]
+    if not marks:
+        return [(0, len(piece["measures"]))]
     ranges = []
     for (index, words), (end, _) in zip(marks, marks[1:] + [(len(piece["measures"]), "")]):
         if SLOW.search(words) and not re.search(r"allegr|presto|vivace", words, re.I):
@@ -169,11 +261,11 @@ def _beat_chords(score, start, beats, tonic, minor):
 
 
 def build_library(paths):
-    """Every usable phrase of the given MusicXML files, with its role: the first part
-    ("high", e.g. Violin 1) or an inner/lower part ("low", e.g. viola, cello)."""
+    """Every usable phrase of the given MusicXML or MIDI files, with its role: the first part
+    ("high", e.g. Violin 1) or an inner/lower part ("low", e.g. viola, cello, a bass line)."""
     library = []
     for path in paths:
-        piece = read_musicxml(path)
+        piece = read_midi(path) if Path(path).suffix == ".mid" else read_musicxml(path)
         names = list(piece["parts"])
         for role, wanted in (("high", names[:1]), ("low", names[1:])):
             for part in wanted:
@@ -211,7 +303,7 @@ def abc_phrases(score_abc, source, length=16):
 def load_library(folder):
     """Phrases of every score under `folder`, kept in folder/phrases.json until a score changes."""
     folder = Path(folder)
-    scores = sorted(path for path in folder.rglob("*") if path.suffix in (".mxl", ".musicxml"))
+    scores = sorted(path for path in folder.rglob("*") if path.suffix in (".mxl", ".musicxml", ".mid"))
     index = folder / "phrases.json"
     if index.is_file() and all(path.stat().st_mtime <= index.stat().st_mtime for path in scores):
         stored = json.loads(index.read_text(encoding="utf-8"))

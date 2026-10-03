@@ -60,11 +60,13 @@ for a song editor on top of these nodes.
   editable in ms. A role (equal, second voice −4 dB, choir −9 dB) sets its level against
   the lead section by section (against the lead's typical level where the lead is off). A
   limiter on the sum keeps playback and `Exportar WAV` from clipping. Each voice track is switched per section like the harmonies.
-- Classical instrumental lines: put public-domain MusicXML scores (`.mxl`/`.musicxml`,
-  e.g. CC0 [OpenScore String Quartets](https://github.com/OpenScore/StringQuartets)) in
+- Classical instrumental lines: put public-domain MusicXML or MIDI scores (`.mxl`/`.musicxml`/`.mid`,
+  e.g. CC0 [OpenScore String Quartets](https://github.com/OpenScore/StringQuartets) or
+  [Mutopia](https://www.mutopiaproject.org) chorales and guitar studies) in
   `references/`, mark sections in the inspector as `Alta` (first violin: intros, endings,
   choruses) or `Baja` (viola/cello counter-line), and `Aplicar líneas clásicas`. Phrases
-  from slow duple-meter passages are moved to the song's key by scale degree, their beats
+  from slow duple-meter passages (the whole piece when it has no tempo words; a one-track MIDI
+  splits into its upper and bass lines) are moved to the song's key by scale degree, their beats
   1 and 3 fitted to the song's chords, and written into the ABC `Ins` line; the vocal line
   and chords are untouched and the project keeps which bars of which work were used.
   YuE2's ABC has a single instrumental line, so this shapes melodic material; the rest of

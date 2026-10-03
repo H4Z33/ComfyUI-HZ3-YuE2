@@ -28,6 +28,7 @@ from comfy.text_encoders.yue2 import (
     ABC_START,
     CODEC_OFFSET,
     CODEC_SIZE,
+    EOD,
     FRAMES_PER_SECOND,
     MUSIC_START,
     distribution,
@@ -40,6 +41,7 @@ from .sheetsage2_sections import split_abc_by_sections
 from .token_stream import _prepare_model
 
 SEAM_CANDIDATES = 4
+PENALTY_WINDOW = 50
 
 
 def _normalized_section_name(value: str) -> tuple[str, int | None]:
@@ -253,17 +255,21 @@ def _sample_section(model, prefixes, cfg_scale, frames, seed, history, sampling,
         decode_buffers = (torch.empty((len(prefixes), 1, model.config.hidden_size), device=device, dtype=dtype),
                           rope_matrix(model.model.compute_freqs_cis(positions, device)))
     tokens = []
+    tail = history[-PENALTY_WINDOW:]
+    recent = torch.tensor([tail + [EOD] * (PENALTY_WINDOW - len(tail))], device=device, dtype=torch.long)
     try:
         for step in comfy.utils.model_trange(frames, desc=f"YuE2 section {name}", unit="token"):
             comfy.model_management.throw_exception_if_processing_interrupted()
             guided = logits if cfg_scale == 1.0 else logits[1:] + cfg_scale * (logits[:1] - logits[1:])
-            scores = distribution(guided, history, step, "semantic", penalty_window=50, min_tokens=frames, **sampling)
+            scores = distribution(guided, recent, step, "semantic", min_tokens=frames, **sampling)
             if sampling["temperature"] == 0:
                 next_id = scores.argmax(-1, keepdim=True)
             else:
                 probabilities = scores.softmax(-1).to(rng_device)
                 next_id = torch.multinomial(probabilities, 1, generator=generator).to(device)
             decode_tokens.copy_(next_id)
+            slot = (len(tail) + step) % PENALTY_WINDOW
+            recent[:, slot:slot + 1] = next_id
             token = next_id.item()
             tokens.append(token)
             history.append(token)

@@ -444,9 +444,11 @@ class HZ3_YuE2_GenerateMusicSections:
 
         patches = _patches_fingerprint(clip)
         plan = []
+        previous = ""
         for index, section in enumerate(specs):
             section_seed = seed_overrides.get(section["name"].casefold(), (seed + index) & 0xFFFFFFFFFFFFFFFF)
             section_style = style_overrides.get(section["name"].casefold(), style)
+            # A section is sampled after everything before it, so its key chains the previous section's key.
             path = _section_token_path(
                 {
                     "style": section_style,
@@ -457,12 +459,14 @@ class HZ3_YuE2_GenerateMusicSections:
                     "seed": section_seed,
                     "sampling": [*sampling.values(), cfg_scale],
                     "patches": patches,
+                    "after": previous,
                 }
             )
             # Tokens from a chosen take win; a removed or now mismatched file falls back to the keyed ones.
             kept = token_overrides.get(section["name"].casefold())
             if kept and _load_section_tokens(_stored_tokens_path(kept), section["frames"]) is not None:
                 path = _stored_tokens_path(kept)
+            previous = path.stem
             plan.append((section, section_seed, section_style, path, _load_section_tokens(path, section["frames"])))
 
         progress = comfy.utils.ProgressBar(total_frames)

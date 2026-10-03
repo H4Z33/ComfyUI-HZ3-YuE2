@@ -2,8 +2,10 @@
 
 Analysis and generation go through ComfyUI's own /prompt queue from the page.
 This module serves the page, the section timeline of a song, the harmony
-arranger, and .mixmash packages: a zip with the source audio, the corrected
-lyrics/ABC/style and the whole studio project, under output/HZ3-YuE2/studio.
+arranger, the studio assistant, albums and .mixmash packages: a zip with the
+source audio, the corrected lyrics/ABC/style and the whole studio project,
+under output/HZ3-YuE2/studio. An album groups songs and keeps their shared
+style catalog (singers, groups, genres), the assistant chat and an action log.
 """
 
 import asyncio
@@ -32,18 +34,26 @@ from .vocal_harmony import PARTS, harmonize
 STATIC = Path(__file__).parent / "studio"
 REFERENCES = Path(__file__).parent / "references"
 ARRANGER_PROMPT = Path(__file__).parent / "prompts" / "harmony_arranger_system.txt"
+ASSISTANT_PROMPT = Path(__file__).parent / "prompts" / "studio_assistant_system.txt"
 VOICES = ("tenor", "baritone", "low", "bass", "countertenor")
 OLLAMA = "http://127.0.0.1:11434"
 PROJECT_NAME = re.compile(r"[\w \-()]{1,64}")
 AUDIO_TYPES = (".mp3", ".wav", ".flac", ".ogg", ".opus", ".m4a", ".aac")
 SOURCE_FILE = re.compile(r"hz3studio_[\w \-()]{1,64}_[\w \-]{1,80}(" + "|".join(re.escape(ext) for ext in AUDIO_TYPES) + ")")
 PACKAGE_FORMAT = "hz3-mixmash/1"
+DEFAULT_ALBUM = "General"
 
 
 def _package_path(name):
     if not PROJECT_NAME.fullmatch(name):
         raise web.HTTPBadRequest(text="Project names may use letters, numbers, spaces, '-', '_' and parentheses (64 max).")
     return Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "studio" / f"{name}.mixmash"
+
+
+def _album_path(name):
+    if not PROJECT_NAME.fullmatch(name):
+        raise web.HTTPBadRequest(text="Album names may use letters, numbers, spaces, '-', '_' and parentheses (64 max).")
+    return Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "studio" / "albums" / f"{name}.json"
 
 
 def _source_path(filename):
@@ -94,12 +104,10 @@ def _read_package(package):
     return project
 
 
-def _arrange(style, instructions, sections, model):
-    """Ask the local Ollama for the harmony voices of each section."""
-    payload = {"style": style, "instructions": instructions, "sections": sections}
-    body = {"model": model, "stream": False, "think": False, "format": "json", "options": {"temperature": 0.3},
-            "messages": [{"role": "system", "content": ARRANGER_PROMPT.read_text(encoding="utf-8")},
-                         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]}
+def _ollama_json(model, messages, temperature):
+    """One JSON answer from the local Ollama chat endpoint."""
+    body = {"model": model, "stream": False, "think": False, "format": "json", "options": {"temperature": temperature},
+            "messages": messages}
     request = urllib.request.Request(OLLAMA + "/api/chat", data=json.dumps(body).encode("utf-8"),
                                      headers={"Content-Type": "application/json"})
     try:
@@ -111,13 +119,37 @@ def _arrange(style, instructions, sections, model):
     if content.startswith("```"):
         content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
     try:
-        plan = json.loads(content)["sections"]
-    except (json.JSONDecodeError, KeyError, TypeError) as error:
-        raise RuntimeError(f"The arranger returned invalid JSON: {content[:300]}") from error
+        return json.loads(content)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"The model returned invalid JSON: {content[:300]}") from error
+
+
+def _arrange(style, instructions, sections, model):
+    """Ask the local Ollama for the harmony voices of each section."""
+    payload = {"style": style, "instructions": instructions, "sections": sections}
+    answer = _ollama_json(model, [{"role": "system", "content": ARRANGER_PROMPT.read_text(encoding="utf-8")},
+                                  {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}], 0.3)
+    try:
+        plan = answer["sections"]
+    except (KeyError, TypeError) as error:
+        raise RuntimeError(f"The arranger returned no sections: {json.dumps(answer)[:300]}") from error
     names = {section["name"] for section in sections}
     return {entry["name"]: {"voices": [voice for voice in entry.get("voices", []) if voice in VOICES],
                             "reason": str(entry.get("reason", ""))}
             for entry in plan if isinstance(entry, dict) and entry.get("name") in names}
+
+
+def _assist(model, state, messages):
+    """The studio assistant's reply and the UI actions it asks for, given the open song and its album."""
+    context = "Current studio state (JSON):\n" + json.dumps(state, ensure_ascii=False)
+    answer = _ollama_json(model, [{"role": "system", "content": ASSISTANT_PROMPT.read_text(encoding="utf-8")},
+                                  {"role": "system", "content": context}, *messages], 0.4)
+    if not isinstance(answer, dict):
+        raise RuntimeError(f"The assistant returned no object: {json.dumps(answer)[:300]}")
+    actions = answer.get("actions")
+    return {"reply": str(answer.get("reply", "")),
+            "actions": [action for action in actions if isinstance(action, dict) and isinstance(action.get("type"), str)]
+            if isinstance(actions, list) else []}
 
 
 def _reference_themes():
@@ -182,8 +214,32 @@ def register(routes):
                 "style": style[:160],
                 "kind": project.get("kind", "song"),
                 "license": project.get("license"),
+                "album": project.get("album") or DEFAULT_ALBUM,
             })
         return web.json_response({"projects": catalog})
+
+    @routes.get("/hz3/studio/albums")
+    async def albums(request):
+        folder = Path(folder_paths.get_output_directory()) / "HZ3-YuE2" / "studio" / "albums"
+        names = {path.stem for path in folder.glob("*.json")} if folder.is_dir() else set()
+        return web.json_response({"albums": sorted(names | {DEFAULT_ALBUM}, key=str.casefold)})
+
+    @routes.get("/hz3/studio/album")
+    async def load_album(request):
+        path = _album_path(request.rel_url.query.get("name", ""))
+        if not path.is_file():
+            return web.json_response({"name": path.stem, "styles": [], "chat": [], "log": []})
+        return web.json_response(json.loads(path.read_text(encoding="utf-8")))
+
+    @routes.post("/hz3/studio/album")
+    async def save_album(request):
+        album = await request.json()
+        path = _album_path(str(album.get("name", "")))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(album, ensure_ascii=False, indent=1), encoding="utf-8")
+        temporary.replace(path)
+        return web.json_response({"saved": path.stem})
 
     @routes.get("/hz3/studio/project")
     async def load_project(request):
@@ -280,3 +336,13 @@ def register(routes):
         except RuntimeError as error:
             return web.json_response({"error": str(error)}, status=502)
         return web.json_response({"plan": plan})
+
+    @routes.post("/hz3/studio/assistant")
+    async def assistant(request):
+        body = await request.json()
+        try:
+            answer = await asyncio.to_thread(_assist, body.get("model") or "deepseek-v4.1-flash:cloud",
+                                             body["state"], body["messages"])
+        except RuntimeError as error:
+            return web.json_response({"error": str(error)}, status=502)
+        return web.json_response(answer)

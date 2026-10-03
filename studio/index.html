@@ -10,9 +10,11 @@
 <header class="bar">
   <strong class="brand">HZ3 Studio</strong>
   <button id="toggle-song" title="Mostrar u ocultar el panel de la canción">Canción</button>
+  <select id="album-list" title="Álbum de la canción: agrupa canciones y guarda su catálogo de estilos, el chat y la bitácora"></select>
   <select id="project-list" title="Proyectos guardados"></select>
   <input id="project-name" placeholder="nombre del proyecto" maxlength="64">
   <button id="open-catalog" title="Todas las canciones guardadas">Catálogo</button>
+  <button id="open-styles" title="Cantantes, grupos y géneros del álbum">Estilos</button>
   <button id="save-project">Guardar</button>
   <label class="file" title="Abre .mixmash desde tu disco">Abrir .mixmash<input id="import-package" type="file" accept=".mixmash"></label>
   <button id="download-package" title="Descarga el paquete con audio, letra, ABC y estado de la app">Descargar .mixmash</button>
@@ -25,13 +27,16 @@
   <button id="arrange" title="El agente decide en qué secciones y con qué voces van las armonías">Armonías con agente</button>
   <button id="render-song" class="primary">Generar canción</button>
   <button id="export-mix">Exportar WAV</button>
+  <button id="toggle-assistant" title="Chat con el asistente del estudio">Asistente</button>
 </header>
 
 <div id="status" class="status"><span id="status-text">Listo.</span><progress id="status-progress" max="1" value="0"></progress></div>
 
 <main>
   <aside class="song">
-    <label>Indicaciones de estilo (MixMash)<textarea id="style-instructions" rows="3" placeholder="p. ej. intro en piano, romántico, big band después del solo"></textarea></label>
+    <label>Indicaciones de estilo (MixMash y asistente)<textarea id="style-instructions" rows="3" placeholder="p. ej. intro en piano, romántico, big band después del solo"></textarea></label>
+    <button id="apply-style-instructions" title="El asistente reescribe el estilo general y los de sección según las indicaciones">Aplicar indicaciones con el asistente</button>
+    <label>Estilo base (grupo o género del catálogo)<select id="base-style"></select></label>
     <label>Estilo<textarea id="style" rows="6"></textarea></label>
     <button id="apply-classical" title="Escribe en la línea instrumental frases de cuartetos de dominio público (carpeta references/), en las secciones marcadas">Aplicar líneas clásicas</button>
     <button id="section-styles-from-cues" title="Convierte cada línea «[Sección] …» del estilo en el estilo propio de esa sección">Estilos por sección desde [Sección]</button>
@@ -83,6 +88,7 @@
       </div>
       <label>Letra de la sección<textarea id="section-lyrics" rows="6"></textarea></label>
       <label>Estilo de la sección (vacío = estilo general)<textarea id="section-style" rows="6" placeholder="p. ej. Spanish female soprano, modern Latin pop, bright full band"></textarea></label>
+      <label>Cantante de la sección (voz principal)<select id="section-singer"></select></label>
       <div class="row">
         <label>Semilla de la sección<input id="section-seed" type="number" min="0"></label>
         <button id="section-dice" title="Semilla nueva">🎲</button>
@@ -112,6 +118,7 @@
         </select></label>
       </div>
       <label>Estilo de esta voz<textarea id="voice-style" rows="5"></textarea></label>
+      <label>Cantante (todas las secciones; en el timeline se elige por sección)<select id="voice-singer"></select></label>
       <div class="row">
         <label>Semilla<input id="voice-seed" type="number" min="0"></label>
         <label>Desfase global (ms)<input id="voice-offset" type="number" step="10"></label>
@@ -124,6 +131,13 @@
       </div>
     </div>
   </section>
+
+  <aside id="assistant" class="assistant hidden">
+    <header><strong>Asistente</strong><span id="assistant-album" class="note"></span></header>
+    <div id="chat-log" class="chat-log"></div>
+    <textarea id="chat-input" rows="3" placeholder="p. ej. que el coro 2 lo cante Ana y regenera esa sección (Ctrl+Enter envía)"></textarea>
+    <button id="chat-send" class="primary">Enviar</button>
+  </aside>
 </main>
 <dialog id="catalog" class="catalog">
   <header><strong>Catálogo</strong><button id="close-catalog">Cerrar</button></header>
@@ -141,6 +155,15 @@
   <table>
     <thead><tr><th>Canción</th><th>Modificada</th><th>Tipo</th><th>Origen</th><th>Secciones</th><th>Takes</th><th>Voces</th><th>Estilo</th></tr></thead>
     <tbody id="catalog-rows"></tbody>
+  </table>
+</dialog>
+<dialog id="styles" class="catalog">
+  <header><strong>Estilos del álbum <span id="styles-album"></span></strong>
+    <span><button id="add-style">+ Estilo</button> <button id="close-styles">Cerrar</button></span></header>
+  <p class="note">Los cantantes se eligen por sección en el timeline (voz principal y voces extra); un grupo o género se elige como estilo base de la canción. Las canciones guardan la referencia: editar un estilo aquí cambia todas las que lo usan.</p>
+  <table>
+    <thead><tr><th>Nombre</th><th>Tipo</th><th>Texto de estilo (YuE2, en inglés)</th><th></th></tr></thead>
+    <tbody id="style-rows"></tbody>
   </table>
 </dialog>
 <script src="/hz3/studio/static/studio.js"></script>

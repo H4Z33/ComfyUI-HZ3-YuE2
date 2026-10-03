@@ -75,3 +75,16 @@ main { flex: 1; display: flex; min-height: 0; }
 .catalog td button { text-align: left; }
 .catalog .references { display: block; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .catalog .references .row { flex-wrap: wrap; }
+.assistant { flex: 0 0 360px; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; padding: 10px; min-height: 0; }
+.assistant.hidden { display: none; }
+.assistant header { display: flex; gap: 8px; align-items: baseline; }
+.chat-log { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.msg { padding: 6px 8px; border-radius: 6px; white-space: pre-wrap; }
+.msg.user { background: #2a2d35; align-self: flex-end; max-width: 90%; }
+.msg.assistant { background: var(--panel); border: 1px solid var(--line); }
+.msg.error { color: var(--danger); }
+.msg .actions { margin: 4px 0 0; padding-left: 16px; color: var(--muted); font-size: 12px; }
+.toggle select.singer { position: absolute; top: 2px; left: 2px; max-width: calc(100% - 4px); font-size: 10px; padding: 0 2px; opacity: .85; }
+.catalog tr.album th { background: #2a2d35; color: var(--accent); }
+.catalog td input, .catalog td select { width: 100%; }
+.catalog > .note { padding: 8px 14px; }

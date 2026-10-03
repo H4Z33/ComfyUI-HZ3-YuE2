@@ -5,7 +5,9 @@
 // sections, and every render is a "take" of the whole song. Each section plays
 // from the take chosen for it (comping), with short crossfades at section
 // boundaries. Harmony voices are tracks switched per section. Projects are
-// saved as .mixmash packages.
+// saved as .mixmash packages and grouped in albums; an album keeps the style
+// catalog its songs reference (singers per section, a group or genre as base
+// style), the assistant chat and a log of what was done.
 
 const TRACKS = [
   { id: "original", name: "Original", gain: 1, source: true },
@@ -31,11 +33,17 @@ const SECTION_COLORS = ["#e0b04a", "#4aa3e0", "#7bc96f", "#d9714e", "#b07be0", "
 const RENDER_LABELS = { 1: "Cargando modelo", 2: "Tokens YuE2", 4: "KSampler", 5: "Decodificando audio", 7: "Separando voz", 12: "Armonías" };
 const ANALYSIS_LABELS = { 3: "SheetSage2 (ABC)", 4: "Separando voz", 5: "Whisper (letra)", 6: "MixMash (Ollama)" };
 const COMPOSE_LABELS = { 1: "Cargando modelo", 2: "YuE2 compone el ABC" };
+const STYLE_KINDS = { singer: "Cantante", group: "Grupo", genre: "Género" };
+const DEFAULT_ALBUM = "General";
+const NEW_ALBUM = "*nuevo*";
+const CHAT_MEMORY = 24;
 
 const $ = (id) => document.getElementById(id);
 const clientId = crypto.randomUUID();
 
 let project = newProject();
+let album = { name: DEFAULT_ALBUM, styles: [], chat: [], log: [] };
+let catalog = [];
 let sections = [];
 let score = null;
 let selected = null;
@@ -49,11 +57,11 @@ let pausedAt = 0;
 
 function newProject() {
   return {
-    name: "", kind: "song", license: null, source: null, styleInstructions: "", analysis: null,
-    style: "", lyrics: "", abc: "", seed: 60, mode: "full",
+    name: "", kind: "song", album: DEFAULT_ALBUM, license: null, source: null, styleInstructions: "", analysis: null,
+    style: "", baseStyle: null, lyrics: "", abc: "", seed: 60, mode: "full",
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
-    harmonize: true, sectionSeeds: {}, sectionStyles: {}, takes: [], comp: {}, trackOn: {}, mixer: {}, voices: [],
+    harmonize: true, sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, mixer: {}, voices: [],
     arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {}, classicalPlan: {}, classicalReport: [],
   };
 }
@@ -82,6 +90,10 @@ function postJson(path, body) {
   return api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
+function escapeHtml(text) {
+  return String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+}
+
 // ---------- form <-> project
 
 const SAMPLING = ["temperature", "top_p", "top_k", "repetition_penalty", "cfg_scale"];
@@ -90,6 +102,7 @@ function readForm() {
   project.name = $("project-name").value.trim();
   for (const key of ["style", "lyrics", "abc", "mode", "ckpt"]) project[key] = $(key).value;
   project.styleInstructions = $("style-instructions").value;
+  project.baseStyle = $("base-style").value || null;
   project.seed = Number($("seed").value) || 0;
   project.harmonize = $("harmonize").checked;
   for (const key of SAMPLING) project.sampling[key] = Number($(key).value);
@@ -100,6 +113,7 @@ function writeForm() {
   $("project-name").value = project.name;
   for (const key of ["style", "lyrics", "abc", "mode"]) $(key).value = project[key];
   $("style-instructions").value = project.styleInstructions;
+  $("base-style").innerHTML = styleOptions(["group", "genre"], "— ninguno", project.baseStyle);
   if ([...$("ckpt").options].some((option) => option.value === project.ckpt)) $("ckpt").value = project.ckpt;
   $("seed").value = project.seed;
   $("harmonize").checked = project.harmonize;
@@ -155,9 +169,9 @@ function editableSections() {
 }
 
 function renameKeys(from, to) {
-  const maps = [project.comp, project.sectionSeeds, project.sectionStyles, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
+  const maps = [project.comp, project.sectionSeeds, project.sectionStyles, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
   for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds, take.sectionStyles ?? {}, take.sectionAbc ?? {});
-  for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
+  for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {}, voice.sectionSingers ?? {});
   for (const map of maps) {
     if (from in map) { map[to] = map[from]; delete map[from]; }
   }
@@ -229,25 +243,398 @@ function isEdited(section, index) {
   if (!take) return false;
   return (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim()
     || take.sectionSeeds[section.name] !== sectionSeed(section, index)
-    || (take.sectionStyles?.[section.name] ?? "") !== (project.sectionStyles[section.name] ?? "")
+    || (take.sectionStyles?.[section.name] ?? "") !== sectionStyle(section)
     || Boolean(take.sectionAbc && take.sectionAbc[section.name] !== section.abc);
+}
+
+// MixMash-style cues: global lines, then "[Section] description" lines.
+function sectionCueStyle(name) {
+  const lines = project.style.split("\n").filter((line) => line.trim());
+  const global = lines.filter((line) => !line.trim().startsWith("[")).join("\n").trim();
+  const cue = lines.map((line) => line.match(/^\s*\[([^\]]+)\]\s*(.+)$/))
+    .find((match) => match && match[1].trim().toLowerCase() === name.toLowerCase());
+  return { global, cue: cue?.[2].trim() };
 }
 
 function stylesFromCues() {
   readForm();
-  // MixMash-style cues: a global first line, then "[Section] description" lines.
-  const lines = project.style.split("\n");
-  const global = lines.find((line) => line.trim() && !line.trim().startsWith("[")) ?? "";
   let count = 0;
-  for (const line of lines) {
-    const match = line.match(/^\s*\[([^\]]+)\]\s*(.+)$/);
-    const section = match && sections.find((item) => item.name.toLowerCase() === match[1].trim().toLowerCase());
-    if (!section) continue;
-    project.sectionStyles[section.name] = `${global.trim()}\n${match[2].trim()}`;
+  for (const section of sections) {
+    const { global, cue } = sectionCueStyle(section.name);
+    if (!cue) continue;
+    project.sectionStyles[section.name] = `${global}\n${cue}`;
     count++;
   }
   status(count ? `${count} secciones con estilo propio.` : "No hay líneas «[Sección] …» que coincidan con las secciones.", 1, !count);
   draw();
+}
+
+// ---------- album style catalog
+
+function catalogStyle(id) {
+  return album.styles.find((style) => style.id === id);
+}
+
+function styleOptions(kinds, empty, value) {
+  return `<option value="">${escapeHtml(empty)}</option>` + album.styles.filter((style) => kinds.includes(style.kind))
+    .map((style) => `<option value="${style.id}"${style.id === value ? " selected" : ""}>${escapeHtml(style.name)}</option>`).join("");
+}
+
+function oneLine(text) {
+  return text.split("\n").map((line) => line.trim().replace(/[,;.]+$/, "")).filter(Boolean).join(", ");
+}
+
+function globalStyle() {
+  return [catalogStyle(project.baseStyle)?.text, project.style].filter((text) => text?.trim()).join("\n");
+}
+
+// A section sung with its own style text or singer gets the base style, that text (or the global lines and
+// its own cue) and the singer; "" means it sings the global style.
+function sectionStyle(section) {
+  const own = project.sectionStyles[section.name];
+  const singer = catalogStyle(project.sectionSingers[section.name])?.text;
+  if (!own && !singer) return "";
+  const { global, cue } = sectionCueStyle(section.name);
+  return [catalogStyle(project.baseStyle)?.text, own || global, own ? "" : cue, singer].filter((text) => text?.trim()).join("\n");
+}
+
+function voiceSinger(voice, section) {
+  return voice.sectionSingers?.[section.name] ?? voice.singer;
+}
+
+function referencedStyles() {
+  const ids = new Set([project.baseStyle, ...Object.values(project.sectionSingers)]);
+  for (const voice of project.voices) [voice.singer, ...Object.values(voice.sectionSingers ?? {})].forEach((id) => ids.add(id));
+  return album.styles.filter((style) => ids.has(style.id));
+}
+
+// Songs carry a copy of the styles they use, so opening them in another album (or another install) keeps their singers.
+async function adoptStyles(styles) {
+  const missing = (styles ?? []).filter((style) => !catalogStyle(style.id));
+  if (!missing.length) return;
+  album.styles.push(...missing.map((style) => ({ ...style })));
+  await saveAlbum();
+}
+
+async function loadAlbum(name) {
+  album = { styles: [], chat: [], log: [], ...(await api(`/hz3/studio/album?name=${encodeURIComponent(name)}`)), name };
+  drawChat();
+}
+
+async function saveAlbum() {
+  await postJson("/hz3/studio/album", album);
+}
+
+async function listAlbums() {
+  const { albums } = await api("/hz3/studio/albums");
+  if (!albums.includes(project.album)) albums.push(project.album);
+  $("album-list").innerHTML = albums.map((name) => `<option${name === project.album ? " selected" : ""}>${escapeHtml(name)}</option>`).join("")
+    + `<option value="${NEW_ALBUM}">+ Nuevo álbum…</option>`;
+}
+
+async function moveToAlbum(name) {
+  readForm();
+  if (name === NEW_ALBUM) {
+    name = (prompt("Nombre del nuevo álbum") ?? "").trim();
+    if (!name) { $("album-list").value = project.album; return; }
+  }
+  const used = referencedStyles();
+  project.album = name;
+  await loadAlbum(name);
+  await adoptStyles(used);
+  await saveAlbum();
+  if (project.name) await saveProject();
+  await listAlbums();
+  writeForm();
+  draw();
+  status(project.name ? `«${project.name}» está ahora en el álbum «${name}».` : `Álbum «${name}».`, 1);
+}
+
+function remember(text) {
+  album.log.push({ at: Date.now(), song: project.name, text });
+  album.log = album.log.slice(-300);
+  saveAlbum().catch((error) => status(error.message, null, true));
+}
+
+function drawStyles() {
+  $("styles-album").textContent = `· ${album.name}`;
+  const rows = $("style-rows");
+  rows.innerHTML = album.styles.length ? "" : `<tr><td colspan="4" class="style">Sin estilos todavía: agrega cantantes, grupos y géneros, o pídeselos al asistente.</td></tr>`;
+  for (const style of album.styles) {
+    const row = document.createElement("tr");
+    row.innerHTML = `<td><input maxlength="60"></td>
+      <td><select>${Object.entries(STYLE_KINDS).map(([kind, label]) => `<option value="${kind}">${label}</option>`).join("")}</select></td>
+      <td><textarea rows="2" placeholder="p. ej. Spanish female soprano lead vocal, warm and breathy"></textarea></td>
+      <td><button>Eliminar</button></td>`;
+    const [name, kind, text] = [row.querySelector("input"), row.querySelector("select"), row.querySelector("textarea")];
+    name.value = style.name;
+    kind.value = style.kind;
+    text.value = style.text;
+    const update = guard(async () => {
+      Object.assign(style, { name: name.value.trim() || style.name, kind: kind.value, text: text.value.trim() });
+      remember(`Estilo «${style.name}» (${STYLE_KINDS[style.kind]}) editado`);
+      writeForm();
+      draw();
+    });
+    for (const input of [name, kind, text]) input.onchange = update;
+    row.querySelector("button").onclick = guard(async () => {
+      album.styles = album.styles.filter((item) => item !== style);
+      remember(`Estilo «${style.name}» eliminado`);
+      drawStyles();
+      writeForm();
+      draw();
+    });
+    rows.append(row);
+  }
+}
+
+function singerSelect(value, empty, change) {
+  const select = document.createElement("select");
+  select.className = "singer";
+  select.title = "Quién canta esta sección";
+  select.innerHTML = styleOptions(["singer"], empty, value);
+  select.onclick = (event) => event.stopPropagation();
+  select.onchange = () => { change(select.value || null); draw(); };
+  return select;
+}
+
+function setSinger(map, name, id) {
+  if (id) map[name] = id;
+  else delete map[name];
+}
+
+// ---------- studio assistant
+
+function drawChat() {
+  $("assistant-album").textContent = `álbum «${album.name}»`;
+  const log = $("chat-log");
+  log.innerHTML = "";
+  for (const message of album.chat) {
+    const item = document.createElement("div");
+    item.className = `msg ${message.role}${message.error ? " error" : ""}`;
+    item.textContent = message.content;
+    if (message.done?.length) {
+      const list = document.createElement("ul");
+      list.className = "actions";
+      for (const line of message.done) list.append(Object.assign(document.createElement("li"), { textContent: line }));
+      item.append(list);
+    }
+    log.append(item);
+  }
+  log.scrollTop = log.scrollHeight;
+}
+
+function assistantState() {
+  const styleName = (id) => catalogStyle(id)?.name ?? null;
+  return {
+    album: {
+      name: album.name,
+      styles: album.styles.map(({ name, kind, text }) => ({ name, type: kind, text })),
+      songs: catalog.filter((entry) => entry.album === album.name).map((entry) => entry.name),
+      log: album.log.slice(-40).map((entry) => `${new Date(entry.at).toLocaleString()} · ${entry.song || "—"} · ${entry.text}`),
+    },
+    song: {
+      name: project.name, base_style: styleName(project.baseStyle), style: project.style, style_instructions: project.styleInstructions,
+      lyrics: sections.length ? undefined : project.lyrics, has_abc: Boolean(project.abc.trim()), source_audio: Boolean(project.source),
+      harmonize: project.harmonize, jobs_running: pending.size, takes: project.takes.map((take) => take.id),
+      sections: sections.map((section, index) => ({
+        name: section.name, start: fmt(section.start), end: fmt(section.end), bars: section.bars, lyrics: section.lyrics,
+        own_style: project.sectionStyles[section.name] ?? "", singer: styleName(project.sectionSingers[section.name]),
+        seed: sectionSeed(section, index), take: project.comp[section.name] ?? null, edited: isEdited(section, index),
+        tracks_on: allTracks().filter((track) => !track.source && (track.voice ? voiceEnabled(track.voice, section) : trackEnabled(track.id, section)))
+          .map((track) => track.voice ? track.voice.name : track.id),
+      })),
+      voices: project.voices.map((voice) => ({
+        name: voice.name, source: voice.source, octave: voice.octave, role: voice.role, style: voice.style, generated: Boolean(voice.file),
+        singer: styleName(voice.singer),
+        section_singers: Object.fromEntries(Object.entries(voice.sectionSingers ?? {}).map(([name, id]) => [name, styleName(id)])),
+      })),
+    },
+  };
+}
+
+async function runAction(action) {
+  const sectionNamed = (name) => {
+    const found = sections.find((section) => section.name.toLowerCase() === String(name ?? "").toLowerCase());
+    if (!found) throw new Error(`no hay sección «${name}»`);
+    return found;
+  };
+  const voiceNamed = (name) => {
+    const found = project.voices.find((voice) => voice.name.toLowerCase() === String(name ?? "").toLowerCase());
+    if (!found) throw new Error(`no hay voz «${name}»`);
+    return found;
+  };
+  const styleNamed = (name, kinds) => {
+    if (!name) return null;
+    const found = album.styles.find((style) => kinds.includes(style.kind) && style.name.toLowerCase() === String(name).toLowerCase());
+    if (!found) throw new Error(`no hay «${name}» en el catálogo`);
+    return found.id;
+  };
+  switch (action.type) {
+    case "set_style":
+      project.style = String(action.text ?? "");
+      writeForm();
+      return "Estilo general actualizado";
+    case "set_section_style": {
+      const section = sectionNamed(action.section);
+      const text = String(action.text ?? "").trim();
+      if (text) project.sectionStyles[section.name] = text;
+      else delete project.sectionStyles[section.name];
+      draw();
+      return `Estilo de «${section.name}» ${text ? "actualizado" : "= general"}`;
+    }
+    case "set_section_lyrics": {
+      const section = sectionNamed(action.section);
+      setSectionLyrics(sections.indexOf(section), String(action.text ?? ""));
+      await refreshSections();
+      return `Letra de «${section.name}» actualizada`;
+    }
+    case "set_section_seed": {
+      const section = sectionNamed(action.section);
+      project.sectionSeeds[section.name] = Number(action.seed) || 0;
+      draw();
+      return `Semilla de «${section.name}»: ${project.sectionSeeds[section.name]}`;
+    }
+    case "set_base_style":
+      project.baseStyle = styleNamed(action.style, ["group", "genre"]);
+      writeForm();
+      draw();
+      return `Estilo base: ${catalogStyle(project.baseStyle)?.name ?? "ninguno"}`;
+    case "set_singer": {
+      const id = styleNamed(action.style, ["singer"]);
+      const targets = action.section ? [sectionNamed(action.section)] : sections;
+      const lead = !action.track || action.track === "lead";
+      const voice = lead ? null : voiceNamed(action.track);
+      if (voice && !action.section) {
+        voice.singer = id;
+        voice.sectionSingers = {};
+      } else {
+        for (const section of targets) setSinger(lead ? project.sectionSingers : (voice.sectionSingers ??= {}), section.name, id);
+      }
+      draw();
+      return `${catalogStyle(id)?.name ?? "Sin cantante"} → ${voice?.name ?? "voz principal"} · ${action.section || "todas las secciones"}`;
+    }
+    case "save_style": {
+      const name = String(action.name ?? "").trim().slice(0, 60);
+      if (!name) throw new Error("estilo sin nombre");
+      const kind = STYLE_KINDS[action.kind] ? action.kind : "singer";
+      let style = album.styles.find((item) => item.name.toLowerCase() === name.toLowerCase());
+      if (!style) album.styles.push(style = { id: crypto.randomUUID().slice(0, 8) });
+      Object.assign(style, { name, kind, text: String(action.text ?? "").trim() });
+      await saveAlbum();
+      writeForm();
+      draw();
+      return `Estilo «${name}» (${STYLE_KINDS[kind]}) guardado en el catálogo`;
+    }
+    case "delete_style": {
+      const id = styleNamed(action.name, Object.keys(STYLE_KINDS));
+      album.styles = album.styles.filter((style) => style.id !== id);
+      await saveAlbum();
+      writeForm();
+      draw();
+      return `Estilo «${action.name}» eliminado del catálogo`;
+    }
+    case "add_voice": {
+      addVoice();
+      const voice = project.voices[project.voices.length - 1];
+      if (action.name) voice.name = String(action.name).slice(0, 40);
+      if (["lead", ...Object.keys(VOICE_LINES)].includes(action.source)) voice.source = action.source;
+      if ([-1, 0, 1].includes(Number(action.octave))) voice.octave = Number(action.octave);
+      if (["0", "-4", "-9"].includes(String(action.role))) voice.role = String(action.role);
+      if (action.style) voice.style = String(action.style);
+      voice.singer = styleNamed(action.singer, ["singer"]);
+      draw();
+      return `Voz «${voice.name}» agregada (sin generar)`;
+    }
+    case "set_track": {
+      const section = sectionNamed(action.section);
+      const voice = project.voices.find((item) => item.name.toLowerCase() === String(action.track ?? "").toLowerCase());
+      if (voice) voice.on[section.name] = Boolean(action.on);
+      else if (TRACKS.some((track) => track.id === action.track && !track.source)) (project.trackOn[action.track] ??= {})[section.name] = Boolean(action.on);
+      else throw new Error(`no hay pista «${action.track}»`);
+      draw();
+      restartIfPlaying();
+      return `${action.track} ${action.on ? "encendida" : "apagada"} en «${section.name}»`;
+    }
+    case "select_take": {
+      const section = sectionNamed(action.section);
+      const take = takeById(Number(action.take));
+      if (!take) throw new Error(`no hay take ${action.take}`);
+      project.comp[section.name] = take.id;
+      draw();
+      restartIfPlaying();
+      return `«${section.name}» suena desde T${take.id}`;
+    }
+    case "arrange_harmonies":
+      if (action.instructions) {
+        project.arranger.instructions = String(action.instructions);
+        writeForm();
+      }
+      await arrange();
+      return "Armonías arregladas";
+    case "compose_abc":
+      await compose();
+      return "Composición del ABC en cola";
+    case "analyze_audio":
+      await analyze();
+      return "Análisis del audio en cola";
+    case "render_song":
+      await render(null);
+      return "Take de la canción en cola";
+    case "render_sections": {
+      const names = (Array.isArray(action.sections) ? action.sections : []).map((name) => sectionNamed(name).name);
+      if (!names.length) throw new Error("faltan secciones");
+      await render(names);
+      return `Take en cola: ${names.join(", ")}`;
+    }
+    case "render_voice": {
+      const voice = voiceNamed(action.voice);
+      await renderVoice(voice);
+      return `${voice.name} en cola`;
+    }
+    case "save_song":
+      await saveProject();
+      return "Canción guardada";
+    default:
+      throw new Error("acción desconocida");
+  }
+}
+
+async function sendChat(text) {
+  text = text.trim();
+  if (!text) return;
+  readForm();
+  album.chat.push({ role: "user", content: text, at: Date.now(), song: project.name });
+  drawChat();
+  $("chat-send").disabled = true;
+  status("El asistente está pensando…");
+  try {
+    const answer = await postJson("/hz3/studio/assistant", {
+      model: project.arranger.model, state: assistantState(),
+      messages: album.chat.filter((message) => !message.error).slice(-CHAT_MEMORY).map(({ role, content, done }) =>
+        ({ role, content: done?.length ? `${content}\n[acciones: ${done.join("; ")}]` : content })),
+    });
+    const message = { role: "assistant", content: answer.reply, at: Date.now(), song: project.name, done: [] };
+    album.chat.push(message);
+    for (const action of answer.actions) {
+      try {
+        message.done.push(await runAction(action));
+      } catch (error) {
+        message.done.push(`✗ ${action.type}: ${error.message}`);
+      }
+    }
+    if (message.done.length) remember(`Asistente: ${message.done.join("; ")}`);
+    if (project.name && message.done.length) await saveProject();
+    status("Asistente listo.", 1);
+  } catch (error) {
+    album.chat.push({ role: "assistant", content: error.message, error: true, at: Date.now() });
+    throw error;
+  } finally {
+    $("chat-send").disabled = false;
+    album.chat = album.chat.slice(-200);
+    await saveAlbum();
+    drawChat();
+  }
 }
 
 function trackEnabled(track, section) {
@@ -288,6 +675,7 @@ async function arrange() {
     }
     const summary = sections.filter((section) => plan[section.name]?.voices.length)
       .map((section) => `${section.name}: ${plan[section.name].voices.length} voces`).join(" · ");
+    remember(`Armonías del agente · ${summary || "sin armonías"}`);
     status(`Arreglo del agente · ${summary || "sin armonías"}`, 1);
     draw();
     restartIfPlaying();
@@ -418,6 +806,7 @@ async function analyze() {
     await refreshSections();
     await uniqueSectionNames();
     await saveProject();
+    remember("Audio analizado: estilo, letra y ABC nuevos");
     status("Análisis listo: revisa las secciones en la partitura, la letra y el ABC.", 1);
   });
   status("Análisis en cola…", 0);
@@ -446,6 +835,7 @@ async function compose() {
     await refreshSections().catch((error) => status(`ABC generado; revisa las secciones: ${error.message}`, null, true));
     await uniqueSectionNames();
     await saveProject();
+    remember("YuE2 compuso un ABC nuevo");
     status("ABC generado: revisa las secciones en la partitura.", 1);
   });
   status("Composición en cola…", 0);
@@ -460,11 +850,10 @@ function buildPrompt(prefix, kept) {
     2: {
       class_type: "HZ3_YuE2_GenerateMusicSections",
       inputs: {
-        clip: ["1", 1], style: project.style, lyrics: project.lyrics, abc: project.abc, seed: project.seed,
+        clip: ["1", 1], style: globalStyle(), lyrics: project.lyrics, abc: project.abc, seed: project.seed,
         mode: project.mode, ...project.sampling, section_seeds: overrides,
-        section_styles: Object.entries(project.sectionStyles)
-          .filter(([name, text]) => text.trim() && sections.some((section) => section.name === name))
-          .map(([name, text]) => `${name}: ${text.replace(/\s*\n\s*/g, " ").trim()}`).join("\n"),
+        section_styles: sections.map((section) => [section.name, sectionStyle(section)]).filter(([, text]) => text.trim())
+          .map(([name, text]) => `${name}: ${oneLine(text)}`).join("\n"),
         section_tokens: Object.entries(kept).map(([name, tokens]) => `${name} = ${tokens}`).join("\n"),
       },
     },
@@ -507,7 +896,7 @@ async function render(targets) {
   sections.forEach((section, index) => {
     take.sectionLyrics[section.name] = section.lyrics;
     take.sectionSeeds[section.name] = sectionSeed(section, index);
-    if (project.sectionStyles[section.name]) take.sectionStyles[section.name] = project.sectionStyles[section.name];
+    if (sectionStyle(section)) take.sectionStyles[section.name] = sectionStyle(section);
   });
   // A section takes the new render when asked for, edited since its take, or never rendered.
   const comped = new Set(sections.filter((section, index) =>
@@ -532,6 +921,7 @@ async function render(targets) {
     });
     if (!current) return;
     await loadTake(take);
+    remember(`Take ${take.id} · ${[...comped].join(", ")}`);
     status(`Take ${take.id} listo · ${[...comped].join(", ")}`, 1);
     draw();
   });
@@ -986,6 +1376,11 @@ function drawTrack(track) {
         draw();
         restartIfPlaying();
       };
+      if (album.styles.some((style) => style.kind === "singer") && (section.end - section.start) * pxPerSecond >= 50) {
+        const fallback = catalogStyle(voice.singer)?.name;
+        toggle.append(singerSelect(voice.sectionSingers?.[section.name] ?? "", fallback ? `(${fallback})` : "—",
+                                   (id) => setSinger(voice.sectionSingers ??= {}, section.name, id)));
+      }
       body.append(toggle);
     }
     return;
@@ -1005,6 +1400,9 @@ function drawTrack(track) {
       draw();
       restartIfPlaying();
     };
+    if (track.id === "vocals" && album.styles.some((style) => style.kind === "singer") && (section.end - section.start) * pxPerSecond >= 50) {
+      toggle.append(singerSelect(project.sectionSingers[section.name] ?? "", "—", (id) => setSinger(project.sectionSingers, section.name, id)));
+    }
     body.append(toggle);
   });
 }
@@ -1025,6 +1423,7 @@ function drawInspector() {
   if (document.activeElement !== $("section-lyrics")) $("section-lyrics").value = section.lyrics;
   if (document.activeElement !== $("section-style")) $("section-style").value = project.sectionStyles[section.name] ?? "";
   $("section-classical").value = project.classicalPlan[section.name] ?? "";
+  $("section-singer").innerHTML = styleOptions(["singer"], "— (sin cantante del catálogo)", project.sectionSingers[section.name]);
   if (document.activeElement !== $("section-seed")) $("section-seed").value = sectionSeed(section, index);
   $("section-merge").disabled = index === sections.length - 1;
   $("section-earlier").disabled = $("section-later").disabled = index === 0;
@@ -1104,7 +1503,7 @@ function addVoice() {
   project.voices.push({
     id, name: `Voz ${id + 1}`, source: "lead", octave: 0, role: "-4", seed: project.seed + 1000 * id,
     style: `${global.trim()}\nSpanish female soprano lead vocal, clear and bright`.trim(),
-    file: null, offset: 0, sectionOffsets: {}, on: {},
+    singer: null, sectionSingers: {}, file: null, offset: 0, sectionOffsets: {}, on: {},
   });
   selectedVoice = id;
   selected = null;
@@ -1124,7 +1523,9 @@ async function renderVoice(voice) {
       class_type: "HZ3_YuE2_GenerateMusicSections",
       inputs: {
         clip: ["1", 1], style: voice.style, lyrics: project.lyrics, abc: line !== undefined ? ["20", line] : project.abc, seed: voice.seed,
-        mode: line !== undefined ? "melody" : project.mode, ...project.sampling, section_seeds: "", section_styles: "",
+        mode: line !== undefined ? "melody" : project.mode, ...project.sampling, section_seeds: "",
+        section_styles: sections.map((section) => [section.name, catalogStyle(voiceSinger(voice, section))?.text]).filter(([, singer]) => singer)
+          .map(([name, singer]) => `${name}: ${oneLine(`${voice.style}\n${singer}`)}`).join("\n"),
       },
     },
     3: { class_type: "EmptyYuE2LatentAudio", inputs: { seconds: ["2", 1], batch_size: 1 } },
@@ -1159,6 +1560,7 @@ async function renderVoice(voice) {
     await loadUrl(fileUrl(file));
     await alignVoice(project.voices.find((item) => item.id === voice.id));
     await saveProject();
+    remember(`${voice.name} generada y alineada`);
     draw();
   });
   status(`${voice.name} en cola…`, 0);
@@ -1292,6 +1694,7 @@ function drawVoiceInspector() {
     if (document.activeElement !== $(id)) $(id).value = voice[key];
   }
   if (document.activeElement !== $("voice-offset")) $("voice-offset").value = Math.round(voice.offset * 1000);
+  $("voice-singer").innerHTML = styleOptions(["singer"], "— (sin cantante del catálogo)", voice.singer);
   const list = $("voice-sections");
   list.innerHTML = "<span>Ajuste fino por sección (ms)</span>";
   for (const section of sections.filter((item) => voiceEnabled(voice, item))) {
@@ -1349,6 +1752,7 @@ async function saveProject() {
   if (!project.name) throw new Error("Ponle nombre al proyecto.");
   // A new name on an opened project renames its package instead of copying it.
   if (savedName && savedName !== project.name) await postJson("/hz3/studio/rename", { from: savedName, to: project.name });
+  project.styles = referencedStyles();
   await postJson("/hz3/studio/project", project);
   savedName = project.name;
   await listProjects();
@@ -1357,16 +1761,20 @@ async function saveProject() {
 
 async function listProjects() {
   const { projects } = await api("/hz3/studio/projects");
-  const escape = (text) => String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-  $("project-list").innerHTML = `<option value="">— proyectos —</option>`
-    + projects.map(({ name }) => `<option${name === project.name ? " selected" : ""}>${escape(name)}</option>`).join("");
-  $("catalog-rows").innerHTML = projects.map((entry) => `<tr>
+  catalog = projects;
+  const albums = [...new Set(projects.map((entry) => entry.album))].sort((a, b) => a.localeCompare(b));
+  const inAlbum = (name) => projects.filter((entry) => entry.album === name);
+  const escape = escapeHtml;
+  $("project-list").innerHTML = `<option value="">— proyectos —</option>` + albums.map((name) => `<optgroup label="${escape(name)}">`
+    + inAlbum(name).map((entry) => `<option${entry.name === project.name ? " selected" : ""}>${escape(entry.name)}</option>`).join("") + "</optgroup>").join("");
+  $("catalog-rows").innerHTML = albums.map((name) => `<tr class="album"><th colspan="8">Álbum «${escape(name)}» · ${inAlbum(name).length}</th></tr>`
+    + inAlbum(name).map((entry) => `<tr>
     <td><button data-name="${escape(entry.name)}">${escape(entry.name)}</button></td>
     <td>${new Date(entry.updated * 1000).toLocaleString()}</td>
     <td>${entry.kind === "reference" ? "Referencia" : "Canción"}</td>
     <td>${entry.source ? `Audio: ${escape(entry.source)}` : "Compuesta"}${entry.license ? `<br><small>${escape(entry.license.name)}${entry.license.work ? ` · ${escape(entry.license.work)}` : ""}</small>` : ""}</td>
     <td>${entry.sections}</td><td>${entry.takes}</td><td>${entry.voices}</td>
-    <td class="style">${escape(entry.style)}</td></tr>`).join("");
+    <td class="style">${escape(entry.style)}</td></tr>`).join("")).join("");
   $("catalog-rows").querySelectorAll("button").forEach((button) => {
     button.onclick = guard(async () => {
       $("catalog").close();
@@ -1381,6 +1789,9 @@ async function openProject(name) {
   project = { ...newProject(), ...(await api(`/hz3/studio/project?name=${encodeURIComponent(name)}`)) };
   savedName = project.name;
   selected = null;
+  if (album.name !== project.album) await loadAlbum(project.album);
+  await adoptStyles(project.styles);
+  await listAlbums();
   writeForm();
   await refreshSections();
   status("Cargando audio…");
@@ -1404,6 +1815,8 @@ async function init() {
   const info = await api("/object_info/CheckpointLoaderSimple");
   const names = info.CheckpointLoaderSimple.input.required.ckpt_name[0];
   $("ckpt").innerHTML = names.map((name) => `<option>${name}</option>`).join("");
+  await loadAlbum(DEFAULT_ALBUM);
+  await listAlbums();
   writeForm();
   await listProjects();
   connectSocket();
@@ -1413,6 +1826,31 @@ async function init() {
   $("save-project").onclick = guard(saveProject);
   $("open-catalog").onclick = guard(async () => { await listProjects(); $("catalog").showModal(); });
   $("close-catalog").onclick = () => $("catalog").close();
+  $("album-list").onchange = guard((event) => moveToAlbum(event.target.value));
+  $("open-styles").onclick = () => { drawStyles(); $("styles").showModal(); };
+  $("close-styles").onclick = () => $("styles").close();
+  $("add-style").onclick = guard(async () => {
+    album.styles.push({ id: crypto.randomUUID().slice(0, 8), name: `Cantante ${album.styles.length + 1}`, kind: "singer", text: "" });
+    await saveAlbum();
+    drawStyles();
+  });
+  $("base-style").onchange = () => { readForm(); draw(); };
+  $("toggle-assistant").onclick = () => { $("assistant").classList.toggle("hidden"); drawChat(); };
+  const send = guard(async () => {
+    const text = $("chat-input").value;
+    $("chat-input").value = "";
+    await sendChat(text);
+  });
+  $("chat-send").onclick = send;
+  $("chat-input").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && event.ctrlKey) { event.preventDefault(); send(); }
+  });
+  $("apply-style-instructions").onclick = guard(async () => {
+    readForm();
+    if (!project.styleInstructions.trim()) throw new Error("Escribe primero las indicaciones de estilo.");
+    $("assistant").classList.remove("hidden");
+    await sendChat(`Aplica estas indicaciones de estilo a la canción: ${project.styleInstructions.trim()}`);
+  });
   $("import-references").onclick = guard(async () => {
     const files = [...$("reference-files").files];
     if (!files.length) throw new Error("Elige uno o más audios de referencia.");
@@ -1470,6 +1908,8 @@ async function init() {
   $("section-styles-from-cues").onclick = guard(stylesFromCues);
   $("apply-classical").onclick = guard(applyClassical);
   $("section-classical").addEventListener("change", (event) => { project.classicalPlan[selected] = event.target.value; });
+  $("section-singer").addEventListener("change", (event) => { setSinger(project.sectionSingers, selected, event.target.value || null); draw(); });
+  $("voice-singer").addEventListener("change", (event) => { selectedVoiceEntry().singer = event.target.value || null; draw(); });
   $("add-voice").onclick = addVoice;
   for (const [id, key] of [["voice-name", "name"], ["voice-source", "source"], ["voice-octave", "octave"], ["voice-role", "role"], ["voice-style", "style"], ["voice-seed", "seed"]]) {
     $(id).addEventListener("change", (event) => {

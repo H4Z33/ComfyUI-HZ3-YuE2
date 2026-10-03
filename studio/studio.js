@@ -34,6 +34,10 @@ const RENDER_LABELS = { 1: "Cargando modelo", 2: "Tokens YuE2", 4: "KSampler", 5
 const ANALYSIS_LABELS = { 3: "SheetSage2 (ABC)", 4: "Separando voz", 5: "Whisper (letra)", 6: "MixMash (Ollama)" };
 const COMPOSE_LABELS = { 1: "Cargando modelo", 2: "YuE2 compone el ABC" };
 const STYLE_KINDS = { singer: "Cantante", group: "Grupo", genre: "Género" };
+// Median *written* Vocal note (MIDI) a singer's sections are moved to. YuE2 picks the voice from the melody's register far
+// more than from the style text, and sings about an octave below the written ABC: in our test a verse written around 74
+// was sung by a soprano near 62, and the same verse written around 62 by a baritone near 50. mid is between, untested.
+const REGISTERS = { high: { label: "Aguda (femenina)", center: 77 }, mid: { label: "Media (tenor / mezzo)", center: 70 }, low: { label: "Grave (masculina)", center: 62 } };
 const DEFAULT_ALBUM = "General";
 const NEW_ALBUM = "*nuevo*";
 const NEW_SONG = "*nueva*";
@@ -66,11 +70,12 @@ const ASSISTANT_TOOLS = [
     from_section: str("keep the score before this section and compose this section and everything after it; omit to compose the whole score"),
   }),
   tool("set_base_style", "Set the song's base style to a catalog group or genre (null for none).", { style: str("catalog style name") }),
-  tool("set_singer", "Choose who sings: a catalog singer for the lead or an extra voice, in one section or all.", {
-    track: str("'lead' or an extra voice name"), section: str("section name, omit for every section"), style: str("catalog singer name, omit for none"),
+  tool("set_singer", "Choose who sings: a catalog singer for lead sections (moves that section's melody to the singer's register, tags its lyrics and declares the singers in the style), or the singer of a whole extra voice.", {
+    track: str("'lead' or an extra voice name"), section: str("lead only: section name, omit for every section"), style: str("catalog singer name, omit for none"),
   }, ["track"]),
   tool("save_style", "Create or update a style in the album catalog.", {
     name: str("style name"), kind: { type: "string", enum: ["singer", "group", "genre"] }, text: str("YuE2 style text in English"),
+    register: { type: "string", enum: ["high", "mid", "low"], description: "singers only: the register their sections are moved to" },
   }, ["name", "kind", "text"]),
   tool("delete_style", "Delete a style from the album catalog.", { name: str("style name") }, ["name"]),
   tool("add_voice", "Add an extra voice track (not generated yet).", {
@@ -229,7 +234,7 @@ function editableSections() {
 function renameKeys(from, to) {
   const maps = [project.comp, project.sectionSeeds, project.sectionStyles, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
   for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds, take.sectionStyles ?? {}, take.sectionAbc ?? {});
-  for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {}, voice.sectionSingers ?? {});
+  for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
   for (const map of maps) {
     if (from in map) { map[to] = map[from]; delete map[from]; }
   }
@@ -343,27 +348,94 @@ function oneLine(text) {
   return text.split("\n").map((line) => line.trim().replace(/[,;.]+$/, "")).filter(Boolean).join(", ");
 }
 
-function globalStyle() {
-  return [catalogStyle(project.baseStyle)?.text, project.style].filter((text) => text?.trim()).join("\n");
+// The lead's singers are declared up front, as YuE2's own duets do; who sings each section is in its lyric tag.
+function singersStyle() {
+  const singers = [...new Set(sections.map((section) => project.sectionSingers[section.name]).filter(Boolean))].map(catalogStyle).filter(Boolean);
+  if (singers.length < 2) return singers[0]?.text ?? "";
+  return `${singers.length === 2 ? "duet" : "several lead singers"}, ${singers.map((singer) => singer.text).join(" and ")}`;
 }
 
-// A section sung with its own style text or singer gets the base style, that text (or the global lines and
-// its own cue) and the singer; "" means it sings the global style.
+function globalStyle() {
+  return [catalogStyle(project.baseStyle)?.text, project.style, singersStyle()].filter((text) => text?.trim()).join("\n");
+}
+
+// A section with its own style text sings the base style, that text and the singers; "" means the global style.
 function sectionStyle(section) {
   const own = project.sectionStyles[section.name];
-  const singer = catalogStyle(project.sectionSingers[section.name])?.text;
-  if (!own && !singer) return "";
-  const { global, cue } = sectionCueStyle(section.name);
-  return [catalogStyle(project.baseStyle)?.text, own || global, own ? "" : cue, singer].filter((text) => text?.trim()).join("\n");
+  if (!own) return "";
+  return [catalogStyle(project.baseStyle)?.text, own, singersStyle()].filter((text) => text?.trim()).join("\n");
 }
 
-function voiceSinger(voice, section) {
-  return voice.sectionSingers?.[section.name] ?? voice.singer;
+function singerRegister(singer) {
+  return singer.register ?? (/\b(male|man|men|baritone|bass)\b/i.test(singer.text) ? "low" : /\b(tenor|mezzo)/i.test(singer.text) ? "mid" : "high");
+}
+
+function singerCue(singer) {
+  return singer.text.split(",")[0].trim() || singer.name;
+}
+
+// One ABC line's notes moved by whole octaves (c -> C -> C,); chord symbols, inline keys and rests stay.
+function shiftOctaves(line, octaves) {
+  return line.replace(/"[^"]*"|\[K:[^\]]*\]|([A-Ga-g])([,']*)/g, (match, letter, marks) => {
+    if (!letter) return match;
+    const height = (letter === letter.toLowerCase() ? 1 : 0) + (marks.match(/'/g)?.length ?? 0) - (marks.match(/,/g)?.length ?? 0) + octaves;
+    return height >= 1 ? letter.toLowerCase() + "'".repeat(height - 1) : letter.toUpperCase() + ",".repeat(-height);
+  });
+}
+
+// Lead singer of a section: its melody moves to the singer's register and its lyric tag says who sings.
+async function setSectionSinger(name, id) {
+  const index = sections.findIndex((section) => section.name === name);
+  if (index < 0) throw new Error(`no hay sección «${name}»`);
+  readForm();
+  const singer = catalogStyle(id);
+  let lyrics = project.lyrics;
+  const blocks = [...lyrics.matchAll(/^[ \t]*\[([^\]\n]+)\][ \t]*$/gm)];
+  if (blocks.length === sections.length) {
+    const header = blocks[index];
+    const base = header[1].split(/\s+[–—-]\s+|\s*[:|(]/)[0].trim();
+    const tag = singer ? `[${base} – ${singerCue(singer)}]` : `[${base}]`;
+    lyrics = lyrics.slice(0, header.index) + tag + lyrics.slice(header.index + header[0].length);
+  }
+  const notes = singer && score ? (() => {
+    const from = score.bars[score.sections[index].start_bar].start;
+    const to = index + 1 < score.sections.length ? score.bars[score.sections[index + 1].start_bar].start : score.total_ticks;
+    return (score.tracks.Vocal ?? []).filter((note) => note.start >= from && note.start < to).map((note) => note.pitch).sort((a, b) => a - b);
+  })() : [];
+  const octaves = notes.length ? Math.round((REGISTERS[singerRegister(singer)].center - notes[Math.floor(notes.length / 2)]) / 12) : 0;
+  let abc = project.abc;
+  if (octaves) {
+    const lines = abc.split("\n");
+    const vocalLines = {};
+    let section = null;
+    let vocal = false;
+    for (const [at, line] of lines.entries()) {
+      if (line.startsWith("% ")) section = line.slice(2).trim();
+      else if (line.startsWith("V:")) vocal = line.trim() === "V: Vocal";
+      else if (vocal && line.endsWith("|")) (vocalLines[section] ??= []).push(at);
+    }
+    for (const at of vocalLines[name] ?? []) lines[at] = shiftOctaves(lines[at], octaves);
+    // A note tied across the section's edges would join two octaves: those notes are struck again instead.
+    const names = Object.keys(vocalLines);
+    for (const edge of [names[names.indexOf(name) - 1], name]) {
+      const last = vocalLines[edge]?.at(-1);
+      if (last !== undefined) lines[last] = lines[last].replace(/-\|$/, "|");
+    }
+    abc = lines.join("\n");
+  }
+  // The parser checks the result before it replaces the song's score and lyrics.
+  await postJson("/hz3/studio/sections", { abc, lyrics });
+  if (octaves) keepAbcVersion(project, `antes de llevar «${name}» al registro de ${singer.name}`);
+  setSinger(project.sectionSingers, name, id);
+  project.abc = abc;
+  project.lyrics = lyrics;
+  writeForm();
+  await refreshSections();
+  return octaves;
 }
 
 function referencedStyles() {
-  const ids = new Set([project.baseStyle, ...Object.values(project.sectionSingers)]);
-  for (const voice of project.voices) [voice.singer, ...Object.values(voice.sectionSingers ?? {})].forEach((id) => ids.add(id));
+  const ids = new Set([project.baseStyle, ...Object.values(project.sectionSingers), ...project.voices.map((voice) => voice.singer)]);
   return album.styles.filter((style) => ids.has(style.id));
 }
 
@@ -428,24 +500,30 @@ function remember(text) {
 function drawStyles() {
   $("styles-album").textContent = `· ${album.name}`;
   const rows = $("style-rows");
-  rows.innerHTML = album.styles.length ? "" : `<tr><td colspan="4" class="style">Sin estilos todavía: agrega cantantes, grupos y géneros, o pídeselos al asistente.</td></tr>`;
+  rows.innerHTML = album.styles.length ? "" : `<tr><td colspan="5" class="style">Sin estilos todavía: agrega cantantes, grupos y géneros, o pídeselos al asistente.</td></tr>`;
   for (const style of album.styles) {
     const row = document.createElement("tr");
     row.innerHTML = `<td><input maxlength="60"></td>
-      <td><select>${Object.entries(STYLE_KINDS).map(([kind, label]) => `<option value="${kind}">${label}</option>`).join("")}</select></td>
+      <td><select class="kind">${Object.entries(STYLE_KINDS).map(([kind, label]) => `<option value="${kind}">${label}</option>`).join("")}</select></td>
+      <td><select class="register" title="Registro al que se lleva la melodía de las secciones que canta">${Object.entries(REGISTERS).map(([key, { label }]) => `<option value="${key}">${label}</option>`).join("")}</select></td>
       <td><textarea rows="2" placeholder="p. ej. Spanish female soprano lead vocal, warm and breathy"></textarea></td>
       <td><button>Eliminar</button></td>`;
-    const [name, kind, text] = [row.querySelector("input"), row.querySelector("select"), row.querySelector("textarea")];
+    const [name, kind, register, text] = [row.querySelector("input"), row.querySelector(".kind"), row.querySelector(".register"), row.querySelector("textarea")];
     name.value = style.name;
     kind.value = style.kind;
     text.value = style.text;
+    register.value = style.kind === "singer" ? singerRegister(style) : "";
+    register.disabled = style.kind !== "singer";
     const update = guard(async () => {
       Object.assign(style, { name: name.value.trim() || style.name, kind: kind.value, text: text.value.trim() });
+      if (style.kind === "singer") style.register = register.value || singerRegister(style);
+      else delete style.register;
       remember(`Estilo «${style.name}» (${STYLE_KINDS[style.kind]}) editado`);
+      drawStyles();
       writeForm();
       draw();
     });
-    for (const input of [name, kind, text]) input.onchange = update;
+    for (const input of [name, kind, register, text]) input.onchange = update;
     row.querySelector("button").onclick = guard(async () => {
       album.styles = album.styles.filter((item) => item !== style);
       remember(`Estilo «${style.name}» eliminado`);
@@ -463,7 +541,7 @@ function singerSelect(value, empty, change) {
   select.title = "Quién canta esta sección";
   select.innerHTML = styleOptions(["singer"], empty, value);
   select.onclick = (event) => event.stopPropagation();
-  select.onchange = () => { change(select.value || null); draw(); };
+  select.onchange = guard(async () => { await change(select.value || null); draw(); });
   return select;
 }
 
@@ -517,7 +595,6 @@ function assistantState() {
       voices: project.voices.map((voice) => ({
         name: voice.name, source: voice.source, octave: voice.octave, role: voice.role, style: voice.style, generated: Boolean(voice.file),
         singer: styleName(voice.singer),
-        section_singers: Object.fromEntries(Object.entries(voice.sectionSingers ?? {}).map(([name, id]) => [name, styleName(id)])),
       })),
     },
   };
@@ -572,17 +649,20 @@ async function runAction(action) {
       return `Estilo base: ${catalogStyle(project.baseStyle)?.name ?? "ninguno"}`;
     case "set_singer": {
       const id = styleNamed(action.style, ["singer"]);
-      const targets = action.section ? [sectionNamed(action.section)] : sections;
-      const lead = !action.track || action.track === "lead";
-      const voice = lead ? null : voiceNamed(action.track);
-      if (voice && !action.section) {
+      if (action.track && action.track !== "lead") {
+        const voice = voiceNamed(action.track);
+        if (action.section) throw new Error("una voz extra es una generación aparte: tiene un solo cantante para toda la canción");
         voice.singer = id;
-        voice.sectionSingers = {};
-      } else {
-        for (const section of targets) setSinger(lead ? project.sectionSingers : (voice.sectionSingers ??= {}), section.name, id);
+        draw();
+        return `${catalogStyle(id)?.name ?? "Sin cantante"} → ${voice.name}`;
+      }
+      const moved = [];
+      for (const section of action.section ? [sectionNamed(action.section)] : [...sections]) {
+        const octaves = await setSectionSinger(section.name, id);
+        if (octaves) moved.push(`${section.name} ${octaves > 0 ? "+" : ""}${octaves} oct.`);
       }
       draw();
-      return `${catalogStyle(id)?.name ?? "Sin cantante"} → ${voice?.name ?? "voz principal"} · ${action.section || "todas las secciones"}`;
+      return `${catalogStyle(id)?.name ?? "Sin cantante"} → voz principal · ${action.section || "todas las secciones"}${moved.length ? ` · melodía movida: ${moved.join(", ")}` : ""}`;
     }
     case "save_style": {
       const name = String(action.name ?? "").trim().slice(0, 60);
@@ -591,6 +671,7 @@ async function runAction(action) {
       let style = album.styles.find((item) => item.name.toLowerCase() === name.toLowerCase());
       if (!style) album.styles.push(style = { id: crypto.randomUUID().slice(0, 8) });
       Object.assign(style, { name, kind, text: String(action.text ?? "").trim() });
+      if (kind === "singer" && REGISTERS[action.register]) style.register = action.register;
       await saveAlbum();
       writeForm();
       draw();
@@ -1513,11 +1594,6 @@ function drawTrack(track) {
         draw();
         restartIfPlaying();
       };
-      if (album.styles.some((style) => style.kind === "singer") && (section.end - section.start) * pxPerSecond >= 50) {
-        const fallback = catalogStyle(voice.singer)?.name;
-        toggle.append(singerSelect(voice.sectionSingers?.[section.name] ?? "", fallback ? `(${fallback})` : "—",
-                                   (id) => setSinger(voice.sectionSingers ??= {}, section.name, id)));
-      }
       body.append(toggle);
     }
     return;
@@ -1538,7 +1614,7 @@ function drawTrack(track) {
       restartIfPlaying();
     };
     if (track.id === "vocals" && album.styles.some((style) => style.kind === "singer") && (section.end - section.start) * pxPerSecond >= 50) {
-      toggle.append(singerSelect(project.sectionSingers[section.name] ?? "", "—", (id) => setSinger(project.sectionSingers, section.name, id)));
+      toggle.append(singerSelect(project.sectionSingers[section.name] ?? "", "—", (id) => setSectionSinger(section.name, id)));
     }
     body.append(toggle);
   });
@@ -1640,7 +1716,7 @@ function addVoice() {
   project.voices.push({
     id, name: `Voz ${id + 1}`, source: "lead", octave: 0, role: "-4", seed: project.seed + 1000 * id,
     style: `${global.trim()}\nSpanish female soprano lead vocal, clear and bright`.trim(),
-    singer: null, sectionSingers: {}, file: null, offset: 0, sectionOffsets: {}, on: {},
+    singer: null, file: null, offset: 0, sectionOffsets: {}, on: {},
   });
   selectedVoice = id;
   selected = null;
@@ -1659,10 +1735,9 @@ async function renderVoice(voice) {
     2: {
       class_type: "HZ3_YuE2_GenerateMusicSections",
       inputs: {
-        clip: ["1", 1], style: voice.style, lyrics: project.lyrics, abc: line !== undefined ? ["20", line] : project.abc, seed: voice.seed,
-        mode: line !== undefined ? "melody" : project.mode, ...project.sampling, section_seeds: "",
-        section_styles: sections.map((section) => [section.name, catalogStyle(voiceSinger(voice, section))?.text]).filter(([, singer]) => singer)
-          .map(([name, singer]) => `${name}: ${oneLine(`${voice.style}\n${singer}`)}`).join("\n"),
+        clip: ["1", 1], style: [voice.style, catalogStyle(voice.singer)?.text].filter((text) => text?.trim()).join("\n"),
+        lyrics: project.lyrics, abc: line !== undefined ? ["20", line] : project.abc, seed: voice.seed,
+        mode: line !== undefined ? "melody" : project.mode, ...project.sampling, section_seeds: "", section_styles: "",
       },
     },
     3: { class_type: "EmptyYuE2LatentAudio", inputs: { seconds: ["2", 1], batch_size: 1 } },
@@ -2331,7 +2406,7 @@ async function init() {
   $("section-styles-from-cues").onclick = guard(stylesFromCues);
   $("apply-classical").onclick = guard(applyClassical);
   $("section-classical").addEventListener("change", (event) => { project.classicalPlan[selected] = event.target.value; });
-  $("section-singer").addEventListener("change", (event) => { setSinger(project.sectionSingers, selected, event.target.value || null); draw(); });
+  $("section-singer").addEventListener("change", guard(async (event) => { await setSectionSinger(selected, event.target.value || null); draw(); }));
   $("voice-singer").addEventListener("change", (event) => { selectedVoiceEntry().singer = event.target.value || null; draw(); });
   $("add-voice").onclick = addVoice;
   for (const [id, key] of [["voice-name", "name"], ["voice-source", "source"], ["voice-octave", "octave"], ["voice-role", "role"], ["voice-style", "style"], ["voice-seed", "seed"]]) {

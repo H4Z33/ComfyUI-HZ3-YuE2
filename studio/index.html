@@ -99,7 +99,7 @@
       </div>
       <label>Letra de la sección<textarea id="section-lyrics" rows="6"></textarea></label>
       <label>Estilo de la sección (vacío = estilo general)<textarea id="section-style" rows="6" placeholder="p. ej. Spanish female soprano, modern Latin pop, bright full band"></textarea></label>
-      <label>Cantante de la sección (voz principal)<select id="section-singer"></select></label>
+      <label title="Lleva la melodía de la sección al registro del cantante, escribe en su etiqueta de la letra quién canta y declara los cantantes en el estilo (así hace YuE2 los duetos)">Cantante de la sección (voz principal)<select id="section-singer"></select></label>
       <div class="row">
         <label>Semilla de la sección<input id="section-seed" type="number" min="0"></label>
         <button id="section-dice" title="Semilla nueva">🎲</button>
@@ -132,7 +132,7 @@
         </select></label>
       </div>
       <label>Estilo de esta voz<textarea id="voice-style" rows="5"></textarea></label>
-      <label>Cantante (todas las secciones; en el timeline se elige por sección)<select id="voice-singer"></select></label>
+      <label>Cantante de esta voz (es una generación aparte, para toda la canción)<select id="voice-singer"></select></label>
       <div class="row">
         <label>Semilla<input id="voice-seed" type="number" min="0"></label>
         <label>Desfase global (ms)<input id="voice-offset" type="number" step="10"></label>
@@ -199,9 +199,9 @@
 <dialog id="styles" class="catalog">
   <header><strong>Estilos del álbum <span id="styles-album"></span></strong>
     <span><button id="add-style">+ Estilo</button> <button id="close-styles">Cerrar</button></span></header>
-  <p class="note">Los cantantes se eligen por sección en el timeline (voz principal y voces extra); un grupo o género se elige como estilo base de la canción. Las canciones guardan la referencia: editar un estilo aquí cambia todas las que lo usan.</p>
+  <p class="note">Un cantante se elige por sección en el timeline de la voz principal: su sección pasa a su registro en el ABC, su etiqueta de la letra dice quién canta y los cantantes de la canción se declaran en el estilo (así arma YuE2 los duetos). Una voz extra tiene un solo cantante. Un grupo o género se elige como estilo base de la canción. Las canciones guardan la referencia: editar un estilo aquí cambia todas las que lo usan.</p>
   <table>
-    <thead><tr><th>Nombre</th><th>Tipo</th><th>Texto de estilo (YuE2, en inglés)</th><th></th></tr></thead>
+    <thead><tr><th>Nombre</th><th>Tipo</th><th>Registro</th><th>Texto de estilo (YuE2, en inglés)</th><th></th></tr></thead>
     <tbody id="style-rows"></tbody>
   </table>
 </dialog>

@@ -104,17 +104,20 @@ def _read_package(package):
     return project
 
 
-def _ollama_json(model, messages, temperature):
-    """One JSON answer from the local Ollama chat endpoint."""
-    body = {"model": model, "stream": False, "think": False, "format": "json", "options": {"temperature": temperature},
-            "messages": messages}
-    request = urllib.request.Request(OLLAMA + "/api/chat", data=json.dumps(body).encode("utf-8"),
+def _ollama(body):
+    """The reply message of the local Ollama chat endpoint."""
+    request = urllib.request.Request(OLLAMA + "/api/chat", data=json.dumps({"stream": False, "think": False, **body}).encode("utf-8"),
                                      headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=180) as response:
-            content = json.loads(response.read().decode("utf-8"))["message"]["content"]
+            return json.loads(response.read().decode("utf-8"))["message"]
     except urllib.error.URLError as error:
         raise RuntimeError(f"Ollama is unavailable at {OLLAMA}: {error.reason}") from error
+
+
+def _ollama_json(model, messages, temperature):
+    """One JSON answer from the local Ollama chat endpoint."""
+    content = _ollama({"model": model, "format": "json", "options": {"temperature": temperature}, "messages": messages})["content"]
     content = content.strip()
     if content.startswith("```"):
         content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
@@ -139,17 +142,14 @@ def _arrange(style, instructions, sections, model):
             for entry in plan if isinstance(entry, dict) and entry.get("name") in names}
 
 
-def _assist(model, state, messages):
-    """The studio assistant's reply and the UI actions it asks for, given the open song and its album."""
+def _assist(model, state, messages, tools):
+    """One step of the studio assistant: a reply, or the page tools it calls, given the open song and its album."""
     context = "Current studio state (JSON):\n" + json.dumps(state, ensure_ascii=False)
-    answer = _ollama_json(model, [{"role": "system", "content": ASSISTANT_PROMPT.read_text(encoding="utf-8")},
-                                  {"role": "system", "content": context}, *messages], 0.4)
-    if not isinstance(answer, dict):
-        raise RuntimeError(f"The assistant returned no object: {json.dumps(answer)[:300]}")
-    actions = answer.get("actions")
-    return {"reply": str(answer.get("reply", "")),
-            "actions": [action for action in actions if isinstance(action, dict) and isinstance(action.get("type"), str)]
-            if isinstance(actions, list) else []}
+    message = _ollama({"model": model, "options": {"temperature": 0.4}, "tools": tools,
+                       "messages": [{"role": "system", "content": ASSISTANT_PROMPT.read_text(encoding="utf-8")},
+                                    {"role": "system", "content": context}, *messages]})
+    return {"content": message.get("content", ""),
+            "tool_calls": [call["function"] for call in message.get("tool_calls") or []]}
 
 
 def _reference_themes():
@@ -342,7 +342,7 @@ def register(routes):
         body = await request.json()
         try:
             answer = await asyncio.to_thread(_assist, body.get("model") or "deepseek-v4.1-flash:cloud",
-                                             body["state"], body["messages"])
+                                             body["state"], body["messages"], body["tools"])
         except RuntimeError as error:
             return web.json_response({"error": str(error)}, status=502)
         return web.json_response(answer)

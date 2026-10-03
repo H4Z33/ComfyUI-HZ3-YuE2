@@ -37,6 +37,54 @@ const STYLE_KINDS = { singer: "Cantante", group: "Grupo", genre: "Género" };
 const DEFAULT_ALBUM = "General";
 const NEW_ALBUM = "*nuevo*";
 const CHAT_MEMORY = 24;
+const ASSISTANT_STEPS = 8;
+
+// Page tools the studio assistant can call; runAction carries them out.
+const tool = (name, description, properties = {}, required = []) =>
+  ({ type: "function", function: { name, description, parameters: { type: "object", properties, required } } });
+const str = (description) => ({ type: "string", description });
+const num = (description) => ({ type: "number", description });
+const ASSISTANT_TOOLS = [
+  tool("set_style", "Replace the song's global style text.", { text: str("YuE2 style text") }, ["text"]),
+  tool("set_section_style", "Set a section's own style text; empty text makes it use the global style.", { section: str("section name"), text: str("style text") }, ["section", "text"]),
+  tool("set_section_lyrics", "Replace the lyrics of one section.", { section: str("section name"), text: str("lyrics") }, ["section", "text"]),
+  tool("set_section_seed", "Set the seed a section renders with; a new seed gives a different performance.", { section: str("section name"), seed: num("integer seed") }, ["section", "seed"]),
+  tool("set_sampling", "Change the song's sampling settings for rendering (only the given values change).", {
+    temperature: num("default 0.9; higher = more random"), top_p: num("default 0.95"), top_k: num("default 100; higher = more varied"),
+    repetition_penalty: num("default 1.2"), cfg_scale: num("default 2.0; how strongly style and lyrics are followed"),
+    mode: { type: "string", enum: ["full", "melody"], description: "full = chord-annotated ABC, melody = melody-only ABC" },
+    seed: num("song seed, the default for every section"),
+  }),
+  tool("get_abc", "Read the song's ABC score, or one section of it.", { section: str("section name, omit for the whole score") }),
+  tool("set_abc", "Replace the whole ABC score (it must keep the % section markers matching the lyrics headers).", { abc: str("complete ABC") }, ["abc"]),
+  tool("set_compose_settings", "Change the settings compose_abc uses (only the given values change).", {
+    seed: num("composition seed; a new one gives a different melody"), temperature: num("default 0.7; higher = further from the usual"),
+    keep_key_meter_tempo: { type: "boolean", description: "keep the key, meter and tempo of the current ABC" },
+  }),
+  tool("compose_abc", "Queue YuE2 to compose a new ABC from the style and lyrics with the compose settings (the current ABC is kept in the ABC versions)."),
+  tool("set_base_style", "Set the song's base style to a catalog group or genre (null for none).", { style: str("catalog style name") }),
+  tool("set_singer", "Choose who sings: a catalog singer for the lead or an extra voice, in one section or all.", {
+    track: str("'lead' or an extra voice name"), section: str("section name, omit for every section"), style: str("catalog singer name, omit for none"),
+  }, ["track"]),
+  tool("save_style", "Create or update a style in the album catalog.", {
+    name: str("style name"), kind: { type: "string", enum: ["singer", "group", "genre"] }, text: str("YuE2 style text in English"),
+  }, ["name", "kind", "text"]),
+  tool("delete_style", "Delete a style from the album catalog.", { name: str("style name") }, ["name"]),
+  tool("add_voice", "Add an extra voice track (not generated yet).", {
+    name: str("voice name"), source: { type: "string", enum: ["lead", "tenor", "baritone", "bass"] }, octave: num("-1, 0 or 1"),
+    role: { type: "string", enum: ["0", "-4", "-9"] }, style: str("voice style text"), singer: str("catalog singer name"),
+  }, ["name"]),
+  tool("set_track", "Switch a track on or off in one section.", {
+    track: str("vocals, instrumental, tenor, baritone, low, bass, countertenor or an extra voice name"), section: str("section name"), on: { type: "boolean" },
+  }, ["track", "section", "on"]),
+  tool("select_take", "Make a section play from one of its takes.", { section: str("section name"), take: num("take id") }, ["section", "take"]),
+  tool("arrange_harmonies", "Let the harmony arranger switch harmony tracks per section.", { instructions: str("arranging instructions") }),
+  tool("analyze_audio", "Queue the analysis of the source audio (replaces style, lyrics and ABC)."),
+  tool("render_song", "Queue a take of every edited or never-rendered section."),
+  tool("render_sections", "Queue a new take of these sections.", { sections: { type: "array", items: { type: "string" } } }, ["sections"]),
+  tool("render_voice", "Queue the generation of an extra voice.", { voice: str("voice name") }, ["voice"]),
+  tool("save_song", "Save the song."),
+];
 
 const $ = (id) => document.getElementById(id);
 const clientId = crypto.randomUUID();
@@ -58,7 +106,8 @@ let pausedAt = 0;
 function newProject() {
   return {
     name: "", kind: "song", album: DEFAULT_ALBUM, license: null, source: null, styleInstructions: "", analysis: null,
-    style: "", baseStyle: null, lyrics: "", abc: "", seed: 60, mode: "full",
+    style: "", baseStyle: null, lyrics: "", abc: "", abcVersions: [], seed: 60, mode: "full",
+    compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
     harmonize: true, sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, mixer: {}, voices: [],
@@ -103,6 +152,7 @@ function readForm() {
   for (const key of ["style", "lyrics", "abc", "mode", "ckpt"]) project[key] = $(key).value;
   project.styleInstructions = $("style-instructions").value;
   project.baseStyle = $("base-style").value || null;
+  project.compose = { seed: Number($("compose-seed").value) || 0, temperature: Number($("compose-temperature").value), keep: $("compose-keep").checked };
   project.seed = Number($("seed").value) || 0;
   project.harmonize = $("harmonize").checked;
   for (const key of SAMPLING) project.sampling[key] = Number($(key).value);
@@ -114,6 +164,11 @@ function writeForm() {
   for (const key of ["style", "lyrics", "abc", "mode"]) $(key).value = project[key];
   $("style-instructions").value = project.styleInstructions;
   $("base-style").innerHTML = styleOptions(["group", "genre"], "— ninguno", project.baseStyle);
+  $("compose-seed").value = project.compose.seed;
+  $("compose-temperature").value = project.compose.temperature;
+  $("compose-keep").checked = project.compose.keep;
+  $("abc-versions").innerHTML = `<option value="">${project.abcVersions.length ? `— ${project.abcVersions.length} versiones anteriores —` : "— sin versiones anteriores —"}</option>`
+    + project.abcVersions.map((version, index) => `<option value="${index}">${new Date(version.at).toLocaleString()} · ${escapeHtml(version.label)}</option>`).reverse().join("");
   if ([...$("ckpt").options].some((option) => option.value === project.ckpt)) $("ckpt").value = project.ckpt;
   $("seed").value = project.seed;
   $("harmonize").checked = project.harmonize;
@@ -435,6 +490,7 @@ function assistantState() {
     },
     song: {
       name: project.name, base_style: styleName(project.baseStyle), style: project.style, style_instructions: project.styleInstructions,
+      seed: project.seed, mode: project.mode, sampling: project.sampling, compose: project.compose, abc_versions: project.abcVersions.length,
       lyrics: sections.length ? undefined : project.lyrics, has_abc: Boolean(project.abc.trim()), source_audio: Boolean(project.source),
       harmonize: project.harmonize, jobs_running: pending.size, takes: project.takes.map((take) => take.id),
       sections: sections.map((section, index) => ({
@@ -572,9 +628,29 @@ async function runAction(action) {
       }
       await arrange();
       return "Armonías arregladas";
+    case "set_sampling": {
+      for (const key of SAMPLING) if (Number.isFinite(Number(action[key])) && action[key] !== undefined) project.sampling[key] = Number(action[key]);
+      if (["full", "melody"].includes(action.mode)) project.mode = action.mode;
+      if (Number.isFinite(Number(action.seed)) && action.seed !== undefined) project.seed = Number(action.seed);
+      writeForm();
+      draw();
+      return `Muestreo: ${SAMPLING.map((key) => `${key} ${project.sampling[key]}`).join(", ")} · modo ${project.mode} · semilla ${project.seed}`;
+    }
+    case "get_abc":
+      return action.section ? sectionNamed(action.section).abc : project.abc;
+    case "set_abc":
+      setAbc(String(action.abc ?? ""), "antes de que el asistente editara el ABC");
+      await refreshSections();
+      return `ABC reemplazado · ${sections.length} secciones`;
+    case "set_compose_settings":
+      if (Number.isFinite(Number(action.seed)) && action.seed !== undefined) project.compose.seed = Number(action.seed);
+      if (Number.isFinite(Number(action.temperature)) && action.temperature !== undefined) project.compose.temperature = Number(action.temperature);
+      if (typeof action.keep_key_meter_tempo === "boolean") project.compose.keep = action.keep_key_meter_tempo;
+      writeForm();
+      return `Composición: semilla ${project.compose.seed}, temperatura ${project.compose.temperature}, ${project.compose.keep ? "conserva" : "no conserva"} tonalidad, compás y tempo`;
     case "compose_abc":
       await compose();
-      return "Composición del ABC en cola";
+      return `Composición del ABC en cola (semilla ${project.compose.seed}, temperatura ${project.compose.temperature})`;
     case "analyze_audio":
       await analyze();
       return "Análisis del audio en cola";
@@ -609,20 +685,35 @@ async function sendChat(text) {
   $("chat-send").disabled = true;
   status("El asistente está pensando…");
   try {
-    const answer = await postJson("/hz3/studio/assistant", {
-      model: project.arranger.model, state: assistantState(),
-      messages: album.chat.filter((message) => !message.error).slice(-CHAT_MEMORY).map(({ role, content, done }) =>
-        ({ role, content: done?.length ? `${content}\n[acciones: ${done.join("; ")}]` : content })),
-    });
-    const message = { role: "assistant", content: answer.reply, at: Date.now(), song: project.name, done: [] };
+    // Earlier tool results reach the model through the action log in the state, not as text it could imitate.
+    const history = album.chat.filter((message) => !message.error).slice(-CHAT_MEMORY).map(({ role, content }) => ({ role, content }));
+    const message = { role: "assistant", content: "", at: Date.now(), song: project.name, done: [] };
     album.chat.push(message);
-    for (const action of answer.actions) {
-      try {
-        message.done.push(await runAction(action));
-      } catch (error) {
-        message.done.push(`✗ ${action.type}: ${error.message}`);
+    // The assistant calls page tools and sees their results until it answers in words.
+    const turn = [];
+    for (let step = 0; step < ASSISTANT_STEPS && !message.content; step++) {
+      const answer = await postJson("/hz3/studio/assistant", {
+        model: project.arranger.model, tools: ASSISTANT_TOOLS, state: assistantState(), messages: [...history, ...turn],
+      });
+      if (!answer.tool_calls.length) {
+        message.content = answer.content.trim() || "(sin respuesta)";
+        break;
       }
+      turn.push({ role: "assistant", content: answer.content, tool_calls: answer.tool_calls.map((call) => ({ function: call })) });
+      for (const call of answer.tool_calls) {
+        const args = typeof call.arguments === "string" ? JSON.parse(call.arguments || "{}") : call.arguments ?? {};
+        let result;
+        try {
+          result = await runAction({ ...args, type: call.name });
+        } catch (error) {
+          result = `✗ ${call.name}: ${error.message}`;
+        }
+        turn.push({ role: "tool", tool_name: call.name, content: result });
+        message.done.push(call.name === "get_abc" ? `ABC leído${args.section ? ` · ${args.section}` : ""}` : result);
+      }
+      drawChat();
     }
+    message.content ||= "Me detuve tras varias acciones sin una respuesta final.";
     if (message.done.length) remember(`Asistente: ${message.done.join("; ")}`);
     if (project.name && message.done.length) await saveProject();
     status("Asistente listo.", 1);
@@ -799,6 +890,7 @@ async function analyze() {
       };
       target.style = text(10);
       target.lyrics = text(11);
+      keepAbcVersion(target, "antes del análisis");
       target.abc = text(12);
     });
     if (!current) return;
@@ -812,16 +904,37 @@ async function analyze() {
   status("Análisis en cola…", 0);
 }
 
+// Replaced scores stay in the project, so a new composition or analysis can be undone.
+function keepAbcVersion(target, label) {
+  if (!target.abc.trim()) return;
+  target.abcVersions = [...(target.abcVersions ?? []), { at: Date.now(), label, abc: target.abc }].slice(-20);
+}
+
+function setAbc(abc, label) {
+  if (abc !== project.abc) keepAbcVersion(project, label);
+  project.abc = abc;
+  writeForm();
+}
+
+// Key, meter and tempo of a score in the "BPM: …, Meter: …, Key: …" style YuE2 reads.
+function abcHeader(abc) {
+  const field = (name) => abc.match(new RegExp(`^${name}:[ \\t]*(.+)$`, "m"))?.[1].trim();
+  const bpm = field("Q")?.match(/(\d+)\s*$/)?.[1];
+  return [bpm && `BPM: ${bpm}`, field("M") && `Meter: ${field("M")}`, field("K") && `Key: ${field("K")}`].filter(Boolean).join(", ");
+}
+
 async function compose() {
   readForm();
   if (!project.style.trim() || !project.lyrics.trim()) throw new Error("Escribe estilo y letra con encabezados [Sección] antes de generar el ABC.");
+  const { seed, temperature, keep } = project.compose;
   const prompt = {
     1: { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: project.ckpt } },
     2: {
       class_type: "YuE2GenerateABC",
       inputs: {
-        clip: ["1", 1], style: project.style, lyrics: project.lyrics, seed: project.seed, mode: project.mode,
-        max_abc_tokens: 8192, temperature: 0.7, top_p: 0.9, top_k: 30, repetition_penalty: 1.005, penalty_window: 100,
+        clip: ["1", 1], style: [keep ? abcHeader(project.abc) : "", globalStyle()].filter(Boolean).join("\n"),
+        lyrics: project.lyrics, seed, mode: project.mode,
+        max_abc_tokens: 8192, temperature, top_p: 0.9, top_k: 30, repetition_penalty: 1.005, penalty_window: 100,
       },
     },
     3: { class_type: "PreviewAny", inputs: { source: ["2", 0] } },
@@ -830,7 +943,11 @@ async function compose() {
   await queue(prompt, COMPOSE_LABELS, async (outputs) => {
     const abc = outputs[3]?.text?.[0] ?? "";
     if (!abc.trim()) throw new Error("YuE2 no devolvió ABC.");
-    if (!await updateProject(owner, (target) => { target.abc = abc; })) return;
+    const replaced = (target) => {
+      keepAbcVersion(target, `antes de componer con semilla ${seed}`);
+      target.abc = abc;
+    };
+    if (!await updateProject(owner, replaced)) return;
     $("abc").value = abc;
     await refreshSections().catch((error) => status(`ABC generado; revisa las secciones: ${error.message}`, null, true));
     await uniqueSectionNames();
@@ -1866,6 +1983,14 @@ async function init() {
   });
   $("analyze").onclick = guard(analyze);
   $("compose").onclick = guard(compose);
+  $("compose-dice").onclick = () => { $("compose-seed").value = Math.floor(Math.random() * 2 ** 31); readForm(); };
+  $("abc-versions").onchange = guard(async (event) => {
+    if (event.target.value === "") return;
+    readForm();
+    setAbc(project.abcVersions[Number(event.target.value)].abc, "antes de restaurar una versión");
+    await refreshSections();
+    status("Versión del ABC restaurada; la que había quedó en las versiones.", 1);
+  });
   $("render-song").onclick = guard(() => render(null));
   $("render-section").onclick = guard(() => render([selected]));
   $("export-mix").onclick = guard(exportMix);

@@ -43,6 +43,13 @@
     <label>Letra (si está vacía al analizar, se transcribe con Whisper)<textarea id="lyrics" rows="12"></textarea></label>
     <label>ABC<textarea id="abc" rows="8" spellcheck="false"></textarea></label>
     <div class="row">
+      <label>Semilla para componer el ABC<input id="compose-seed" type="number" min="0"></label>
+      <button id="compose-dice" title="Semilla nueva: «Generar ABC» saldrá con otra melodía">🎲</button>
+      <label>Temperatura<input id="compose-temperature" type="number" step="0.05" min="0" title="Más alta = melodías menos previsibles (0.7 por defecto)"></label>
+    </div>
+    <label class="switch" title="Pasa a YuE2 la tonalidad, el compás y el tempo del ABC actual; la melodía es nueva"><input id="compose-keep" type="checkbox"> Conservar tonalidad, compás y tempo del ABC actual</label>
+    <label>Versiones anteriores del ABC (elige una para restaurarla)<select id="abc-versions"></select></label>
+    <div class="row">
       <label>Semilla<input id="seed" type="number" min="0" value="60"></label>
       <label>Modo<select id="mode"><option>full</option><option>melody</option></select></label>
     </div>

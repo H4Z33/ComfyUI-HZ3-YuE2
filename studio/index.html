@@ -12,7 +12,6 @@
   <button id="toggle-song" title="Mostrar u ocultar el panel de la canción">Canción</button>
   <select id="album-list" title="Álbum de la canción: agrupa canciones y guarda su catálogo de estilos, el chat y la bitácora"></select>
   <select id="project-list" title="Proyectos guardados"></select>
-  <input id="project-name" placeholder="nombre del proyecto" maxlength="64">
   <button id="open-catalog" title="Todas las canciones guardadas">Catálogo</button>
   <button id="open-styles" title="Cantantes, grupos y géneros del álbum">Estilos</button>
   <button id="save-project">Guardar</button>
@@ -56,7 +55,7 @@
       <label>Temperatura<input id="compose-temperature" type="number" step="0.05" min="0" title="Más alta = melodías menos previsibles (0.7 por defecto)"></label>
     </div>
     <label class="switch" title="YuE2 compone a partir del encabezado del ABC actual (K:, M:, Q:): misma tonalidad, compás y tempo, melodía nueva"><input id="compose-keep" type="checkbox"> Conservar tonalidad, compás y tempo del ABC actual</label>
-    <button id="abc-instrumental" title="Toda la canción como instrumental: la melodía cantada pasa a la línea instrumental, la voz queda en silencio con sus acordes y la letra se vuelve (instrumental). Se deshace restaurando la versión anterior.">Convertir en instrumental (voz en silencio)</button>
+    <label title="Cada «Generar canción» completo guarda aquí todo lo que produjo ese take: estilo, letra, ABC, semillas, cantantes, comping y mezcla">Versiones de la canción<select id="song-versions"></select></label>
     <label>Versiones anteriores del ABC (elige una para restaurarla)<select id="abc-versions"></select></label>
     <div class="row">
       <label>Semilla<input id="seed" type="number" min="0" value="60"></label>
@@ -93,7 +92,7 @@
       <div id="playhead" class="playhead"></div>
     </div>
     <div id="inspector" class="inspector hidden">
-      <h3 id="inspector-title"></h3>
+      <header class="inspector-head"><h3 id="inspector-title"></h3><button id="close-inspector" title="Cerrar el inspector">✕</button></header>
       <p id="section-arrangement" class="note"></p>
       <div class="row">
         <label>Nombre<input id="section-name" maxlength="100"></label>
@@ -120,13 +119,14 @@
       <div id="section-takes" class="takes"></div>
       <div class="row">
         <button id="section-score-play" title="Escucha la partitura de esta sección (melodía, línea instrumental y acordes) con un sintetizador simple">▶ Partitura</button>
+        <button id="section-instrumental" title="Esta sección sin voz: su melodía pasa a la línea instrumental, la voz queda en silencio con sus acordes y su letra se vuelve (instrumental). Se deshace con las versiones del ABC.">Instrumental (sin voz)</button>
         <button id="section-free" title="Deja la línea vocal de esta sección en silencios (conserva acordes y duración): YuE2 dice la letra a su manera, hablada o rapeada, en vez de cantar una melodía escrita. El ABC anterior queda en las versiones.">Melodía libre (hablado / rap)</button>
         <button id="section-recompose" title="Conserva el ABC anterior a esta sección y YuE2 compone esta sección y todo lo que sigue (semilla y temperatura de «Componer ABC»)">Recomponer el ABC desde aquí</button>
         <button id="render-section" class="primary">Regenerar sección</button>
       </div>
     </div>
     <div id="voice-inspector" class="inspector hidden">
-      <h3 id="voice-title"></h3>
+      <header class="inspector-head"><h3 id="voice-title"></h3><button id="close-voice-inspector" title="Cerrar el inspector">✕</button></header>
       <div class="row">
         <label>Nombre<input id="voice-name" maxlength="40"></label>
         <label>Línea que canta<select id="voice-source">

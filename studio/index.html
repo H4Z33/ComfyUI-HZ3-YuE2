@@ -201,9 +201,24 @@
     <span><button id="add-style">+ Estilo</button> <button id="close-styles">Cerrar</button></span></header>
   <p class="note">Un cantante se elige por sección en el timeline de la voz principal: su sección pasa a su registro en el ABC, su etiqueta de la letra dice quién canta y los cantantes de la canción se declaran en el estilo (así arma YuE2 los duetos). Una voz extra tiene un solo cantante. Un grupo o género se elige como estilo base de la canción. Las canciones guardan la referencia: editar un estilo aquí cambia todas las que lo usan.</p>
   <table>
-    <thead><tr><th>Nombre</th><th>Tipo</th><th>Registro</th><th>Texto de estilo (YuE2, en inglés)</th><th></th></tr></thead>
+    <thead><tr><th>Nombre</th><th>Tipo</th><th>Registro</th><th>Texto de estilo (YuE2, en inglés)</th><th>LoRA de voz · fuerza</th><th></th></tr></thead>
     <tbody id="style-rows"></tbody>
   </table>
+</dialog>
+<dialog id="freeze" class="catalog">
+  <header><strong id="freeze-title">Congelar voz</strong><button id="close-freeze">Cerrar</button></header>
+  <section class="album-detail">
+    <p class="note">Elige audios generados donde canta este cantante (takes o voces extra de la canción abierta; escúchalos con ▶). Se juntan en un solo audio y se entrena un LoRA con la letra y el estilo de la canción; al terminar queda asignado al cantante. El texto del estilo no decide la voz en YuE2: el LoRA sí la acerca.</p>
+    <div id="freeze-clips" class="takes"></div>
+    <div class="row">
+      <label>Tipo<select id="freeze-mode">
+        <option value="joint (voice + style) [Recommended]">Voz + estilo (joint, recomendado)</option>
+        <option value="voice (timbre / acoustic)">Solo timbre (voice)</option>
+      </select></label>
+      <label>Pasos<input id="freeze-steps" type="number" min="5" max="2000" step="5" value="100"></label>
+      <button id="freeze-train" class="primary">Entrenar LoRA</button>
+    </div>
+  </section>
 </dialog>
 <script src="/hz3/studio/static/studio.js"></script>
 </body>

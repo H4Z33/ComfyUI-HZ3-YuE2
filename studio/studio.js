@@ -99,6 +99,7 @@ const clientId = crypto.randomUUID();
 
 let project = newProject();
 let album = { name: DEFAULT_ALBUM, styles: [], chat: [], log: [] };
+let loras = [];  // YuE2 LoRAs ComfyUI can load: { name, trigger, type }
 let catalog = [];
 let sections = [];
 let score = null;
@@ -444,6 +445,99 @@ async function setSectionSinger(name, id) {
   return octaves;
 }
 
+// A LoRA patches the whole render (both the token model and the acoustic model), so one render carries at most
+// one singer's LoRA; another singer with a LoRA sings as an extra voice, which is a render of its own.
+function withSingerLora(prompt, singers) {
+  const voiced = [...new Set(singers.filter((singer) => singer?.lora?.name))];
+  if (voiced.length > 1) {
+    throw new Error(`${voiced.map((singer) => singer.name).join(" y ")} tienen LoRA: un render lleva un solo LoRA; canta a uno como voz extra.`);
+  }
+  const singer = voiced[0];
+  if (!singer) return prompt;
+  const { name, trigger, strength } = singer.lora;
+  prompt[21] = { class_type: "LoraLoader", inputs: { model: ["1", 0], clip: ["1", 1], lora_name: name, strength_model: strength, strength_clip: strength } };
+  prompt[2].inputs.clip = ["21", 1];
+  prompt[4].inputs.model = ["21", 0];
+  if (trigger) {
+    prompt[2].inputs.style = `${trigger}, ${prompt[2].inputs.style}`;
+    prompt[2].inputs.section_styles = prompt[2].inputs.section_styles.split("\n").map((line) => line.replace(/^([^:]+:\s*)/, `$1${trigger}, `)).join("\n");
+  }
+  return prompt;
+}
+
+// ---------- freezing a voice: a LoRA trained on audio already generated for a singer
+
+let freezing = null;
+
+function freezeClips() {
+  const clips = [];
+  for (const take of project.takes) {
+    if (take.files.mix) clips.push({ label: `Take ${take.id} · mezcla`, file: take.files.mix });
+    if (take.files.vocals) clips.push({ label: `Take ${take.id} · solo voz`, file: take.files.vocals });
+  }
+  for (const voice of project.voices) {
+    if (voice.mixFile) clips.push({ label: `${voice.name} · mezcla`, file: voice.mixFile });
+    if (voice.file) clips.push({ label: `${voice.name} · solo voz`, file: voice.file });
+  }
+  return clips;
+}
+
+function openFreeze(singer) {
+  freezing = singer;
+  $("freeze-title").textContent = `Congelar la voz de ${singer.name}`;
+  const clips = freezeClips();
+  $("freeze-clips").innerHTML = clips.length ? "" : `<p class="note">Esta canción no tiene audios generados todavía: genera takes o voces con ${escapeHtml(singer.name)} y vuelve aquí.</p>`;
+  for (const clip of clips) {
+    const row = document.createElement("label");
+    row.className = "switch";
+    row.innerHTML = `<input type="checkbox"> <button type="button" title="Escuchar">▶</button> ${escapeHtml(clip.label)}`;
+    row.querySelector("input").clip = clip;
+    row.querySelector("button").onclick = (event) => { event.preventDefault(); new Audio(fileUrl(clip.file)).play(); };
+    $("freeze-clips").append(row);
+  }
+  $("freeze").showModal();
+}
+
+async function freezeVoice() {
+  const singer = freezing;
+  const files = [...$("freeze-clips").querySelectorAll("input:checked")].map((box) => box.clip.file);
+  if (!files.length) throw new Error("Elige al menos un audio con la voz que quieres congelar.");
+  readForm();
+  const slug = singer.name.normalize("NFKD").replace(/[^\w]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase() || "voz";
+  loras = (await api("/hz3/studio/loras")).loras;
+  // A new version never overwrites an earlier LoRA of the same singer.
+  const base = (version) => `hz3_${slug}${version > 1 ? `_v${version}` : ""}`;
+  let version = 1;
+  while (loras.some((lora) => lora.name.replace(/^.*[\\/]/, "") === `${base(version)}.safetensors`)) version++;
+  const name = base(version);
+  const trigger = `${slug}_voice`;
+  const { filename } = await postJson("/hz3/studio/stage", { name, files });
+  const prompt = {
+    1: { class_type: "LoadAudio", inputs: { audio: filename } },
+    2: { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: project.ckpt } },
+    3: {
+      class_type: "HZ3_YuE2_AudioToLoRA",
+      inputs: {
+        audio: ["1", 0], mode: $("freeze-mode").value, lora_name: name, trigger, steps: Number($("freeze-steps").value) || 100,
+        rank: 32, learning_rate: 0.0005, save_to_loras_folder: true, alpha: 64, style_caption: globalStyle(), lyrics: project.lyrics,
+        model: ["2", 0], clip: ["2", 1], vae: ["2", 2], custom_output_dir: "",
+      },
+    },
+  };
+  $("freeze").close();
+  await queue(prompt, { 3: `Entrenando el LoRA de ${singer.name}` }, async () => {
+    loras = (await api("/hz3/studio/loras")).loras;
+    const lora = loras.find((item) => item.name.replace(/^.*[\\/]/, "") === `${name}.safetensors`);
+    if (!lora) throw new Error("El entrenamiento terminó sin LoRA.");
+    singer.lora = { name: lora.name, trigger: lora.trigger || trigger, strength: 1 };
+    await saveAlbum();
+    remember(`Voz de «${singer.name}» congelada en ${lora.name} (${files.length} audios)`);
+    if ($("styles").open) drawStyles();
+    status(`LoRA ${lora.name} listo y asignado a ${singer.name} (disparador ${singer.lora.trigger}).`, 1);
+  });
+  status(`Entrenamiento del LoRA de ${singer.name} en cola (${files.length} audios).`, 0);
+}
+
 function referencedStyles() {
   const ids = new Set([project.baseStyle, ...Object.values(project.sectionSingers), ...project.voices.map((voice) => voice.singer)]);
   return album.styles.filter((style) => ids.has(style.id));
@@ -510,15 +604,24 @@ function remember(text) {
 function drawStyles() {
   $("styles-album").textContent = `· ${album.name}`;
   const rows = $("style-rows");
-  rows.innerHTML = album.styles.length ? "" : `<tr><td colspan="5" class="style">Sin estilos todavía: agrega cantantes, grupos y géneros, o pídeselos al asistente.</td></tr>`;
+  rows.innerHTML = album.styles.length ? "" : `<tr><td colspan="6" class="style">Sin estilos todavía: agrega cantantes, grupos y géneros, o pídeselos al asistente.</td></tr>`;
   for (const style of album.styles) {
     const row = document.createElement("tr");
     row.innerHTML = `<td><input maxlength="60"></td>
       <td><select class="kind">${Object.entries(STYLE_KINDS).map(([kind, label]) => `<option value="${kind}">${label}</option>`).join("")}</select></td>
       <td><select class="register" title="Registro al que se lleva la melodía de las secciones que canta">${Object.entries(REGISTERS).map(([key, { label }]) => `<option value="${key}">${label}</option>`).join("")}</select></td>
       <td><textarea rows="2" placeholder="p. ej. Spanish female soprano lead vocal, warm and breathy"></textarea></td>
-      <td><button>Eliminar</button></td>`;
+      <td class="lora"><select class="lora-name" title="LoRA de voz que se aplica al renderizar con este cantante">
+          <option value="">— sin LoRA</option>${loras.map((lora) => `<option value="${escapeHtml(lora.name)}">${escapeHtml(lora.name.replace(/^.*[\\/]/, ""))}</option>`).join("")}</select>
+        <input class="lora-strength" type="number" min="0" max="2" step="0.05" title="Fuerza del LoRA">
+        <button class="freeze" title="Entrena un LoRA con audios ya generados de este cantante">Congelar voz…</button></td>
+      <td><button class="delete">Eliminar</button></td>`;
     const [name, kind, register, text] = [row.querySelector("input"), row.querySelector(".kind"), row.querySelector(".register"), row.querySelector("textarea")];
+    const [loraName, loraStrength] = [row.querySelector(".lora-name"), row.querySelector(".lora-strength")];
+    loraName.value = style.lora?.name ?? "";
+    loraStrength.value = style.lora?.strength ?? 1;
+    for (const input of [loraName, loraStrength, row.querySelector(".freeze")]) input.disabled = style.kind !== "singer";
+    row.querySelector(".freeze").onclick = () => openFreeze(style);
     name.value = style.name;
     kind.value = style.kind;
     text.value = style.text;
@@ -528,13 +631,17 @@ function drawStyles() {
       Object.assign(style, { name: name.value.trim() || style.name, kind: kind.value, text: text.value.trim() });
       if (style.kind === "singer") style.register = register.value || singerRegister(style);
       else delete style.register;
+      // The trigger comes from the LoRA file itself, written into it when it was trained.
+      const lora = style.kind === "singer" && loras.find((item) => item.name === loraName.value);
+      if (lora) style.lora = { name: lora.name, trigger: lora.trigger, strength: Number(loraStrength.value) || 1 };
+      else delete style.lora;
       remember(`Estilo «${style.name}» (${STYLE_KINDS[style.kind]}) editado`);
       drawStyles();
       writeForm();
       draw();
     });
-    for (const input of [name, kind, register, text]) input.onchange = update;
-    row.querySelector("button").onclick = guard(async () => {
+    for (const input of [name, kind, register, text, loraName, loraStrength]) input.onchange = update;
+    row.querySelector(".delete").onclick = guard(async () => {
       album.styles = album.styles.filter((item) => item !== style);
       remember(`Estilo «${style.name}» eliminado`);
       drawStyles();
@@ -1109,6 +1216,7 @@ function buildPrompt(prefix, kept) {
       saves[13 + index] = voice;
     });
   }
+  withSingerLora(prompt, sections.map((section) => catalogStyle(project.sectionSingers[section.name])));
   return { prompt, saves };
 }
 
@@ -1791,7 +1899,9 @@ async function renderVoice(voice) {
     5: { class_type: "VAEDecodeAudioTiled", inputs: { samples: ["4", 0], vae: ["1", 2], tile_size: 256, overlap: 32 } },
     7: { class_type: "AudioSeparation", inputs: { audio: ["5", 0] } },
     8: { class_type: "SaveAudio", inputs: { audio: ["7", 3], filename_prefix: `HZ3-Studio/${project.name}/voice-${voice.id}/vocals` } },
+    9: { class_type: "SaveAudio", inputs: { audio: ["5", 0], filename_prefix: `HZ3-Studio/${project.name}/voice-${voice.id}/mix` } },
   };
+  withSingerLora(prompt, [catalogStyle(voice.singer)]);
   if (line !== undefined) {
     // The harmony line keeps the song's bars and section markers, so its sections match the lead's.
     prompt[20] = {
@@ -1806,7 +1916,7 @@ async function renderVoice(voice) {
     if (!file) throw new Error("La voz terminó sin audio.");
     const current = await updateProject(owner, (target) => {
       const stored = target.voices.find((item) => item.id === voice.id);
-      if (stored) stored.file = file;
+      if (stored) Object.assign(stored, { file, mixFile: outputs[9]?.audio?.[0] ?? null });
     });
     if (!current) return;  // aligned when that project is open again ("Alinear con la voz principal")
     await loadUrl(fileUrl(file));
@@ -2316,6 +2426,7 @@ async function init() {
   await listAlbums();
   writeForm();
   await listProjects();
+  loras = (await api("/hz3/studio/loras")).loras;
   connectSocket();
 
   for (const id of ["lyrics", "abc"]) $(id).addEventListener("input", scheduleSections);
@@ -2356,7 +2467,13 @@ async function init() {
   $("album-notes").onchange = guard((event) => saveAlbumNotes(event.target.value));
   $("close-catalog").onclick = () => $("catalog").close();
   $("album-list").onchange = guard((event) => moveToAlbum(event.target.value));
-  $("open-styles").onclick = () => { drawStyles(); $("styles").showModal(); };
+  $("open-styles").onclick = guard(async () => {
+    loras = (await api("/hz3/studio/loras")).loras;
+    drawStyles();
+    $("styles").showModal();
+  });
+  $("close-freeze").onclick = () => $("freeze").close();
+  $("freeze-train").onclick = guard(freezeVoice);
   $("close-styles").onclick = () => $("styles").close();
   $("add-style").onclick = guard(async () => {
     album.styles.push({ id: crypto.randomUUID().slice(0, 8), name: `Cantante ${album.styles.length + 1}`, kind: "singer", text: "" });

@@ -20,7 +20,11 @@ import urllib.request
 import zipfile
 
 from aiohttp import web
+import numpy as np
+from safetensors import safe_open
 import soundfile
+import torch
+import torchaudio
 
 import folder_paths
 from comfy.text_encoders.yue2 import FRAMES_PER_SECOND
@@ -176,6 +180,42 @@ def _discard(path):
     target = _studio_folder() / "deleted" / f"{path.stem} {time.strftime('%Y%m%d-%H%M%S')}{path.suffix}"
     target.parent.mkdir(parents=True, exist_ok=True)
     path.replace(target)
+
+
+def _output_file(file):
+    """A ComfyUI output file named by the page, kept inside the output folder."""
+    output = Path(folder_paths.get_output_directory()).resolve()
+    path = (output / file["subfolder"] / file["filename"]).resolve()
+    if not path.is_relative_to(output) or not path.is_file():
+        raise web.HTTPBadRequest(text="Audio file not found in the output folder.")
+    return path
+
+
+def _yue2_loras():
+    """The YuE2 LoRAs ComfyUI can load, with the trigger and kind written into them when they were trained."""
+    loras = []
+    for name in folder_paths.get_filename_list("loras"):
+        with safe_open(folder_paths.get_full_path("loras", name), framework="pt") as handle:
+            metadata = handle.metadata() or {}
+        if metadata.get("format") == "comfyui-yue2-lora":
+            loras.append({"name": name, "trigger": metadata.get("trigger", ""), "type": metadata.get("lora_type", "")})
+    return loras
+
+
+def _stage_audio(paths, name):
+    """Join generated clips into one stereo FLAC in the input folder, where LoadAudio reads it for LoRA training.
+
+    Mixes come out of YuE2 at 48 kHz and separated vocals at the separator's rate; all follow the first clip's rate.
+    """
+    parts, rate = [], None
+    for path in paths:
+        wave, sample_rate = soundfile.read(str(path), dtype="float32", always_2d=True)
+        wave = torch.from_numpy(np.repeat(wave, 2, axis=1) if wave.shape[1] == 1 else wave[:, :2]).T
+        rate = rate or sample_rate
+        parts.append(torchaudio.functional.resample(wave, sample_rate, rate) if sample_rate != rate else wave)
+    filename = f"hz3studio_lora_{name}.flac"
+    soundfile.write(str(Path(folder_paths.get_input_directory()) / filename), torch.cat(parts, dim=1).T.numpy(), rate, format="FLAC")
+    return filename
 
 
 def _reference_themes():
@@ -379,12 +419,23 @@ def register(routes):
     @routes.post("/hz3/studio/warp")
     async def warp(request):
         body = await request.json()
-        output = Path(folder_paths.get_output_directory()).resolve()
-        path = (output / body["file"]["subfolder"] / body["file"]["filename"]).resolve()
-        if not path.is_relative_to(output) or not path.is_file():
-            raise web.HTTPBadRequest(text="Vocal file not found in the output folder.")
-        knots = await asyncio.to_thread(_warp, path, body["abc"], body.get("line", "lead"))
+        knots = await asyncio.to_thread(_warp, _output_file(body["file"]), body["abc"], body.get("line", "lead"))
         return web.json_response({"abc": knots[0].tolist(), "audio": knots[1].tolist(), "sure": knots[2].tolist()})
+
+    @routes.get("/hz3/studio/loras")
+    async def loras(request):
+        return web.json_response({"loras": await asyncio.to_thread(_yue2_loras)})
+
+    @routes.post("/hz3/studio/stage")
+    async def stage(request):
+        body = await request.json()
+        name = str(body.get("name", ""))
+        if not PROJECT_NAME.fullmatch(name):
+            raise web.HTTPBadRequest(text="Invalid LoRA name.")
+        if not body.get("files"):
+            raise web.HTTPBadRequest(text="Choose at least one audio.")
+        paths = [_output_file(file) for file in body["files"]]
+        return web.json_response({"filename": await asyncio.to_thread(_stage_audio, paths, name)})
 
     @routes.post("/hz3/studio/classical")
     async def classical(request):

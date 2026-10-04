@@ -31,7 +31,7 @@ main { flex: 1; display: flex; min-height: 0; }
 #clock { font-variant-numeric: tabular-nums; min-width: 110px; }
 .zoom { flex-direction: row; align-items: center; gap: 6px; margin-left: auto; }
 .timeline { position: relative; flex: 1; overflow: auto; }
-.lanes { position: relative; }
+.lanes { position: relative; width: max-content; min-width: 100%; }
 .lane { display: flex; height: 64px; border-bottom: 1px solid var(--line); }
 .lane.ruler { height: 24px; position: sticky; top: 0; z-index: 3; background: var(--bg); cursor: pointer; }
 .lane.sections { height: 40px; }
@@ -132,3 +132,12 @@ details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap:
 .lyric-arrows { position: absolute; bottom: 2px; transform: translateX(-50%); display: flex; gap: 1px; z-index: 2; }
 .lyric-arrows button { padding: 0 3px; font-size: 10px; line-height: 14px; opacity: .75; }
 .lyric-arrows button:hover { opacity: 1; }
+.lane.instrument { height: 120px; }
+.lane.instrument canvas { cursor: crosshair; }
+#track-inspector > * { grid-column: 1 / -1; }
+#track-inspector .hidden { display: none; }
+.instrument-panel { display: flex; flex-direction: column; gap: 6px; }
+.hint { margin: 0; color: var(--muted); font-size: 12px; }
+.count { color: var(--muted); font-size: 12px; align-self: center; }
+.checks { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.checks label { flex-direction: row; gap: 4px; align-items: center; color: var(--text); }

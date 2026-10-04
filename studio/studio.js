@@ -24,7 +24,7 @@ const VOICE_LINES = { tenor: 1, baritone: 2, bass: 3 };
 
 // Extra singers are whole separate generations, aligned to the lead by audio.
 function allTracks() {
-  return [...TRACKS, ...project.voices.map((voice) => ({ id: `voice-${voice.id}`, name: voice.name, gain: voice.autoGain ?? 0.8, voice }))];
+  return [...TRACKS, ...project.voices.map((voice) => ({ id: `voice-${voice.id}`, name: voice.name, gain: voice.autoGain ?? 0.8, voice })), ...instrumentTracks()];
 }
 const FADE = 0.3;
 const PEAKS_PER_SECOND = 100;
@@ -90,10 +90,11 @@ const ASSISTANT_TOOLS = [
   tool("select_take", "Make a section play from one of its takes.", { section: str("section name"), take: num("take id") }, ["section", "take"]),
   tool("arrange_harmonies", "Let the harmony arranger switch harmony tracks per section.", { instructions: str("arranging instructions") }),
   tool("analyze_audio", "Queue the analysis of the source audio (replaces style, lyrics and ABC)."),
-  tool("render_song", "Queue a take of every edited or never-rendered section."),
+  tool("render_song", "Queue a take of the whole song (every section is sung again)."),
   tool("render_sections", "Queue a new take of these sections.", { sections: { type: "array", items: { type: "string" } } }, ["sections"]),
   tool("render_voice", "Queue the generation of an extra voice.", { voice: str("voice name") }, ["voice"]),
   tool("save_song", "Save the song."),
+  ...dawTools(),
 ];
 
 const $ = (id) => document.getElementById(id);
@@ -121,7 +122,7 @@ function newProject() {
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
-    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, mixer: {}, voices: [],
+    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, mixer: {}, voices: [], instruments: [], fx: {},
     arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {}, classicalPlan: {}, classicalReport: [],
   };
 }
@@ -245,6 +246,7 @@ function renameKeys(renames) {
   const maps = [project.comp, project.sectionSeeds, project.sectionStyles, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
   for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds, take.sectionStyles ?? {}, take.sectionAbc ?? {}, take.sectionTokens ?? {});
   for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
+  for (const entry of Object.values(project.mixer)) if (entry.offsets) maps.push(entry.offsets);
   for (const map of maps) {
     const values = renames.map(([from]) => map[from]);
     for (const [from] of renames) delete map[from];
@@ -826,6 +828,7 @@ function assistantState() {
         name: voice.name, source: voice.source, octave: voice.octave, role: voice.role, style: voice.style, generated: Boolean(voice.file),
         singer: styleName(voice.singer),
       })),
+      ...dawState(),
     },
   };
 }
@@ -1004,8 +1007,11 @@ async function runAction(action) {
     case "save_song":
       await saveProject();
       return "Canción guardada";
-    default:
-      throw new Error("acción desconocida");
+    default: {
+      const result = await runDawAction(action);
+      if (result === undefined) throw new Error("acción desconocida");
+      return result;
+    }
   }
 }
 
@@ -1316,7 +1322,7 @@ async function sectionToInstrumental(name) {
 
 // What a song version holds: everything a render is made from, frozen only when the producer asks ("Guardar versión").
 const SONG_STATE = ["style", "baseStyle", "lora", "lyrics", "abc", "seed", "sampling", "harmonize", "harmonyVoices",
-  "sectionSeeds", "sectionStyles", "sectionSingers", "classicalPlan", "arrangement", "comp", "trackOn", "mixer", "voices"];
+  "sectionSeeds", "sectionStyles", "sectionSingers", "classicalPlan", "arrangement", "comp", "trackOn", "mixer", "voices", "instruments", "fx"];
 
 function songSnapshot(source, label) {
   return { at: Date.now(), label, ...JSON.parse(JSON.stringify(Object.fromEntries(SONG_STATE.map((key) => [key, source[key]])))) };
@@ -1438,7 +1444,10 @@ function buildPrompt(prefix, kept) {
   const saves = { 6: "mix", 8: "vocals", 11: "instrumental" };
   if (project.harmonize && project.harmonyVoices.length) {
     prompt[12] = { class_type: "HZ3_YuE2_VocalHarmonizer", inputs: { vocals: ["7", 3], score_abc: project.abc } };
-    if (!hasChords(project.abc)) Object.assign(prompt, hearChords(["5", 0], 30), { 12: { ...prompt[12], inputs: { ...prompt[12].inputs, heard_abc: ["31", 0] } } });
+    if (!hasChords(project.abc)) {
+      Object.assign(prompt, hearChords(["5", 0], 30), { 32: { class_type: "PreviewAny", inputs: { source: ["31", 0] } } });
+      prompt[12].inputs.heard_abc = ["31", 0];
+    }
     VOICES.forEach((voice, index) => {
       if (!project.harmonyVoices.includes(voice)) return;
       prompt[13 + index] = { class_type: "SaveAudio", inputs: { audio: ["12", index], filename_prefix: `${prefix}/${voice}` } };
@@ -1549,6 +1558,7 @@ async function render(targets, reimagine = false) {
     }
     if (!take.files.vocals) throw new Error("La generación terminó sin audio.");
     take.sectionTokens = outputs[2]?.section_tokens?.[0] ?? {};
+    if (outputs[32]?.text?.[0]) take.heardAbc = outputs[32].text[0];
     // The take's tokens in song order (section renames reorder the keys above).
     take.tokenStream = Object.values(take.sectionTokens);
     const current = await updateProject(owner, (target) => {
@@ -1603,7 +1613,7 @@ async function loadUrl(url) {
 }
 
 async function loadTake(take) {
-  await Promise.all(Object.entries(take.files).filter(([track]) => track !== "mix").map(([, file]) => loadUrl(fileUrl(file))));
+  await Promise.all(Object.entries(take.files).filter(([track]) => track !== "mix" && track !== "vocalsOriginal").map(([, file]) => loadUrl(fileUrl(file))));
 }
 
 async function loadSource() {
@@ -1688,6 +1698,7 @@ function buildGraph(target, destination, from, start) {
   into.gain.value = 0.5;
   out.gain.value = 2;
   limiter.connect(into).connect(ceiling).connect(out).connect(destination);
+  const buses = effectBuses(target, limiter);
   const connect = (entry, trackGain, values) => {
     if (!entry || from >= entry.buffer.duration) return;
     const source = target.createBufferSource();
@@ -1698,21 +1709,19 @@ function buildGraph(target, destination, from, start) {
     source.start(start, from);
     sources.push(source);
   };
-  // A voice plays section by section, each read at its own measured shift.
-  const connectVoice = (voice, trackGain) => {
-    const entry = voice.file && buffers.get(fileUrl(voice.file));
+  // Section by section, each read at its own shift (seconds into the file ahead of the timeline).
+  const connectSections = (entry, trackGain, parts) => {
     if (!entry) return;
     const at = (time) => start + time - from;
-    for (const section of sections) {
-      if (!voiceEnabled(voice, section) || section.end + FADE / 2 <= from) continue;
+    for (const { section, shift, level } of parts) {
+      if (section.end + FADE / 2 <= from) continue;
       const begin = Math.max(section.start - FADE / 2, from);
       const end = section.end + FADE / 2;
-      const offset = begin + voiceShift(voice, section);
+      const offset = begin + shift;
       if (offset >= entry.buffer.duration) continue;
       const source = target.createBufferSource();
       source.buffer = entry.buffer;
       const gain = target.createGain();
-      const level = voice.sectionGains?.[section.name] ?? 1;
       gain.gain.setValueAtTime(0, at(begin));
       gain.gain.linearRampToValueAtTime(level, at(Math.min(begin + FADE, end)));
       gain.gain.setValueAtTime(level, at(Math.max(end - FADE, begin + FADE)));
@@ -1722,14 +1731,27 @@ function buildGraph(target, destination, from, start) {
       sources.push(source);
     }
   };
+  // A voice plays at its own measured shift per section.
+  const connectVoice = (voice, trackGain) => connectSections(voice.file && buffers.get(fileUrl(voice.file)), trackGain,
+    sections.filter((section) => voiceEnabled(voice, section))
+      .map((section) => ({ section, shift: voiceShift(voice, section), level: voice.sectionGains?.[section.name] ?? 1 })));
   for (const track of allTracks()) {
     const trackGain = target.createGain();
     trackGain.gain.value = mixerGain(track);
-    trackGain.connect(limiter);
+    trackChain(target, track, trackGain, limiter, buses, start, from);
     trackGains[track.id] = trackGain;
     if (track.source) connect(sourceEntry(), trackGain, null);
     else if (track.voice) connectVoice(track.voice, trackGain);
-    else for (const takeId of takeIds) connect(trackBuffer(track.id, takeId), trackGain, sectionGains(track.id, takeId));
+    else if (track.instrument) connect(instrumentEntry(track.instrument), trackGain, null);
+    else {
+      // A take track nudged in time (ms per section, + = later) plays section by section.
+      const offsets = trackFx(track.id).offsets ?? {};
+      for (const takeId of takeIds) {
+        if (!Object.values(offsets).some(Boolean)) connect(trackBuffer(track.id, takeId), trackGain, sectionGains(track.id, takeId));
+        else connectSections(trackBuffer(track.id, takeId), trackGain, sections.filter((section) => project.comp[section.name] === takeId && trackEnabled(track.id, section))
+          .map((section) => ({ section, shift: -(offsets[section.name] ?? 0), level: 1 })));
+      }
+    }
   }
   return { sources, trackGains };
 }
@@ -1847,7 +1869,7 @@ function lane(className, head) {
 
 function draw() {
   $("lanes").innerHTML = "";
-  if (!duration()) { updatePlayhead(); drawInspector(); drawVoiceInspector(); return; }
+  if (!duration()) { updatePlayhead(); drawInspector(); drawVoiceInspector(); drawTrackInspector(); return; }
   const ruler = lane("ruler", "m:ss");
   const step = pxPerSecond >= 20 ? 5 : pxPerSecond >= 8 ? 10 : 30;
   for (let time = 0; time < duration(); time += step) {
@@ -1861,13 +1883,15 @@ function draw() {
   if (sections.length) drawSections();
   if (sections.length) drawLyrics();
   if (score) drawScore();
-  for (const track of allTracks().filter((track) => !track.harmony && !track.voice)) drawTrack(track);
+  for (const track of allTracks().filter((track) => !track.harmony && !track.voice && !track.instrument)) drawTrack(track);
   drawHarmonyHeader();
   if (!harmoniesCollapsed) for (const track of TRACKS.filter((track) => track.harmony)) drawTrack(track);
   for (const track of allTracks().filter((track) => track.voice)) drawTrack(track);
+  for (const track of instrumentTracks()) drawTrack(track);
   updatePlayhead();
   drawInspector();
   drawVoiceInspector();
+  drawTrackInspector();
 }
 
 // Each section's lyrics, editable in place, so words can be moved to the ABC section that should sing them.
@@ -1963,6 +1987,7 @@ async function regenerateHarmonies() {
       const mix = await postJson("/hz3/studio/stage", { name: `harmony_mix_${take.id}_${Date.now().toString(36)}`, files: [take.files.mix] });
       Object.assign(prompt, { 20: { class_type: "LoadAudio", inputs: { audio: mix.filename } } }, hearChords(["20", 0], 21));
       prompt[2].inputs.heard_abc = ["22", 0];
+      prompt[23] = { class_type: "PreviewAny", inputs: { source: ["22", 0] } };
     }
     const saves = {};
     VOICES.forEach((voice, index) => {
@@ -1975,6 +2000,7 @@ async function regenerateHarmonies() {
       const current = await updateProject(owner, (target) => {
         const stored = target.takes.find((item) => item.id === take.id);
         if (stored) Object.assign(stored.files, files);
+        if (stored && outputs[23]?.text?.[0]) stored.heardAbc = outputs[23].text[0];
       });
       if (!current) return;
       await loadTake(takeById(take.id));
@@ -1999,7 +2025,7 @@ function drawSections() {
     const takeId = project.comp[section.name];
     if (takeId) block.insertAdjacentHTML("beforeend", `<span class="take">T${takeId}</span>`);
     if (isEdited(section, index)) block.insertAdjacentHTML("beforeend", `<span class="edited">editado</span>`);
-    block.onclick = () => { selected = section.name; selectedVoice = null; draw(); };
+    block.onclick = () => { selected = section.name; selectedVoice = null; selectedTrack = null; draw(); };
     if (index > 0 && score) {
       const handle = document.createElement("div");
       handle.className = "handle";
@@ -2105,6 +2131,12 @@ function drawTrack(track) {
     <button data-action="mute" class="${muted(track) ? "active" : ""}" title="Silenciar">M</button>
     <button data-action="solo" class="${project.mixer[track.id]?.solo ? "active" : ""}" title="Solo">S</button>
     <input type="range" min="0" max="1.5" step="0.01" value="${project.mixer[track.id]?.gain ?? track.gain}" title="Volumen"></span>`;
+  if (!track.voice) {
+    const name = head.querySelector(".name");
+    name.classList.add("link");
+    name.title = "Volumen, paneo, efectos y ajustes de esta pista";
+    name.onclick = () => { selectedTrack = track.id; selected = null; selectedVoice = null; draw(); };
+  }
   head.querySelector(".generate input")?.addEventListener("change", (event) => {
     project.harmonyVoices = VOICES.filter((voice) => voice === track.id ? event.target.checked : project.harmonyVoices.includes(voice));
     draw();
@@ -2124,7 +2156,11 @@ function drawTrack(track) {
     (project.mixer[track.id] ??= {}).gain = Number(event.target.value);
     applyMixer();
   };
-  const { body } = lane("track", head);
+  const { body } = lane(track.instrument ? "track instrument" : "track", head);
+  if (track.instrument) {
+    drawPianoRoll(track.instrument, body);
+    return;
+  }
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(duration() * pxPerSecond));
   canvas.height = 63;
@@ -2152,7 +2188,7 @@ function drawTrack(track) {
     const name = head.querySelector(".name");
     name.classList.add("link");
     name.title = "Editar, generar o alinear esta voz";
-    name.onclick = () => { selectedVoice = voice.id; selected = null; draw(); };
+    name.onclick = () => { selectedVoice = voice.id; selected = null; selectedTrack = null; draw(); };
     const entry = voice.file && buffers.get(fileUrl(voice.file));
     for (const section of sections) {
       const enabled = voiceEnabled(voice, section);
@@ -3006,6 +3042,8 @@ async function openProject(name) {
   project = { ...newProject(), ...(await api(`/hz3/studio/project?name=${encodeURIComponent(name)}`)) };
   savedName = project.name;
   selected = null;
+  selectedTrack = null;
+  instrumentAudio.clear();
   if (album.name !== project.album) await loadAlbum(project.album);
   await addStylesToAlbum(album.name, project.styles);
   await listAlbums();
@@ -3024,6 +3062,7 @@ async function openProject(name) {
     ? `Proyecto «${project.name}» · secciones con nombre repetido renombradas (${renamed.map(([, to]) => to).join(", ")}): guarda para conservarlo.`
     : `Proyecto «${project.name}» · ${project.takes.length} takes`, 1);
   draw();
+  guard(renderInstruments)();
 }
 
 // ---------- wiring
@@ -3218,6 +3257,7 @@ async function init() {
     draw();
   });
   $("add-voice").onclick = addVoice;
+  wireTrackInspector();
   for (const [id, key] of [["voice-name", "name"], ["voice-source", "source"], ["voice-octave", "octave"], ["voice-role", "role"], ["voice-style", "style"], ["voice-seed", "seed"]]) {
     $(id).addEventListener("change", (event) => {
       const voice = selectedVoiceEntry();

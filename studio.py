@@ -34,6 +34,8 @@ from comfy.text_encoders.yue2 import FRAMES_PER_SECOND
 
 from .abc_score import DURATIONS, TOKEN, parse
 from .classical_lines import abc_phrases, add_lines, load_library
+from .instrument_patterns import pattern_notes
+from .score_lyric_aligner import _model_roots
 from .section_generation import _build_section_specs, _stored_tokens_path
 from .vocal_harmonizer import _time_warp, _track
 from .vocal_harmony import PARTS, harmonize
@@ -226,6 +228,15 @@ def _stage_audio(paths, name):
     return filename
 
 
+def _soundfont_path():
+    """The first .sf2 in a models/soundfonts folder (GeneralUser GS by default)."""
+    for root in _model_roots():
+        found = sorted((root / "soundfonts").glob("*.sf2"))
+        if found:
+            return found[0]
+    return None
+
+
 def _slice_tokens(digests, start, frames):
     """Stored section tokens cut to new section bounds: the frames [start, start + frames) of a take's sections
     played one after another, as a stored token file of their own (None when the take does not reach that far)."""
@@ -368,6 +379,23 @@ def register(routes):
     async def slice_tokens(request):
         body = await request.json()
         return web.json_response({"tokens": [_slice_tokens(item["tokens"], item["start"], item["frames"]) for item in body["slices"]]})
+
+    @routes.get("/hz3/studio/soundfont")
+    async def soundfont(request):
+        path = _soundfont_path()
+        if path is None:
+            raise web.HTTPNotFound(text="No SoundFont found: put a .sf2 file in models/soundfonts.")
+        return web.FileResponse(path, headers={"Cache-Control": "max-age=86400"})
+
+    @routes.post("/hz3/studio/pattern")
+    async def pattern(request):
+        body = await request.json()
+        try:
+            notes, source = pattern_notes(body["abc"], body["pattern"], body["bars"], body.get("octave", 0),
+                                          body.get("velocity", 96), body.get("heard_abc", ""))
+        except ValueError as error:
+            return web.json_response({"error": str(error)}, status=400)
+        return web.json_response({"notes": notes, "chords": source})
 
     # The browser renders the mix as WAV; FLAC is encoded here (browsers have no FLAC encoder).
     @routes.post("/hz3/studio/flac")

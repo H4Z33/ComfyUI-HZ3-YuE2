@@ -260,6 +260,72 @@ def harmonize_audio(waveform, sample_rate, score_abc, heard_abc=""):
     return voices, "\n".join(report)
 
 
+def tune_audio(waveform, sample_rate, score_abc, amount):
+    """The lead pulled toward the ABC melody: each sung note moves `amount` of the way to the written pitch class
+    (in the octave it was sung), or, when the singer chose another note, to the nearest semitone.
+    Unvoiced sound (consonants, breaths) is left as it was."""
+    mono = waveform.mean(0).astype(np.float32)
+    f0 = _track(mono, sample_rate)
+    voiced = ~np.isnan(f0)
+    if not voiced.any():
+        return mono, "No sung notes were detected in the vocal."
+    score = parse(score_abc.strip() + "\n")
+    runs = _note_runs(f0)
+    notes = score.voices["Vocal"].notes
+    abc_times, audio_times, _ = _time_warp(f0, notes, score.bpm)
+    seconds = 60 / score.bpm
+    starts = [float(start) * seconds for start, _, _ in notes]
+    segments, toward_score = [], 0
+    for start, end, _note, actual in runs:
+        middle = float(np.interp((start + end) / 2 * FRAME_SECONDS, audio_times, abc_times))
+        index = bisect_right(starts, middle) - 1
+        target = round(actual)
+        if index >= 0 and middle < starts[index] + float(notes[index][2]) * seconds:
+            written = actual + ((notes[index][1] - actual + 6) % 12) - 6
+            if abs(written - actual) <= 1.5:
+                target, toward_score = written, toward_score + 1
+        segments.append((start, end, (target - actual) * amount))
+    frame_index = np.minimum((np.arange(len(mono)) / sample_rate / FRAME_SECONDS).astype(np.int64), len(f0) - 1)
+    period = sample_rate / np.interp(np.arange(len(f0)), np.flatnonzero(voiced), f0[voiced])[frame_index]
+    marks = []
+    position = 0.0
+    while position < len(mono):
+        marks.append(int(position))
+        position += period[int(position)]
+    tuned = _psola(mono, period, np.array(marks), frame_index, segments, len(f0))
+    sung = np.zeros(len(f0))
+    for start, end, _shift in segments:
+        sung[start:end] = 1.0
+    gain = scipy.ndimage.uniform_filter1d(sung, 4)[frame_index]
+    report = (f"{len(segments)} sung notes tuned {amount:.0%} of the way: {toward_score} to the written ABC note, "
+              f"{len(segments) - toward_score} to the nearest semitone.")
+    return (tuned + mono * (1 - gain)).astype(np.float32), report
+
+
+class HZ3_YuE2_VocalTune:
+    CATEGORY = "HZ3 YuE2"
+    FUNCTION = "tune"
+    RETURN_TYPES = ("AUDIO", "STRING")
+    RETURN_NAMES = ("vocals", "report")
+    DESCRIPTION = ("Pitch-correct the separated lead vocal toward the ABC melody with PSOLA (deterministic): each sung note moves "
+                   "toward its written pitch, or to the nearest semitone where the singer chose another note.")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "vocals": ("AUDIO", {"tooltip": "Separated lead vocal of the generated song."}),
+                "score_abc": ("STRING", {"forceInput": True, "tooltip": "The ABC used for the generation."}),
+                "amount": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "0 leaves the voice as sung, 1 snaps it fully."}),
+            },
+        }
+
+    def tune(self, vocals, score_abc, amount):
+        sample_rate = vocals["sample_rate"]
+        tuned, report = tune_audio(vocals["waveform"][0].float().cpu().numpy(), sample_rate, score_abc, amount)
+        return {"waveform": torch.from_numpy(np.stack([tuned] * vocals["waveform"].shape[1]))[None], "sample_rate": sample_rate}, report
+
+
 class HZ3_YuE2_VocalHarmonizer:
     CATEGORY = "HZ3 YuE2"
     FUNCTION = "harmonize"
@@ -290,5 +356,5 @@ class HZ3_YuE2_VocalHarmonizer:
         return tracks + (report,)
 
 
-NODE_CLASS_MAPPINGS = {"HZ3_YuE2_VocalHarmonizer": HZ3_YuE2_VocalHarmonizer}
-NODE_DISPLAY_NAME_MAPPINGS = {"HZ3_YuE2_VocalHarmonizer": "HZ3 YuE2 · Vocal Harmonizer"}
+NODE_CLASS_MAPPINGS = {"HZ3_YuE2_VocalHarmonizer": HZ3_YuE2_VocalHarmonizer, "HZ3_YuE2_VocalTune": HZ3_YuE2_VocalTune}
+NODE_DISPLAY_NAME_MAPPINGS = {"HZ3_YuE2_VocalHarmonizer": "HZ3 YuE2 · Vocal Harmonizer", "HZ3_YuE2_VocalTune": "HZ3 YuE2 · Vocal Tune"}

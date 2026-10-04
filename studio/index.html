@@ -88,6 +88,8 @@
       <span id="clock">0:00 / 0:00</span>
       <button id="score-play" title="Escucha la partitura completa desde el cursor (melodía, línea instrumental y acordes)">♪ Partitura</button>
       <button id="add-voice" title="Agrega un cantante generado aparte, alineado con la voz principal">+ Voz</button>
+      <button id="add-instrument" title="Agrega una pista de instrumento SoundFont: notas en piano roll o escritas desde el ABC, sin YuE2">+ Instrumento</button>
+      <button id="fx-master" title="Reverb y delay compartidos por todas las pistas">FX master</button>
       <label class="zoom">Zoom<input id="zoom" type="range" min="2" max="40" value="6"></label>
     </div>
     <div id="timeline" class="timeline">
@@ -127,6 +129,50 @@
         <button id="section-recompose" title="Conserva el ABC anterior a esta sección y YuE2 compone esta sección y todo lo que sigue (semilla y temperatura de «Componer ABC»)">Recomponer el ABC desde aquí</button>
         <button id="render-section" class="primary">Regenerar sección</button>
       </div>
+    </div>
+    <div id="track-inspector" class="inspector hidden">
+      <header class="inspector-head"><h3 id="track-title"></h3><button id="close-track-inspector" title="Cerrar el inspector">✕</button></header>
+      <div id="track-mix" class="row">
+        <label>Volumen (dB)<input id="track-volume" type="number" step="0.5" min="-60" max="12"></label>
+        <label>Paneo (−100 izq · +100 der)<input id="track-pan" type="range" min="-100" max="100" step="1"></label>
+        <label>Reverb (%)<input id="track-reverb" type="number" min="0" max="100" step="5"></label>
+        <label>Delay (%)<input id="track-delay" type="number" min="0" max="100" step="5"></label>
+        <label>Fade in (s)<input id="track-fade-in" type="number" min="0" step="0.5"></label>
+        <label>Fade out (s)<input id="track-fade-out" type="number" min="0" step="0.5"></label>
+      </div>
+      <div id="track-master" class="row">
+        <label>Reverb: duración (s)<input id="fx-reverb-seconds" type="number" min="0.2" max="8" step="0.1"></label>
+        <label>Delay: tiempo (en negras; 0.75 = corchea con puntillo)<input id="fx-delay-beats" type="number" min="0.125" max="4" step="0.125"></label>
+        <label>Delay: retroalimentación<input id="fx-feedback" type="number" min="0" max="0.9" step="0.05"></label>
+      </div>
+      <div id="track-tune" class="row">
+        <label title="Cuánto se acerca cada nota cantada a la nota escrita en el ABC (o al semitono más cercano si el cantante eligió otra nota)">Afinación hacia el ABC (%)<input id="tune-amount" type="number" min="0" max="100" step="5" value="70"></label>
+        <button id="tune-apply" title="Afina la voz principal de los takes en uso (PSOLA, determinista). La voz original se conserva.">Afinar voz</button>
+        <button id="tune-undo" title="Vuelve a la voz tal como la cantó YuE2">Quitar afinación</button>
+      </div>
+      <div id="track-instrument" class="instrument-panel">
+        <div class="row">
+          <label>Nombre<input id="instrument-name" maxlength="40"></label>
+          <label>Sonido (General MIDI)<select id="instrument-program"></select></label>
+          <label class="switch"><input id="instrument-drums" type="checkbox"> Batería</label>
+          <label>Rejilla<select id="instrument-grid"></select></label>
+          <button id="instrument-down" title="El piano roll muestra una octava más grave">▼ Oct</button>
+          <button id="instrument-up" title="El piano roll muestra una octava más aguda">▲ Oct</button>
+          <span id="instrument-count" class="count"></span>
+        </div>
+        <p class="hint">Piano roll: clic en un espacio vacío agrega una nota (arrastra para alargarla) · arrastra una nota para moverla, o su borde derecho para cambiar su duración · clic derecho o doble clic la borra.</p>
+        <div class="row">
+          <label>Escribir desde el ABC<select id="instrument-pattern"></select></label>
+          <label>Octava<input id="instrument-octave" type="number" min="-3" max="3" value="0"></label>
+          <label>Intensidad<input id="instrument-velocity" type="number" min="1" max="127" value="96"></label>
+          <button id="instrument-write" class="primary" title="Reemplaza las notas de las secciones marcadas (o de toda la canción) con el patrón">Escribir notas</button>
+          <button id="instrument-clear" title="Borra las notas de las secciones marcadas (o de toda la canción)">Borrar notas</button>
+          <button id="instrument-delete">Eliminar instrumento</button>
+        </div>
+        <div class="hint">Secciones (sin marcar = toda la canción)</div>
+        <div id="instrument-sections" class="checks"></div>
+      </div>
+      <div id="track-offsets" class="takes"></div>
     </div>
     <div id="voice-inspector" class="inspector hidden">
       <header class="inspector-head"><h3 id="voice-title"></h3><button id="close-voice-inspector" title="Cerrar el inspector">✕</button></header>
@@ -245,6 +291,7 @@
     </div>
   </section>
 </dialog>
+<script src="/hz3/studio/static/daw.js"></script>
 <script src="/hz3/studio/static/studio.js"></script>
 </body>
 </html>

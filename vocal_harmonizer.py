@@ -22,6 +22,8 @@ TRACK_RATE = 22050
 HOP = 256
 FRAME_SECONDS = HOP / TRACK_RATE
 MAJOR, MINOR = (0, 2, 4, 5, 7, 9, 11), (0, 2, 3, 5, 7, 8, 10)
+NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+TRIADS = {(4, 7): "", (3, 7): "m", (3, 6): "dim", (4, 8): "aug"}
 
 
 def _track(mono, sample_rate):
@@ -112,12 +114,38 @@ def _time_warp(f0, notes, bpm, window=8.0, hop=2.0, max_lag=10.0, step=0.05, flo
     return centers, np.maximum.accumulate(centers + lag), sure
 
 
-def _voice_shifts(runs, score, warp):
+def _guessed_chords(voice):
+    """For a melody-only score: per bar, the diatonic triad that covers most of the bar's sung time
+    (the tonic, subdominant and dominant win ties). A bar without notes keeps the previous chord."""
+    key_times = [time for time, _ in voice.keys]
+    chords = []
+    for start, length, _meter in voice.bars:
+        end = start + length
+        weight = np.zeros(12)
+        for note_start, pitch, duration in voice.notes:
+            overlap = min(end, note_start + duration) - max(start, note_start)
+            if overlap > 0:
+                weight[pitch % 12] += float(overlap)
+        if not weight.any():
+            continue
+        key = voice.keys[bisect_right(key_times, start) - 1][1]
+        minor = key.endswith("m")
+        root = _pitch_class(key[:-1] if minor else key)
+        scale = [(root + step) % 12 for step in (MINOR if minor else MAJOR)]
+        triads = [[scale[(degree + step) % 7] for step in (0, 2, 4)] for degree in range(7)]
+        best = max(range(7), key=lambda degree: weight[triads[degree]].sum() + 0.5 * weight[triads[degree][0]]
+                   + (0.1 * weight.sum() if degree in (0, 3, 4) else 0))
+        tones = triads[best]
+        chords.append((start, NAMES[tones[0]] + TRIADS[((tones[1] - tones[0]) % 12, (tones[2] - tones[0]) % 12)]))
+    return chords
+
+
+def _voice_shifts(runs, score, warp, chords):
     """Per voice, (start_frame, end_frame, semitone shift) for every lead note it sings."""
     source = score.voices["Vocal"]
     seconds = 60 / score.bpm
     # Chords sit where the singer actually is, not at the nominal score time.
-    chord_times = np.interp([float(time) * seconds for time, _ in source.chords], *warp).tolist()
+    chord_times = np.interp([float(time) * seconds for time, _ in chords], *warp).tolist()
     key_times = np.interp([float(time) * seconds for time, _ in source.keys], *warp).tolist()
     parts = {name: [] for name in VOICES}
     held_bass = held_counter = None
@@ -126,7 +154,7 @@ def _voice_shifts(runs, score, warp):
         chord_index = bisect_right(chord_times, middle) - 1
         if chord_index < 0:
             continue
-        tones, bass_pc = _chord(source.chords[chord_index][1])
+        tones, bass_pc = _chord(chords[chord_index][1])
         tones = set(tones)
         if note % 12 in tones:
             pool = [pitch for pitch in range(note - 15, note + 13) if pitch % 12 in tones]
@@ -192,7 +220,9 @@ def harmonize_audio(waveform, sample_rate, score_abc):
     score = parse(score_abc.strip() + "\n")
     runs = _note_runs(f0)
     abc_times, audio_times, _ = _time_warp(f0, score.voices["Vocal"].notes, score.bpm)
-    parts = _voice_shifts(runs, score, (abc_times, audio_times))
+    # A melody-only score (no chord symbols) would leave every note without a chord, and every voice silent.
+    chords = score.voices["Vocal"].chords or _guessed_chords(score.voices["Vocal"])
+    parts = _voice_shifts(runs, score, (abc_times, audio_times), chords)
     frame_index = np.minimum((np.arange(len(mono)) / sample_rate / FRAME_SECONDS).astype(np.int64), len(f0) - 1)
     period = sample_rate / np.interp(np.arange(len(f0)), np.flatnonzero(voiced), f0[voiced])[frame_index]
     marks = []
@@ -203,6 +233,8 @@ def harmonize_audio(waveform, sample_rate, score_abc):
     marks = np.array(marks)
     voices = {name: _psola(mono, period, marks, frame_index, parts[name], len(f0)) for name in VOICES}
     report = [f"{len(runs)} sung notes tracked; {np.mean(voiced):.0%} of frames voiced."]
+    if not score.voices["Vocal"].chords:
+        report.append(f"The ABC has no chord symbols: {len(chords)} chords guessed from the melody, one per bar.")
     report += [f"{name}: {len(parts[name])} notes." for name in VOICES]
     return voices, "\n".join(report)
 

@@ -1438,6 +1438,7 @@ function buildPrompt(prefix, kept) {
   const saves = { 6: "mix", 8: "vocals", 11: "instrumental" };
   if (project.harmonize && project.harmonyVoices.length) {
     prompt[12] = { class_type: "HZ3_YuE2_VocalHarmonizer", inputs: { vocals: ["7", 3], score_abc: project.abc } };
+    if (!hasChords(project.abc)) Object.assign(prompt, hearChords(["5", 0], 30), { 12: { ...prompt[12], inputs: { ...prompt[12].inputs, heard_abc: ["31", 0] } } });
     VOICES.forEach((voice, index) => {
       if (!project.harmonyVoices.includes(voice)) return;
       prompt[13 + index] = { class_type: "SaveAudio", inputs: { audio: ["12", index], filename_prefix: `${prefix}/${voice}` } };
@@ -1449,6 +1450,18 @@ function buildPrompt(prefix, kept) {
     return singer ? { lora: singer.lora, owner: singer.name } : { lora: project.lora, owner: "el cantante de la canción" };
   }));
   return { prompt, saves };
+}
+
+function hasChords(abc) {
+  return melodyOnly(abc) !== abc;
+}
+
+// SheetSage2 transcribing a song's audio (melody and chords), as nodes `at` (encoder) and `at + 1` (transcription).
+function hearChords(audio, at) {
+  return {
+    [at]: { class_type: "AudioEncoderLoader", inputs: { audio_encoder_name: "sheetsage2_bf16.safetensors" } },
+    [at + 1]: { class_type: "HZ3_YuE2_SheetSage2Sections", inputs: { audio_encoder: [String(at), 0], audio, mode: "full" } },
+  };
 }
 
 // The score's melody without its chord symbols (only music lines: the V: definitions hold quoted names too).
@@ -1524,8 +1537,8 @@ async function render(targets, reimagine = false) {
   const melody = melodyOnly(project.abc);
   if (reimagine) {
     Object.assign(prompt[2].inputs, { mode: "melody", abc: melody });
-    prompt[30] = { class_type: "AudioEncoderLoader", inputs: { audio_encoder_name: "sheetsage2_bf16.safetensors" } };
-    prompt[31] = { class_type: "HZ3_YuE2_SheetSage2Sections", inputs: { audio_encoder: ["30", 0], audio: ["5", 0], mode: "full" } };
+    Object.assign(prompt, hearChords(["5", 0], 30));
+    if (prompt[12]) prompt[12].inputs.heard_abc = ["31", 0];
     prompt[32] = { class_type: "PreviewAny", inputs: { source: ["31", 0] } };
   }
   const owner = project.name;
@@ -1945,13 +1958,19 @@ async function regenerateHarmonies() {
       1: { class_type: "LoadAudio", inputs: { audio: filename } },
       2: { class_type: "HZ3_YuE2_VocalHarmonizer", inputs: { vocals: ["1", 0], score_abc: project.abc } },
     };
+    // A melody-only score harmonizes on the chords heard in the take's own mix.
+    if (!hasChords(project.abc) && take.files.mix) {
+      const mix = await postJson("/hz3/studio/stage", { name: `harmony_mix_${take.id}_${Date.now().toString(36)}`, files: [take.files.mix] });
+      Object.assign(prompt, { 20: { class_type: "LoadAudio", inputs: { audio: mix.filename } } }, hearChords(["20", 0], 21));
+      prompt[2].inputs.heard_abc = ["22", 0];
+    }
     const saves = {};
     VOICES.forEach((voice, index) => {
       if (!project.harmonyVoices.includes(voice)) return;
       prompt[3 + index] = { class_type: "SaveAudio", inputs: { audio: ["2", index], filename_prefix: `HZ3-Studio/${owner}/take-${take.id}/${voice}` } };
       saves[3 + index] = voice;
     });
-    await queue(prompt, { 2: `Armonías del take ${take.id}` }, async (outputs) => {
+    await queue(prompt, { 2: `Armonías del take ${take.id}`, 22: "SheetSage2 (acordes del take)" }, async (outputs) => {
       const files = Object.fromEntries(Object.entries(saves).map(([node, voice]) => [voice, outputs[node]?.audio?.[0]]).filter(([, file]) => file));
       const current = await updateProject(owner, (target) => {
         const stored = target.takes.find((item) => item.id === take.id);

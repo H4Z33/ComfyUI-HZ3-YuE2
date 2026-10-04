@@ -140,12 +140,22 @@ def _guessed_chords(voice):
     return chords
 
 
+def _heard_chords(heard_abc):
+    """(audio seconds, symbol) at each chord change of an ABC transcribed from the same audio."""
+    heard = parse(heard_abc.strip() + "\n")
+    chords = []
+    for time, symbol in heard.voices["Vocal"].chords:
+        if not chords or chords[-1][1] != symbol:
+            chords.append((float(time) * 60 / heard.bpm, symbol))
+    return chords
+
+
 def _voice_shifts(runs, score, warp, chords):
-    """Per voice, (start_frame, end_frame, semitone shift) for every lead note it sings."""
+    """Per voice, (start_frame, end_frame, semitone shift) for every lead note it sings.
+    chords: (audio seconds, symbol), already on the sung timeline."""
     source = score.voices["Vocal"]
     seconds = 60 / score.bpm
-    # Chords sit where the singer actually is, not at the nominal score time.
-    chord_times = np.interp([float(time) * seconds for time, _ in chords], *warp).tolist()
+    chord_times = [time for time, _ in chords]
     key_times = np.interp([float(time) * seconds for time, _ in source.keys], *warp).tolist()
     parts = {name: [] for name in VOICES}
     held_bass = held_counter = None
@@ -210,7 +220,7 @@ def _psola(mono, period, marks, frame_index, segments, frames):
     return (out * gain).astype(np.float32)
 
 
-def harmonize_audio(waveform, sample_rate, score_abc):
+def harmonize_audio(waveform, sample_rate, score_abc, heard_abc=""):
     """Return {voice: mono float32 samples} and a short report."""
     mono = waveform.mean(0).astype(np.float32)
     f0 = _track(mono, sample_rate)
@@ -220,8 +230,17 @@ def harmonize_audio(waveform, sample_rate, score_abc):
     score = parse(score_abc.strip() + "\n")
     runs = _note_runs(f0)
     abc_times, audio_times, _ = _time_warp(f0, score.voices["Vocal"].notes, score.bpm)
-    # A melody-only score (no chord symbols) would leave every note without a chord, and every voice silent.
-    chords = score.voices["Vocal"].chords or _guessed_chords(score.voices["Vocal"])
+    # A melody-only score has no chords to harmonize on: take the ones heard in the song itself, or,
+    # without a transcription, guess one per bar from the melody.
+    written = score.voices["Vocal"].chords
+    heard = [] if written or not heard_abc.strip() else _heard_chords(heard_abc)
+    if heard:
+        chords = heard
+    else:
+        # Chords sit where the singer actually is, not at the nominal score time.
+        timed = written or _guessed_chords(score.voices["Vocal"])
+        chords = list(zip(np.interp([float(time) * 60 / score.bpm for time, _ in timed], abc_times, audio_times).tolist(),
+                          [symbol for _, symbol in timed]))
     parts = _voice_shifts(runs, score, (abc_times, audio_times), chords)
     frame_index = np.minimum((np.arange(len(mono)) / sample_rate / FRAME_SECONDS).astype(np.int64), len(f0) - 1)
     period = sample_rate / np.interp(np.arange(len(f0)), np.flatnonzero(voiced), f0[voiced])[frame_index]
@@ -233,7 +252,9 @@ def harmonize_audio(waveform, sample_rate, score_abc):
     marks = np.array(marks)
     voices = {name: _psola(mono, period, marks, frame_index, parts[name], len(f0)) for name in VOICES}
     report = [f"{len(runs)} sung notes tracked; {np.mean(voiced):.0%} of frames voiced."]
-    if not score.voices["Vocal"].chords:
+    if heard:
+        report.append(f"The ABC has no chord symbols: {len(chords)} chord changes heard in the song.")
+    elif not written:
         report.append(f"The ABC has no chord symbols: {len(chords)} chords guessed from the melody, one per bar.")
     report += [f"{name}: {len(parts[name])} notes." for name in VOICES]
     return voices, "\n".join(report)
@@ -256,11 +277,15 @@ class HZ3_YuE2_VocalHarmonizer:
                 "vocals": ("AUDIO", {"tooltip": "Separated lead vocal of the generated song."}),
                 "score_abc": ("STRING", {"forceInput": True, "tooltip": "The ABC used for the generation, with chord symbols."}),
             },
+            "optional": {
+                "heard_abc": ("STRING", {"forceInput": True, "tooltip": "SheetSage2 (full) transcription of the same song, starting where the vocal starts. "
+                                         "Its chords are used when score_abc has none."}),
+            },
         }
 
-    def harmonize(self, vocals, score_abc):
+    def harmonize(self, vocals, score_abc, heard_abc=""):
         sample_rate = vocals["sample_rate"]
-        voices, report = harmonize_audio(vocals["waveform"][0].float().cpu().numpy(), sample_rate, score_abc)
+        voices, report = harmonize_audio(vocals["waveform"][0].float().cpu().numpy(), sample_rate, score_abc, heard_abc)
         tracks = tuple({"waveform": torch.from_numpy(voices[name])[None, None], "sample_rate": sample_rate} for name in VOICES)
         return tracks + (report,)
 

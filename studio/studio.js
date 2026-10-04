@@ -69,6 +69,9 @@ const ASSISTANT_TOOLS = [
   tool("compose_abc", "Queue YuE2 to compose a new ABC from the style and lyrics with the compose settings (the current ABC is kept in the ABC versions).", {
     from_section: str("keep the score before this section and compose this section and everything after it; omit to compose the whole score"),
   }),
+  tool("free_melody", "Turn a section's written vocal melody into rests (chords and length kept), so YuE2 speaks or raps the words freely instead of singing a melody; for spoken word, trova recitation or rap.", {
+    section: str("section name"),
+  }, ["section"]),
   tool("set_base_style", "Set the song's base style to a catalog group or genre (null for none).", { style: str("catalog style name") }),
   tool("set_singer", "Choose who sings: a catalog singer for lead sections (moves that section's melody to the singer's register, tags its lyrics and declares the singers in the style), or the singer of a whole extra voice.", {
     track: str("'lead' or an extra voice name"), section: str("lead only: section name, omit for every section"), style: str("catalog singer name, omit for none"),
@@ -395,6 +398,75 @@ function shiftOctaves(line, octaves) {
   });
 }
 
+// The section's Vocal lines rewritten by `rewrite(line, barUnits)`. A note tied across the section's edges is struck
+// again, since the two sides no longer match.
+function rewriteSectionVocal(abc, name, rewrite) {
+  const lines = abc.split("\n");
+  const unit = Number(abc.match(/^L:1\/(\d+)/m)?.[1] ?? 32);
+  let meter = abc.match(/^M:(\S+)/m)?.[1] ?? "4/4";
+  const vocalLines = {};
+  let section = null;
+  let vocal = false;
+  for (const [at, line] of lines.entries()) {
+    if (line.startsWith("% ")) section = line.slice(2).trim();
+    else if (line.startsWith("M:")) meter = line.slice(2).trim();
+    else if (line.startsWith("V:")) vocal = line.trim() === "V: Vocal";
+    else if (vocal && line.endsWith("|")) {
+      (vocalLines[section] ??= []).push(at);
+      const [beats, value] = meter.split("/").map(Number);
+      if (section === name) lines[at] = rewrite(line, beats * unit / value);
+    }
+  }
+  const names = Object.keys(vocalLines);
+  for (const edge of [names[names.indexOf(name) - 1], name]) {
+    const last = vocalLines[edge]?.at(-1);
+    if (last !== undefined) lines[last] = lines[last].replace(/-\|$/, "|");
+  }
+  return lines.join("\n");
+}
+
+const REST_SIZES = [48, 32, 24, 16, 12, 8, 6, 4, 3, 2, 1];
+
+function rests(units) {
+  let text = "";
+  for (let left = units; left > 0;) {
+    const size = REST_SIZES.find((value) => value <= left);
+    text += `z${size}`;
+    left -= size;
+  }
+  return text;
+}
+
+// A sung bar turned into rests that keep its chord symbols and key changes where they were.
+function freeBar(bar, units) {
+  if (/^\s*Z\d?\s*$/.test(bar)) return bar.trim();
+  const marks = [];
+  let offset = 0;
+  for (const match of bar.matchAll(/"([^"\n]*)"|(\[K:[^\]\n]+\])|(?:\^\^|__|\^|_|=)?[A-Ga-gz][,']*(\d*)-?/g)) {
+    if (match[1] !== undefined) marks.push([offset, `"${match[1]}"`]);
+    else if (match[2]) marks.push([offset, match[2]]);
+    else offset += Number(match[3] || 1);
+  }
+  if (!marks.length) return "Z";
+  let text = rests(marks[0][0]);
+  marks.forEach(([start, mark], index) => {
+    const end = marks.slice(index + 1).find(([next]) => next > start)?.[0] ?? units;
+    text += mark + (marks[index + 1]?.[0] === start ? "" : rests(end - start));
+  });
+  return text;
+}
+
+// A section whose Vocal line is only rests (chords kept): YuE2 then delivers the words freely, spoken or rapped,
+// in the style's own range, instead of singing a written melody.
+async function setSectionFree(name) {
+  readForm();
+  const abc = rewriteSectionVocal(project.abc, name, (line, units) => line.slice(0, -1).split("|").map((bar) => freeBar(bar, units)).join("|") + "|");
+  if (abc === project.abc) throw new Error(`«${name}» ya no tiene melodía escrita.`);
+  await postJson("/hz3/studio/sections", { abc, lyrics: project.lyrics });
+  setAbc(abc, `antes de liberar la melodía de «${name}»`);
+  await refreshSections();
+}
+
 // Lead singer of a section: its melody moves to the singer's register and its lyric tag says who sings.
 async function setSectionSinger(name, id) {
   const index = sections.findIndex((section) => section.name === name);
@@ -414,26 +486,7 @@ async function setSectionSinger(name, id) {
     return (score.tracks.Vocal ?? []).filter((note) => note.start >= from && note.start < to).map((note) => note.pitch).sort((a, b) => a - b);
   })() : [];
   const octaves = notes.length ? Math.round((REGISTERS[singerRegister(singer)].center - notes[Math.floor(notes.length / 2)]) / 12) : 0;
-  let abc = project.abc;
-  if (octaves) {
-    const lines = abc.split("\n");
-    const vocalLines = {};
-    let section = null;
-    let vocal = false;
-    for (const [at, line] of lines.entries()) {
-      if (line.startsWith("% ")) section = line.slice(2).trim();
-      else if (line.startsWith("V:")) vocal = line.trim() === "V: Vocal";
-      else if (vocal && line.endsWith("|")) (vocalLines[section] ??= []).push(at);
-    }
-    for (const at of vocalLines[name] ?? []) lines[at] = shiftOctaves(lines[at], octaves);
-    // A note tied across the section's edges would join two octaves: those notes are struck again instead.
-    const names = Object.keys(vocalLines);
-    for (const edge of [names[names.indexOf(name) - 1], name]) {
-      const last = vocalLines[edge]?.at(-1);
-      if (last !== undefined) lines[last] = lines[last].replace(/-\|$/, "|");
-    }
-    abc = lines.join("\n");
-  }
+  const abc = octaves ? rewriteSectionVocal(project.abc, name, (line) => shiftOctaves(line, octaves)) : project.abc;
   // The parser checks the result before it replaces the song's score and lyrics.
   await postJson("/hz3/studio/sections", { abc, lyrics });
   if (octaves) keepAbcVersion(project, `antes de llevar «${name}» al registro de ${singer.name}`);
@@ -758,6 +811,11 @@ async function runAction(action) {
       project.sectionSeeds[section.name] = Number(action.seed) || 0;
       draw();
       return `Semilla de «${section.name}»: ${project.sectionSeeds[section.name]}`;
+    }
+    case "free_melody": {
+      const section = sectionNamed(action.section);
+      await setSectionFree(section.name);
+      return `«${section.name}» con melodía libre (la anterior quedó en las versiones del ABC)`;
     }
     case "set_base_style":
       project.baseStyle = styleNamed(action.style, ["group", "genre"]);
@@ -2513,6 +2571,7 @@ async function init() {
   $("analyze").onclick = guard(() => analyze());
   $("compose").onclick = guard(() => compose());
   $("section-recompose").onclick = guard(() => compose(selected));
+  $("section-free").onclick = guard(() => setSectionFree(selected));
   $("compose-dice").onclick = () => { $("compose-seed").value = Math.floor(Math.random() * 2 ** 31); readForm(); };
   $("abc-versions").onchange = guard(async (event) => {
     if (event.target.value === "") return;

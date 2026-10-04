@@ -23,6 +23,7 @@ The melody itself comes from the ABC. To get a melody that is really different f
 - set_compose_settings with a new seed (and a higher temperature such as 0.9–1.1 for more surprise), then compose_abc. keep_key_meter_tempo keeps the key, meter and tempo of the current ABC while writing a new melody. compose_abc with from_section keeps the score before that section exactly and composes that section and the rest anew, in the same style. The old ABC is kept in the ABC versions, so this can be undone.
 - or read the ABC with get_abc and write a changed one with set_abc (keep the header fields and the % section markers, change notes and rhythms).
 - raising temperature/top_k when rendering only loosens how the existing ABC is sung.
+- For spoken word, recited verses (trova, storytelling) or rap: free_melody on those sections. With no written melody YuE2 speaks or raps the words over the same chords and length; measured here, a trova with free verses came out recited (half the pitch range of the sung version). Say "spoken word" or "rap" in the style and, optionally, in the section's lyric tag.
 
 Guidance:
 - Do what the producer asks; do not invent extra changes. Ask a short question instead of acting when the request is ambiguous.

@@ -1966,14 +1966,28 @@ function dragBoundary(index, body) {
 }
 
 function drawScore() {
-  const head = document.createElement("span");
-  head.className = "name";
-  head.textContent = `Partitura · ${score.key} · ${score.bpm} BPM`;
+  const head = document.createElement("div");
+  head.innerHTML = `<span class="name">Partitura · ${score.key} · ${score.bpm} BPM</span><span class="controls">
+    <button id="score-lane-play" title="Reproducir / pausar la partitura desde su cursor (clic en la pista para moverlo)">${scorePlayback ? "❚❚" : "▶"}</button>
+    <button id="score-lane-stop" title="Detener y volver al punto marcado">■</button></span>`;
+  head.querySelector("#score-lane-play").onclick = guard(async () => {
+    if (scorePlayback) return pauseScore();
+    await context().resume();
+    playScoreLane();
+  });
+  head.querySelector("#score-lane-stop").onclick = stopScore;
   const { body } = lane("score", head);
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(duration() * pxPerSecond));
   canvas.height = 119;
-  body.append(canvas);
+  const cursor = Object.assign(document.createElement("div"), { id: "score-cursor", className: "score-cursor" });
+  cursor.style.left = `${scorePosition() * pxPerSecond}px`;
+  body.append(canvas, cursor);
+  body.onclick = (event) => {
+    scoreAt = scoreMark = Math.min(Math.max(0, (event.clientX - body.getBoundingClientRect().left) / pxPerSecond), duration());
+    if (scorePlayback) playScoreLane();
+    else updateScoreCursor();
+  };
   const graphics = canvas.getContext("2d");
   const x = (ticks) => (ticks / TICKS_PER_QUARTER) * 60 / score.bpm * pxPerSecond;
   const notes = [...(score.tracks.Vocal ?? []), ...(score.tracks.Ins ?? [])];
@@ -2151,18 +2165,50 @@ function chordPitches(symbol) {
 }
 
 let scorePlayback = null;
+// The score lane's own cursor, in seconds: where its ▶ starts, and scoreMark where ■ returns (set by clicking the lane).
+let scoreAt = 0;
+let scoreMark = 0;
 
-function stopScore() {
+function scorePosition() {
+  return scorePlayback ? scorePlayback.from + audioContext.currentTime - scorePlayback.begin : scoreAt;
+}
+
+function haltScore() {
   if (!scorePlayback) return;
   scorePlayback.sources.forEach((source) => source.stop());
   clearTimeout(scorePlayback.timer);
   scorePlayback = null;
   $("score-play").textContent = "♪ Partitura";
   $("section-score-play").textContent = "▶ Partitura";
+  if ($("score-lane-play")) $("score-lane-play").textContent = "▶";
 }
 
-function playScore(fromTick, toTick, button) {
-  stopScore();
+function stopScore() {
+  haltScore();
+  scoreAt = scoreMark;
+  updateScoreCursor();
+}
+
+function pauseScore() {
+  scoreAt = scorePosition();
+  haltScore();
+  updateScoreCursor();
+}
+
+function playScoreLane() {
+  if (scoreAt >= duration()) scoreAt = 0;
+  const ticks = (seconds) => Math.min(score.total_ticks, Math.round(seconds * score.bpm / 60 * TICKS_PER_QUARTER));
+  playScore(ticks(scoreAt), score.total_ticks, $("score-lane-play"), "❚❚");
+}
+
+function updateScoreCursor() {
+  const cursor = $("score-cursor");
+  if (cursor) cursor.style.left = `${scorePosition() * pxPerSecond}px`;
+  if (scorePlayback) requestAnimationFrame(updateScoreCursor);
+}
+
+function playScore(fromTick, toTick, button, playingLabel = "■ Detener") {
+  haltScore();
   const target = context();
   const begin = target.currentTime + 0.05;
   const time = (ticks) => (ticks / TICKS_PER_QUARTER) * 60 / score.bpm;
@@ -2195,8 +2241,9 @@ function playScore(fromTick, toTick, button) {
     const end = score.chords[index + 1]?.start ?? score.total_ticks;
     for (const pitch of chordPitches(chord.symbol)) note(pitch, chord.start, end - chord.start, "sine", 0.1);
   });
-  button.textContent = "■ Detener";
-  scorePlayback = { sources, timer: setTimeout(stopScore, (time(toTick - fromTick) + 0.3) * 1000) };
+  button.textContent = playingLabel;
+  scorePlayback = { sources, from: time(fromTick), begin, timer: setTimeout(stopScore, (time(toTick - fromTick) + 0.3) * 1000) };
+  requestAnimationFrame(updateScoreCursor);
 }
 
 function sectionTicks(index) {

@@ -13,6 +13,7 @@ import io
 import json
 from pathlib import Path
 import re
+import shutil
 import time
 import urllib.error
 import urllib.parse
@@ -94,6 +95,11 @@ def _write_package(project):
         if audio is not None:
             package.writestr(f"source/{filename}", audio, compress_type=zipfile.ZIP_STORED)
     temporary.replace(path)
+    # A song's copy also sits beside its takes (output/HZ3-Studio/<song>), so that folder holds the whole song.
+    if project.get("kind", "song") == "song":
+        takes = Path(folder_paths.get_output_directory()) / "HZ3-Studio" / path.stem
+        takes.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, takes / path.name)
 
 
 def _read_package(package):

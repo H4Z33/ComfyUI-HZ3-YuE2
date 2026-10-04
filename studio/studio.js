@@ -1771,10 +1771,11 @@ async function exportMix() {
   buildGraph(offline, offline.destination, 0, 0);
   status("Exportando mezcla…");
   const rendered = await offline.startRendering();
-  const blob = new Blob([wav(rendered)], { type: "audio/wav" });
+  const response = await fetch("/hz3/studio/flac", { method: "POST", body: wav(rendered) });
+  if (!response.ok) throw new Error(`No se pudo codificar el FLAC: ${await response.text()}`);
   const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `${project.name || "hz3-studio"}.wav`;
+  link.href = URL.createObjectURL(await response.blob());
+  link.download = `${project.name || "hz3-studio"}.flac`;
   link.click();
   URL.revokeObjectURL(link.href);
   status("Mezcla exportada.", 1);

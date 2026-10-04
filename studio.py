@@ -369,6 +369,14 @@ def register(routes):
         body = await request.json()
         return web.json_response({"tokens": [_slice_tokens(item["tokens"], item["start"], item["frames"]) for item in body["slices"]]})
 
+    # The browser renders the mix as WAV; FLAC is encoded here (browsers have no FLAC encoder).
+    @routes.post("/hz3/studio/flac")
+    async def flac(request):
+        wave, sample_rate = soundfile.read(io.BytesIO(await request.read()), dtype="int16", always_2d=True)
+        out = io.BytesIO()
+        soundfile.write(out, wave, sample_rate, format="FLAC", subtype="PCM_16")
+        return web.Response(body=out.getvalue(), content_type="audio/flac")
+
     @routes.get("/hz3/studio/projects")
     async def projects(request):
         folder = _studio_folder()

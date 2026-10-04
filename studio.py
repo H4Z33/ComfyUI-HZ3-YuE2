@@ -219,7 +219,7 @@ def _stage_audio(paths, name):
         wave = torch.from_numpy(np.repeat(wave, 2, axis=1) if wave.shape[1] == 1 else wave[:, :2]).T
         rate = rate or sample_rate
         parts.append(torchaudio.functional.resample(wave, sample_rate, rate) if sample_rate != rate else wave)
-    filename = f"hz3studio_lora_{name}.flac"
+    filename = f"hz3studio_{name}.flac"
     soundfile.write(str(Path(folder_paths.get_input_directory()) / filename), torch.cat(parts, dim=1).T.numpy(), rate, format="FLAC")
     return filename
 

@@ -122,7 +122,7 @@ function newProject() {
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
-    harmonize: true, sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, mixer: {}, voices: [],
+    harmonize: true, harmonyVoices: [...VOICES], sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, mixer: {}, voices: [],
     arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {}, classicalPlan: {}, classicalReport: [],
   };
 }
@@ -571,7 +571,7 @@ async function freezeVoice() {
   while (loras.some((lora) => lora.name.replace(/^.*[\\/]/, "") === `${base(version)}.safetensors`)) version++;
   const name = base(version);
   const trigger = `${slug}_voice`;
-  const { filename } = await postJson("/hz3/studio/stage", { name, files });
+  const { filename } = await postJson("/hz3/studio/stage", { name: `lora_${name}`, files });
   const prompt = {
     1: { class_type: "LoadAudio", inputs: { audio: filename } },
     2: { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: project.ckpt } },
@@ -1192,9 +1192,72 @@ async function analyze(owner = project.name) {
 }
 
 // Replaced scores stay in the project, so a new composition or analysis can be undone.
-function keepAbcVersion(target, label) {
+// A version that also changed the lyrics keeps them too, so restoring it brings both back.
+function keepAbcVersion(target, label, withLyrics = false) {
   if (!target.abc.trim()) return;
-  target.abcVersions = [...(target.abcVersions ?? []), { at: Date.now(), label, abc: target.abc }].slice(-20);
+  const version = { at: Date.now(), label, abc: target.abc, ...(withLyrics ? { lyrics: target.lyrics } : {}) };
+  target.abcVersions = [...(target.abcVersions ?? []), version].slice(-20);
+}
+
+// The whole song as an instrumental: where the voice sang, its melody moves to the instrument line; the voice keeps
+// only its chords over rests; and every lyric block becomes "(instrumental)", or YuE2 would still say the words.
+async function convertToInstrumental() {
+  readForm();
+  const lines = project.abc.split("\n");
+  const unit = Number(project.abc.match(/^L:1\/(\d+)/m)?.[1] ?? 32);
+  let meter = project.abc.match(/^M:(\S+)/m)?.[1] ?? "4/4";
+  const bars = (line) => line.slice(0, -1).split("|").flatMap((bar) => {
+    const rest = bar.trim().match(/^Z(\d)?$/);
+    return rest ? Array(Number(rest[1] || 1)).fill("Z") : [bar.trim()];
+  });
+  const sung = (bar) => /[A-Ga-g]/.test(bar.replace(/"[^"]*"|\[K:[^\]]*\]/g, ""));
+  const groups = [];
+  let vocal = null;
+  let pending = null;
+  for (const [at, line] of lines.entries()) {
+    if (line.startsWith("M:")) meter = line.slice(2).trim();
+    else if (line.startsWith("V:")) vocal = line.trim() === "V: Vocal" ? true : line.trim() === "V: Ins" ? false : vocal;
+    else if (vocal !== null && line.endsWith("|")) {
+      const [beats, value] = meter.split("/").map(Number);
+      if (vocal) pending = { vocal: at, units: beats * unit / value };
+      else if (pending) {
+        groups.push({ ...pending, ins: at });
+        pending = null;
+      }
+    }
+  }
+  const played = [];
+  for (const group of groups) {
+    const voice = bars(lines[group.vocal]);
+    const instrument = bars(lines[group.ins]);
+    group.from = played.length;
+    group.voice = voice.map((bar, index) => {
+      played.push(sung(bar) ? { text: bar.replace(/"[^"]*"/g, ""), moved: true } : { text: instrument[index], moved: false });
+      return sung(bar) ? freeBar(bar, group.units) : bar;
+    });
+  }
+  if (!played.some((bar) => bar.moved)) throw new Error("La voz ya no canta ninguna nota.");
+  // A tie between a moved bar and a kept one would join two different lines' notes: that note is struck again.
+  played.forEach((bar, index) => {
+    if (index + 1 < played.length && played[index + 1].moved !== bar.moved) bar.text = bar.text.replace(/-\s*$/, "");
+  });
+  for (const group of groups) {
+    lines[group.vocal] = group.voice.join("|") + "|";
+    lines[group.ins] = played.slice(group.from, group.from + group.voice.length).map((bar) => bar.text).join("|") + "|";
+  }
+  const abc = lines.join("\n");
+  const blocks = lyricBlocks(project.lyrics);
+  const lyrics = blocks.length
+    ? blocks.map((block) => `${project.lyrics.slice(block.start, block.bodyStart).trim()}\n(instrumental)`).join("\n\n") + "\n"
+    : project.lyrics;
+  await postJson("/hz3/studio/sections", { abc, lyrics });
+  keepAbcVersion(project, "antes de convertir en instrumental", true);
+  project.abc = abc;
+  project.lyrics = lyrics;
+  writeForm();
+  await refreshSections();
+  remember("Canción convertida en instrumental (melodía a la línea instrumental, voz en silencio)");
+  status("Instrumental listo: la melodía pasó a la línea instrumental. Agrega «instrumental» al estilo; la versión anterior (ABC y letra) quedó en las versiones.", 1);
 }
 
 function setAbc(abc, label) {
@@ -1283,9 +1346,10 @@ function buildPrompt(prefix, kept) {
     11: { class_type: "SaveAudio", inputs: { audio: ["10", 0], filename_prefix: `${prefix}/instrumental` } },
   };
   const saves = { 6: "mix", 8: "vocals", 11: "instrumental" };
-  if (project.harmonize) {
+  if (project.harmonize && project.harmonyVoices.length) {
     prompt[12] = { class_type: "HZ3_YuE2_VocalHarmonizer", inputs: { vocals: ["7", 3], score_abc: project.abc } };
     VOICES.forEach((voice, index) => {
+      if (!project.harmonyVoices.includes(voice)) return;
       prompt[13 + index] = { class_type: "SaveAudio", inputs: { audio: ["12", index], filename_prefix: `${prefix}/${voice}` } };
       saves[13 + index] = voice;
     });
@@ -1623,7 +1687,10 @@ function draw() {
   if (sections.length) drawSections();
   if (sections.length) drawLyrics();
   if (score) drawScore();
-  for (const track of allTracks()) drawTrack(track);
+  for (const track of allTracks().filter((track) => !track.harmony && !track.voice)) drawTrack(track);
+  drawHarmonyHeader();
+  if (!harmoniesCollapsed) for (const track of TRACKS.filter((track) => track.harmony)) drawTrack(track);
+  for (const track of allTracks().filter((track) => track.voice)) drawTrack(track);
   updatePlayhead();
   drawInspector();
   drawVoiceInspector();
@@ -1639,7 +1706,13 @@ function drawLyrics() {
   head.title = orphans.length
     ? `Bloques de la letra sin sección del ABC (YuE2 los recibe igual, en la letra completa): ${orphans.join(", ")}`
     : "Letra de cada sección: edítala aquí para acomodarla con las secciones del ABC";
-  const { body } = lane("lyrics", head);
+  const { row, body } = lane("lyrics", head);
+  // Drag the lane's corner to give the lyric boxes more room; the height is a view preference of this browser.
+  try { row.style.height = `${Number(localStorage.getItem("hz3.lyricsHeight")) || 96}px`; } catch { /* default height */ }
+  new ResizeObserver(() => {
+    if (!row.isConnected || !row.offsetHeight) return;  // a redraw removed this lane
+    try { localStorage.setItem("hz3.lyricsHeight", String(row.offsetHeight)); } catch { /* not remembered */ }
+  }).observe(row);
   sections.forEach((section, index) => {
     const area = document.createElement("textarea");
     area.className = `lyric-block${section.lyrics_index === null ? " empty" : ""}`;
@@ -1654,6 +1727,57 @@ function drawLyrics() {
     });
     body.append(area);
   });
+}
+
+// The harmony tracks fold under one header; only the checked ones are generated or regenerated.
+let harmoniesCollapsed = (() => { try { return localStorage.getItem("hz3.harmoniesCollapsed") === "1"; } catch { return false; } })();
+
+function drawHarmonyHeader() {
+  const head = document.createElement("div");
+  head.innerHTML = `<span class="name link">${harmoniesCollapsed ? "▸" : "▾"} Armonías · ${project.harmonyVoices.length}/${VOICES.length}</span>
+    <span class="controls"><button data-action="regenerate" title="Vuelve a armonizar la voz principal de los takes que suenan, solo para las armonías marcadas, sin renderizar la canción">Regenerar</button></span>`;
+  head.querySelector(".name").onclick = () => {
+    harmoniesCollapsed = !harmoniesCollapsed;
+    try { localStorage.setItem("hz3.harmoniesCollapsed", harmoniesCollapsed ? "1" : "0"); } catch { /* the fold is only a convenience */ }
+    draw();
+  };
+  head.querySelector('[data-action="regenerate"]').onclick = guard(regenerateHarmonies);
+  lane("group", head);
+}
+
+// Harmonies come from the lead vocal alone, so they are rebuilt from each playing take's vocals.
+async function regenerateHarmonies() {
+  readForm();
+  if (!project.harmonyVoices.length) throw new Error("Marca primero qué armonías generar.");
+  const takes = [...new Set(Object.values(project.comp))].map(takeById).filter((take) => take?.files.vocals);
+  if (!takes.length) throw new Error("Todavía no hay takes con voz principal.");
+  const owner = project.name;
+  for (const take of takes) {
+    const { filename } = await postJson("/hz3/studio/stage", { name: `harmony_${take.id}_${Date.now().toString(36)}`, files: [take.files.vocals] });
+    const prompt = {
+      1: { class_type: "LoadAudio", inputs: { audio: filename } },
+      2: { class_type: "HZ3_YuE2_VocalHarmonizer", inputs: { vocals: ["1", 0], score_abc: project.abc } },
+    };
+    const saves = {};
+    VOICES.forEach((voice, index) => {
+      if (!project.harmonyVoices.includes(voice)) return;
+      prompt[3 + index] = { class_type: "SaveAudio", inputs: { audio: ["2", index], filename_prefix: `HZ3-Studio/${owner}/take-${take.id}/${voice}` } };
+      saves[3 + index] = voice;
+    });
+    await queue(prompt, { 2: `Armonías del take ${take.id}` }, async (outputs) => {
+      const files = Object.fromEntries(Object.entries(saves).map(([node, voice]) => [voice, outputs[node]?.audio?.[0]]).filter(([, file]) => file));
+      const current = await updateProject(owner, (target) => {
+        const stored = target.takes.find((item) => item.id === take.id);
+        if (stored) Object.assign(stored.files, files);
+      });
+      if (!current) return;
+      await loadTake(takeById(take.id));
+      remember(`Armonías regeneradas en el take ${take.id}: ${Object.keys(files).join(", ")}`);
+      draw();
+      restartIfPlaying();
+    });
+  }
+  status(`Armonías en cola para ${takes.length} take(s).`, 0);
 }
 
 function drawSections() {
@@ -1754,12 +1878,17 @@ function drawScore() {
 
 function drawTrack(track) {
   const head = document.createElement("div");
+  const generate = track.harmony ? `<label class="generate" title="Generar esta armonía en los renders y al regenerar"><input type="checkbox"${project.harmonyVoices.includes(track.id) ? " checked" : ""}> generar</label>` : "";
   const singer = track.voice && catalogStyle(track.voice.singer);
   const who = track.voice ? (singer ? `${singer.name} · ${singerCue(singer)}` : track.voice.style.split("\n").filter((line) => line.trim()).at(-1) ?? "") : "";
-  head.innerHTML = `<span class="name">${escapeHtml(track.name)}</span>${who ? `<span class="who" title="${escapeHtml(who)}">${escapeHtml(who)}</span>` : ""}<span class="controls">
+  head.innerHTML = `<span class="name">${escapeHtml(track.name)}</span>${who ? `<span class="who" title="${escapeHtml(who)}">${escapeHtml(who)}</span>` : ""}${generate}<span class="controls">
     <button data-action="mute" class="${muted(track) ? "active" : ""}" title="Silenciar">M</button>
     <button data-action="solo" class="${project.mixer[track.id]?.solo ? "active" : ""}" title="Solo">S</button>
     <input type="range" min="0" max="1.5" step="0.01" value="${project.mixer[track.id]?.gain ?? track.gain}" title="Volumen"></span>`;
+  head.querySelector(".generate input")?.addEventListener("change", (event) => {
+    project.harmonyVoices = VOICES.filter((voice) => voice === track.id ? event.target.checked : project.harmonyVoices.includes(voice));
+    draw();
+  });
   head.querySelector('[data-action="mute"]').onclick = () => {
     (project.mixer[track.id] ??= {}).mute = !muted(track);
     applyMixer();
@@ -2692,11 +2821,17 @@ async function init() {
   $("compose").onclick = guard(() => compose());
   $("section-recompose").onclick = guard(() => compose(selected));
   $("section-free").onclick = guard(() => setSectionFree(selected));
+  $("abc-instrumental").onclick = guard(convertToInstrumental);
   $("compose-dice").onclick = () => { $("compose-seed").value = Math.floor(Math.random() * 2 ** 31); readForm(); };
   $("abc-versions").onchange = guard(async (event) => {
     if (event.target.value === "") return;
     readForm();
-    setAbc(project.abcVersions[Number(event.target.value)].abc, "antes de restaurar una versión");
+    const version = project.abcVersions[Number(event.target.value)];
+    const withLyrics = version.lyrics !== undefined;
+    keepAbcVersion(project, "antes de restaurar una versión", withLyrics);
+    project.abc = version.abc;
+    if (withLyrics) project.lyrics = version.lyrics;
+    writeForm();
     await refreshSections();
     status("Versión del ABC restaurada; la que había quedó en las versiones.", 1);
   });

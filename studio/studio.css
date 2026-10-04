@@ -106,7 +106,7 @@ details.source summary { cursor: pointer; }
 details.source .row { flex-wrap: wrap; margin: 8px 0; align-items: center; }
 details.source .parts { display: flex; gap: 6px; align-items: center; color: var(--muted); }
 details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
-.lane.lyrics { height: 96px; }
+.lane.lyrics { height: 96px; min-height: 48px; resize: vertical; overflow: hidden; }
 .lyric-block { position: absolute; top: 2px; bottom: 2px; resize: none; font: 11px/1.3 system-ui, sans-serif; background: #1b1d22; border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 2px 4px; }
 .lyric-block.empty { border-left-color: var(--off); }
 .lane-head .who { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -118,3 +118,7 @@ details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap:
 .inspector > .row { align-items: center; flex-wrap: wrap; }
 .section-style { display: flex; flex-direction: column; gap: 4px; }
 .song .row label:has(#song-lora-strength) { flex: 0 0 64px; }
+.lane.group { height: 28px; }
+.lane.group .lane-head > div { display: flex; justify-content: space-between; align-items: center; gap: 4px; white-space: nowrap; }
+.lane.group .lane-head button { padding: 0 6px; font-size: 11px; }
+.lane-head .generate { flex-direction: row; align-items: center; gap: 4px; font-size: 11px; }

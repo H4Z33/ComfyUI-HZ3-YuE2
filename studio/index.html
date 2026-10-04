@@ -56,6 +56,7 @@
       <label>Temperatura<input id="compose-temperature" type="number" step="0.05" min="0" title="Más alta = melodías menos previsibles (0.7 por defecto)"></label>
     </div>
     <label class="switch" title="YuE2 compone a partir del encabezado del ABC actual (K:, M:, Q:): misma tonalidad, compás y tempo, melodía nueva"><input id="compose-keep" type="checkbox"> Conservar tonalidad, compás y tempo del ABC actual</label>
+    <button id="abc-instrumental" title="Toda la canción como instrumental: la melodía cantada pasa a la línea instrumental, la voz queda en silencio con sus acordes y la letra se vuelve (instrumental). Se deshace restaurando la versión anterior.">Convertir en instrumental (voz en silencio)</button>
     <label>Versiones anteriores del ABC (elige una para restaurarla)<select id="abc-versions"></select></label>
     <div class="row">
       <label>Semilla<input id="seed" type="number" min="0" value="60"></label>

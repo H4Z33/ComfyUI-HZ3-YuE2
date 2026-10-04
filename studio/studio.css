@@ -114,3 +114,7 @@ details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap:
 .catalog td.lora select { width: 170px; }
 .catalog td.lora input { width: 64px; }
 #freeze-clips label { flex-direction: row; gap: 6px; align-items: center; }
+.inspector > .row, .inspector > .section-style, .inspector > .takes { grid-column: 1 / -1; }
+.inspector > .row { align-items: center; flex-wrap: wrap; }
+.section-style { display: flex; flex-direction: column; gap: 4px; }
+.song .row label:has(#song-lora-strength) { flex: 0 0 64px; }

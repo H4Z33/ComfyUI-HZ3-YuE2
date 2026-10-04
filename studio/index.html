@@ -41,6 +41,10 @@
     <label>Indicaciones de estilo (MixMash y asistente)<textarea id="style-instructions" rows="3" placeholder="p. ej. intro en piano, romántico, big band después del solo"></textarea></label>
     <button id="apply-style-instructions" title="El asistente reescribe el estilo general y los de sección según las indicaciones">Aplicar indicaciones con el asistente</button>
     <label>Estilo base (grupo o género del catálogo)<select id="base-style"></select></label>
+    <div class="row">
+      <label title="LoRA de voz del cantante de la canción: se aplica en las secciones que no tienen otro cantante del catálogo">LoRA de voz de la canción<select id="song-lora"></select></label>
+      <label>Fuerza<input id="song-lora-strength" type="number" min="0" max="2" step="0.05" value="1"></label>
+    </div>
     <label>Estilo<textarea id="style" rows="6"></textarea></label>
     <button id="apply-classical" title="Escribe en la línea instrumental frases de cuartetos de dominio público (carpeta references/), en las secciones marcadas">Aplicar líneas clásicas</button>
     <button id="section-styles-from-cues" title="Convierte cada línea «[Sección] …» del estilo en el estilo propio de esa sección">Estilos por sección desde [Sección]</button>
@@ -79,6 +83,7 @@
       <button id="play">▶</button>
       <button id="stop">■</button>
       <span id="clock">0:00 / 0:00</span>
+      <button id="score-play" title="Escucha la partitura completa desde el cursor (melodía, línea instrumental y acordes)">♪ Partitura</button>
       <button id="add-voice" title="Agrega un cantante generado aparte, alineado con la voz principal">+ Voz</button>
       <label class="zoom">Zoom<input id="zoom" type="range" min="2" max="40" value="6"></label>
     </div>
@@ -98,7 +103,14 @@
         <label>Línea clásica<select id="section-classical"><option value="">Ninguna</option><option value="high">Alta (violín 1)</option><option value="low">Baja (viola / chelo)</option><option value="theme">Tema (referencias analizadas)</option></select></label>
       </div>
       <label>Letra de la sección<textarea id="section-lyrics" rows="6"></textarea></label>
-      <label>Estilo de la sección (vacío = estilo general)<textarea id="section-style" rows="6" placeholder="p. ej. Spanish female soprano, modern Latin pop, bright full band"></textarea></label>
+      <div class="section-style">
+        <label><span id="section-style-label">Estilo de la sección</span><textarea id="section-style" rows="6"></textarea></label>
+        <div class="row">
+          <button id="section-style-save" title="Guarda este texto como estilo propio de la sección">Guardar estilo</button>
+          <button id="section-style-undo" title="Descarta lo que escribiste desde la última vez que guardaste">Deshacer cambios</button>
+          <button id="section-style-original" title="Vuelve al estilo general de la canción con la línea [Sección] de esta sección; se actualiza solo cuando cambias el general">Original</button>
+        </div>
+      </div>
       <label title="Lleva la melodía de la sección al registro del cantante, escribe en su etiqueta de la letra quién canta y declara los cantantes en el estilo (así hace YuE2 los duetos)">Cantante de la sección (voz principal)<select id="section-singer"></select></label>
       <div class="row">
         <label>Semilla de la sección<input id="section-seed" type="number" min="0"></label>
@@ -106,6 +118,7 @@
       </div>
       <div id="section-takes" class="takes"></div>
       <div class="row">
+        <button id="section-score-play" title="Escucha la partitura de esta sección (melodía, línea instrumental y acordes) con un sintetizador simple">▶ Partitura</button>
         <button id="section-free" title="Deja la línea vocal de esta sección en silencios (conserva acordes y duración): YuE2 dice la letra a su manera, hablada o rapeada, en vez de cantar una melodía escrita. El ABC anterior queda en las versiones.">Melodía libre (hablado / rap)</button>
         <button id="section-recompose" title="Conserva el ABC anterior a esta sección y YuE2 compone esta sección y todo lo que sigue (semilla y temperatura de «Componer ABC»)">Recomponer el ABC desde aquí</button>
         <button id="render-section" class="primary">Regenerar sección</button>

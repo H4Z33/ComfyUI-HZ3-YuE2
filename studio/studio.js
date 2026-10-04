@@ -118,7 +118,7 @@ let pausedAt = 0;
 function newProject() {
   return {
     name: "", kind: "song", album: DEFAULT_ALBUM, notes: "", archived: false, license: null, source: null, sourceName: null, styleInstructions: "", analysis: null,
-    style: "", baseStyle: null, lyrics: "", abc: "", abcVersions: [], seed: 60, mode: "full",
+    style: "", baseStyle: null, lora: null, lyrics: "", abc: "", abcVersions: [], seed: 60, mode: "full",
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
@@ -164,6 +164,8 @@ function readForm() {
   for (const key of ["style", "lyrics", "abc", "mode", "ckpt"]) project[key] = $(key).value;
   project.styleInstructions = $("style-instructions").value;
   project.baseStyle = $("base-style").value || null;
+  const lora = loras.find((item) => item.name === $("song-lora").value);
+  project.lora = lora ? { name: lora.name, trigger: lora.trigger, strength: Number($("song-lora-strength").value) || 1 } : null;
   project.compose = { seed: Number($("compose-seed").value) || 0, temperature: Number($("compose-temperature").value), keep: $("compose-keep").checked };
   project.seed = Number($("seed").value) || 0;
   project.harmonize = $("harmonize").checked;
@@ -176,6 +178,9 @@ function writeForm() {
   for (const key of ["style", "lyrics", "abc", "mode"]) $(key).value = project[key];
   $("style-instructions").value = project.styleInstructions;
   $("base-style").innerHTML = styleOptions(["group", "genre"], "— ninguno", project.baseStyle);
+  $("song-lora").innerHTML = `<option value="">— sin LoRA (solo el estilo)</option>`
+    + loras.map((lora) => `<option value="${escapeHtml(lora.name)}"${lora.name === project.lora?.name ? " selected" : ""}>${escapeHtml(loraFile(lora.name))}</option>`).join("");
+  $("song-lora-strength").value = project.lora?.strength ?? 1;
   $("compose-seed").value = project.compose.seed;
   $("compose-temperature").value = project.compose.temperature;
   $("compose-keep").checked = project.compose.keep;
@@ -327,11 +332,14 @@ function isEdited(section, index) {
 }
 
 // MixMash-style cues: global lines, then "[Section] description" lines.
-function sectionCueStyle(name) {
+// A section's cue is found by its ABC name ("verse 2") or by the lyric tag it is paired with ("Verse 2"),
+// since ABC sections are often named "verse" while the cues follow the lyrics.
+function sectionCueStyle(section) {
   const lines = project.style.split("\n").filter((line) => line.trim());
   const global = lines.filter((line) => !line.trim().startsWith("[")).join("\n").trim();
-  const cue = lines.map((line) => line.match(/^\s*\[([^\]]+)\]\s*(.+)$/))
-    .find((match) => match && match[1].trim().toLowerCase() === name.toLowerCase());
+  const header = section.lyrics_index === null ? "" : lyricBlocks(project.lyrics)[section.lyrics_index]?.name.split(/\s+[–—-]\s+|\s*[:|(]/)[0].trim() ?? "";
+  const cues = lines.map((line) => line.match(/^\s*\[([^\]]+)\]\s*(.+)$/)).filter(Boolean);
+  const cue = [section.name, header].filter(Boolean).map((name) => cues.find((match) => match[1].trim().toLowerCase() === name.toLowerCase())).find(Boolean);
   return { global, cue: cue?.[2].trim() };
 }
 
@@ -339,7 +347,7 @@ function stylesFromCues() {
   readForm();
   let count = 0;
   for (const section of sections) {
-    const { global, cue } = sectionCueStyle(section.name);
+    const { global, cue } = sectionCueStyle(section);
     if (!cue) continue;
     project.sectionStyles[section.name] = `${global}\n${cue}`;
     count++;
@@ -500,14 +508,13 @@ async function setSectionSinger(name, id) {
 
 // A LoRA patches the whole render (both the token model and the acoustic model), so one render carries at most
 // one singer's LoRA; another singer with a LoRA sings as an extra voice, which is a render of its own.
-function withSingerLora(prompt, singers) {
-  const voiced = [...new Set(singers.filter((singer) => singer?.lora?.name))];
-  if (voiced.length > 1) {
-    throw new Error(`${voiced.map((singer) => singer.name).join(" y ")} tienen LoRA: un render lleva un solo LoRA; canta a uno como voz extra.`);
+function withLora(prompt, uses) {
+  const distinct = [...new Map(uses.filter((use) => use.lora?.name).map((use) => [use.lora.name, use])).values()];
+  if (distinct.length > 1) {
+    throw new Error(`${distinct.map((use) => use.owner).join(" y ")} usan LoRAs distintos: un render lleva un solo LoRA; canta a uno como voz extra.`);
   }
-  const singer = voiced[0];
-  if (!singer) return prompt;
-  const { name, trigger, strength } = singer.lora;
+  if (!distinct.length) return prompt;
+  const { name, trigger, strength } = distinct[0].lora;
   prompt[21] = { class_type: "LoraLoader", inputs: { model: ["1", 0], clip: ["1", 1], lora_name: name, strength_model: strength, strength_clip: strength } };
   prompt[2].inputs.clip = ["21", 1];
   prompt[4].inputs.model = ["21", 0];
@@ -703,6 +710,15 @@ function drawStyles() {
     });
     rows.append(row);
   }
+}
+
+function loraFile(name) {
+  return name.replace(/^.*[\\/]/, "").replace(/\.safetensors$/, "");
+}
+
+// The default singer of every section: the song's own style, and its LoRA when the song has one.
+function songSingerLabel() {
+  return project.lora ? `Cantante de la canción · ${loraFile(project.lora.name)}` : "Cantante de la canción (su estilo)";
 }
 
 function singerSelect(value, empty, change) {
@@ -1274,7 +1290,10 @@ function buildPrompt(prefix, kept) {
       saves[13 + index] = voice;
     });
   }
-  withSingerLora(prompt, sections.map((section) => catalogStyle(project.sectionSingers[section.name])));
+  withLora(prompt, sections.map((section) => {
+    const singer = catalogStyle(project.sectionSingers[section.name]);
+    return singer ? { lora: singer.lora, owner: singer.name } : { lora: project.lora, owner: "el cantante de la canción" };
+  }));
   return { prompt, saves };
 }
 
@@ -1820,7 +1839,7 @@ function drawTrack(track) {
       restartIfPlaying();
     };
     if (track.id === "vocals" && album.styles.some((style) => style.kind === "singer") && (section.end - section.start) * pxPerSecond >= 50) {
-      toggle.append(singerSelect(project.sectionSingers[section.name] ?? "", "—", (id) => setSectionSinger(section.name, id)));
+      toggle.append(singerSelect(project.sectionSingers[section.name] ?? "", songSingerLabel(), (id) => setSectionSinger(section.name, id)));
     }
     body.append(toggle);
   });
@@ -1829,6 +1848,99 @@ function drawTrack(track) {
 function applyMixer() {
   if (!playback) return;
   for (const track of allTracks()) playback.trackGains[track.id].gain.value = mixerGain(track);
+}
+
+let styleDraft = null;  // { section, text } while a section's style has unsaved edits
+
+// What a section sings without a style of its own: the global lines and its "[Section] …" cue.
+function defaultSectionStyle(section) {
+  const { global, cue } = sectionCueStyle(section);
+  return [global, cue].filter(Boolean).join("\n");
+}
+
+function saveSectionStyle() {
+  const section = sections.find((item) => item.name === selected);
+  const text = $("section-style").value.trim();
+  if (!text || text === defaultSectionStyle(section).trim()) delete project.sectionStyles[selected];
+  else project.sectionStyles[selected] = text;
+  styleDraft = null;
+  draw();
+}
+
+// ---------- score preview: the ABC's notes and chords through a small synth
+
+const CHORD_SHAPES = {
+  "": [0, 4, 7], m: [0, 3, 7], dim: [0, 3, 6], aug: [0, 4, 8], 7: [0, 4, 7, 10], maj7: [0, 4, 7, 11], m7: [0, 3, 7, 10],
+  dim7: [0, 3, 6, 9], m7b5: [0, 3, 6, 10], sus4: [0, 5, 7], sus2: [0, 2, 7], 6: [0, 4, 7, 9], m6: [0, 3, 7, 9],
+  "7sus4": [0, 5, 7, 10], "m(maj7)": [0, 3, 7, 11],
+};
+const PITCH_CLASSES = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+
+function pitchClass(name) {
+  return PITCH_CLASSES[name[0]] + (name.slice(1).match(/#/g)?.length ?? 0) - (name.slice(1).match(/b/g)?.length ?? 0);
+}
+
+function chordPitches(symbol) {
+  const match = symbol.match(/^([A-G](?:bb|##|b|#)?)(.*?)(?:\/([A-G](?:bb|##|b|#)?))?$/);
+  if (!match || !(match[2] in CHORD_SHAPES)) return [];
+  const root = 48 + pitchClass(match[1]);
+  const pitches = CHORD_SHAPES[match[2]].map((step) => root + step);
+  return match[3] ? [36 + pitchClass(match[3]), ...pitches] : pitches;
+}
+
+let scorePlayback = null;
+
+function stopScore() {
+  if (!scorePlayback) return;
+  scorePlayback.sources.forEach((source) => source.stop());
+  clearTimeout(scorePlayback.timer);
+  scorePlayback = null;
+  $("score-play").textContent = "♪ Partitura";
+  $("section-score-play").textContent = "▶ Partitura";
+}
+
+function playScore(fromTick, toTick, button) {
+  stopScore();
+  const target = context();
+  const begin = target.currentTime + 0.05;
+  const time = (ticks) => (ticks / TICKS_PER_QUARTER) * 60 / score.bpm;
+  const out = target.createGain();
+  out.gain.value = 0.2;
+  out.connect(target.destination);
+  const sources = [];
+  const note = (pitch, start, length, type, level) => {
+    const from = Math.max(start, fromTick);
+    const to = Math.min(start + length, toTick);
+    if (to <= from) return;
+    const oscillator = target.createOscillator();
+    const gain = target.createGain();
+    oscillator.type = type;
+    oscillator.frequency.value = 440 * 2 ** ((pitch - 69) / 12);
+    const at = begin + time(from - fromTick);
+    const end = begin + time(to - fromTick);
+    gain.gain.setValueAtTime(0, at);
+    gain.gain.linearRampToValueAtTime(level, at + 0.01);
+    gain.gain.setValueAtTime(level, Math.max(at + 0.01, end - 0.04));
+    gain.gain.linearRampToValueAtTime(0, end);
+    oscillator.connect(gain).connect(out);
+    oscillator.start(at);
+    oscillator.stop(end + 0.01);
+    sources.push(oscillator);
+  };
+  for (const item of score.tracks.Vocal ?? []) note(item.pitch, item.start, item.duration, "triangle", 0.5);
+  for (const item of score.tracks.Ins ?? []) note(item.pitch, item.start, item.duration, "sine", 0.3);
+  score.chords.forEach((chord, index) => {
+    const end = score.chords[index + 1]?.start ?? score.total_ticks;
+    for (const pitch of chordPitches(chord.symbol)) note(pitch, chord.start, end - chord.start, "sine", 0.1);
+  });
+  button.textContent = "■ Detener";
+  scorePlayback = { sources, timer: setTimeout(stopScore, (time(toTick - fromTick) + 0.3) * 1000) };
+}
+
+function sectionTicks(index) {
+  const from = score.bars[score.sections[index].start_bar].start;
+  const to = index + 1 < score.sections.length ? score.bars[score.sections[index + 1].start_bar].start : score.total_ticks;
+  return [from, to];
 }
 
 function drawInspector() {
@@ -1840,9 +1952,16 @@ function drawInspector() {
   $("section-arrangement").textContent = project.arrangement[section.name] ? `Agente: ${project.arrangement[section.name]}` : "";
   if (document.activeElement !== $("section-name")) $("section-name").value = section.name;
   if (document.activeElement !== $("section-lyrics")) $("section-lyrics").value = section.lyrics;
-  if (document.activeElement !== $("section-style")) $("section-style").value = project.sectionStyles[section.name] ?? "";
+  const ownStyle = project.sectionStyles[section.name];
+  if (styleDraft?.section !== section.name) {
+    styleDraft = null;
+    $("section-style").value = ownStyle ?? defaultSectionStyle(section);
+  }
+  $("section-style-label").textContent = ownStyle ? "Estilo de la sección (propio)" : "Estilo de la sección (el general; se actualiza solo)";
+  $("section-style-save").disabled = $("section-style-undo").disabled = !styleDraft;
+  $("section-style-original").disabled = !ownStyle && !styleDraft;
   $("section-classical").value = project.classicalPlan[section.name] ?? "";
-  $("section-singer").innerHTML = styleOptions(["singer"], "— (sin cantante del catálogo)", project.sectionSingers[section.name]);
+  $("section-singer").innerHTML = styleOptions(["singer"], songSingerLabel(), project.sectionSingers[section.name]);
   if (document.activeElement !== $("section-seed")) $("section-seed").value = sectionSeed(section, index);
   $("section-merge").disabled = index === sections.length - 1;
   $("section-earlier").disabled = $("section-later").disabled = index === 0;
@@ -1959,7 +2078,8 @@ async function renderVoice(voice) {
     8: { class_type: "SaveAudio", inputs: { audio: ["7", 3], filename_prefix: `HZ3-Studio/${project.name}/voice-${voice.id}/vocals` } },
     9: { class_type: "SaveAudio", inputs: { audio: ["5", 0], filename_prefix: `HZ3-Studio/${project.name}/voice-${voice.id}/mix` } },
   };
-  withSingerLora(prompt, [catalogStyle(voice.singer)]);
+  const singer = catalogStyle(voice.singer);
+  withLora(prompt, [{ lora: singer?.lora, owner: singer?.name }]);
   if (line !== undefined) {
     // The harmony line keeps the song's bars and section markers, so its sections match the lead's.
     prompt[20] = {
@@ -2480,11 +2600,11 @@ async function init() {
   const info = await api("/object_info/CheckpointLoaderSimple");
   const names = info.CheckpointLoaderSimple.input.required.ckpt_name[0];
   $("ckpt").innerHTML = names.map((name) => `<option>${name}</option>`).join("");
+  loras = (await api("/hz3/studio/loras")).loras;
   await loadAlbum(DEFAULT_ALBUM);
   await listAlbums();
   writeForm();
   await listProjects();
-  loras = (await api("/hz3/studio/loras")).loras;
   connectSocket();
 
   for (const id of ["lyrics", "abc"]) $(id).addEventListener("input", scheduleSections);
@@ -2614,11 +2734,26 @@ async function init() {
     setSectionLyrics(sections.findIndex((section) => section.name === selected), event.target.value);
     scheduleSections();
   }));
-  $("section-style").addEventListener("change", (event) => {
-    if (event.target.value.trim()) project.sectionStyles[selected] = event.target.value.trim();
-    else delete project.sectionStyles[selected];
-    draw();
+  $("section-style").addEventListener("input", (event) => {
+    styleDraft = { section: selected, text: event.target.value };
+    $("section-style-save").disabled = $("section-style-undo").disabled = $("section-style-original").disabled = false;
   });
+  $("section-style-save").onclick = saveSectionStyle;
+  $("section-style-undo").onclick = () => { styleDraft = null; draw(); };
+  $("section-style-original").onclick = () => { delete project.sectionStyles[selected]; styleDraft = null; draw(); };
+  $("section-score-play").onclick = guard(async () => {
+    if (scorePlayback) return stopScore();
+    if (!score) throw new Error("No hay partitura que escuchar.");
+    await context().resume();
+    playScore(...sectionTicks(sections.findIndex((section) => section.name === selected)), $("section-score-play"));
+  });
+  $("score-play").onclick = guard(async () => {
+    if (scorePlayback) return stopScore();
+    if (!score) throw new Error("No hay partitura que escuchar.");
+    await context().resume();
+    playScore(Math.min(score.total_ticks, Math.round(position() * score.bpm / 60 * TICKS_PER_QUARTER)), score.total_ticks, $("score-play"));
+  });
+  for (const id of ["song-lora", "song-lora-strength"]) $(id).addEventListener("change", () => { readForm(); draw(); });
   $("section-styles-from-cues").onclick = guard(stylesFromCues);
   $("apply-classical").onclick = guard(applyClassical);
   $("section-classical").addEventListener("change", (event) => { project.classicalPlan[selected] = event.target.value; });

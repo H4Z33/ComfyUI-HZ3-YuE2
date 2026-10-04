@@ -2266,8 +2266,11 @@ async function splitSection() {
   while (sections.some((section) => section.name === name)) name += "b";
   edited.splice(index + 1, 0, { id: `section-${Date.now()}`, name, start_bar: bar, end_bar: edited[index].end_bar, lyrics: "" });
   edited[index].end_bar = bar - 1;
-  // The new part keeps singing what the section sang: its style and singer.
-  for (const map of [project.sectionStyles, project.sectionSingers]) if (selected in map) map[name] = map[selected];
+  // The new part keeps what the section had: its take (the audio under its bars), style, singer, and which
+  // tracks and voices play there.
+  const maps = [project.comp, project.sectionStyles, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
+  for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
+  for (const map of maps) if (selected in map) map[name] = map[selected];
   selected = name;
   await applySections(edited);
 }

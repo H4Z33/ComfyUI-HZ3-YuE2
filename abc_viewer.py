@@ -278,6 +278,8 @@ def _build_abc(score_abc, bars, directives, sections):
 def _build_lyrics(sections):
     out = []
     for section in sections:
+        if out:
+            out.append("")  # a blank line between sections, as lyrics are written
         name = section["name"].replace("\n", " ").replace("\r", " ").replace("]", " ").strip()
         out.append(f"[{name or 'Section'}]")
         text = section["lyrics"].strip()

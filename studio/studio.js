@@ -122,7 +122,7 @@ function newProject() {
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
-    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, mixer: {}, voices: [], instruments: [], fx: {},
+    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
     arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {}, classicalPlan: {}, classicalReport: [],
   };
 }
@@ -243,7 +243,7 @@ function editableSections() {
 // Renames are [from, to] pairs; several sections may share an old name (YuE2 repeats "% chorus"), so each new name
 // gets a copy of what the old name held.
 function renameKeys(renames) {
-  const maps = [project.comp, project.sectionSeeds, project.sectionStyles, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
+  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
   for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds, take.sectionStyles ?? {}, take.sectionAbc ?? {}, take.sectionTokens ?? {});
   for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
   for (const entry of Object.values(project.mixer)) if (entry.offsets) maps.push(entry.offsets);
@@ -535,10 +535,63 @@ function freeBar(bar, units) {
 
 // A section whose Vocal line is only rests (chords kept): YuE2 then delivers the words freely, spoken or rapped,
 // in the style's own range, instead of singing a written melody.
+// Line numbers of a section's music lines (Vocal and Ins), in order.
+function sectionMusicLines(abc, name) {
+  let section = null;
+  return abc.split("\n").flatMap((line, at) => {
+    if (line.startsWith("% ")) section = line.slice(2).trim();
+    return section === name && line.endsWith("|") && !line.startsWith("V:") ? [at] : [];
+  });
+}
+
+// What a section's score and lyrics were before "Melodía libre" or "Instrumental", so it can go back to them.
+function keepSectionOriginal(name, kind) {
+  if (project.sectionOriginals[name]) return;
+  const lines = project.abc.split("\n");
+  const section = sections.find((item) => item.name === name);
+  project.sectionOriginals[name] = { kind, lines: sectionMusicLines(project.abc, name).map((at) => lines[at]), lyrics: section.lyrics };
+}
+
+// Sections changed before originals were kept: the ABC version saved just before the change.
+function sectionOriginal(name) {
+  if (name in project.sectionOriginals) return project.sectionOriginals[name] || null;  // null: already restored
+  const labels = { [`antes de liberar la melodía de «${name}»`]: "free", [`antes de volver instrumental «${name}»`]: "instrumental" };
+  const version = project.abcVersions.findLast((item) => item.label in labels);
+  if (!version) return null;
+  const lines = version.abc.split("\n");
+  return { kind: labels[version.label], lines: sectionMusicLines(version.abc, name).map((at) => lines[at]), lyrics: null };
+}
+
+async function restoreSectionOriginal(name) {
+  readForm();
+  const original = sectionOriginal(name);
+  const at = sectionMusicLines(project.abc, name);
+  if (at.length !== original.lines.length) throw new Error(`«${name}» cambió de compases desde entonces: recupérala con las versiones del ABC.`);
+  const lines = project.abc.split("\n");
+  at.forEach((line, index) => { lines[line] = original.lines[index]; });
+  const abc = lines.join("\n");
+  await postJson("/hz3/studio/sections", { abc, lyrics: project.lyrics });
+  setAbc(abc, `antes de restaurar la melodía escrita de «${name}»`);
+  await refreshSections();
+  const index = sections.findIndex((section) => section.name === name);
+  if (original.kind === "instrumental" && original.lyrics !== null && index >= 0) {
+    setSectionLyrics(index, original.lyrics);
+    await refreshSections();
+  }
+  project.sectionOriginals[name] = null;
+  remember(`«${name}» vuelve a su melodía escrita`);
+  status(`«${name}» recuperó su melodía escrita${original.kind === "instrumental" && original.lyrics !== null ? " y su letra" : ""}.`, 1);
+  draw();
+}
+
 async function setSectionFree(name) {
   readForm();
+  keepSectionOriginal(name, "free");
   const abc = rewriteSectionVocal(project.abc, name, (line, units) => line.slice(0, -1).split("|").map((bar) => freeBar(bar, units)).join("|") + "|");
-  if (abc === project.abc) throw new Error(`«${name}» ya no tiene melodía escrita.`);
+  if (abc === project.abc) {
+    if (project.sectionOriginals[name]?.kind === "free") delete project.sectionOriginals[name];
+    throw new Error(`«${name}» ya no tiene melodía escrita.`);
+  }
   await postJson("/hz3/studio/sections", { abc, lyrics: project.lyrics });
   setAbc(abc, `antes de liberar la melodía de «${name}»`);
   await refreshSections();
@@ -1334,6 +1387,7 @@ async function sectionToInstrumental(name) {
     lyrics = lyrics.slice(0, block.bodyStart) + "\n(instrumental)" + (last ? "\n" : "\n\n") + lyrics.slice(block.end);
   }
   await postJson("/hz3/studio/sections", { abc, lyrics });
+  keepSectionOriginal(name, "instrumental");
   keepAbcVersion(project, `antes de volver instrumental «${name}»`, true);
   project.abc = abc;
   project.lyrics = lyrics;
@@ -2405,6 +2459,9 @@ function drawInspector() {
   $("section-singer").innerHTML = styleOptions(["singer"], songSingerLabel(), project.sectionSingers[section.name]);
   if (document.activeElement !== $("section-seed")) $("section-seed").value = sectionSeed(section, index);
   $("section-merge").disabled = index === sections.length - 1;
+  const original = sectionOriginal(section.name);
+  $("section-restore").classList.toggle("hidden", !original);
+  $("section-restore").textContent = original?.kind === "instrumental" ? "Restaurar voz y letra" : "Restaurar melodía escrita";
   $("section-earlier").disabled = $("section-later").disabled = index === 0;
   const takes = $("section-takes");
   takes.innerHTML = project.takes.length ? "<span>Take de esta sección</span>" : "<span>Sin takes todavía.</span>";
@@ -3194,6 +3251,7 @@ async function init() {
   $("compose").onclick = guard(() => compose());
   $("section-recompose").onclick = guard(() => compose(selected));
   $("section-free").onclick = guard(() => setSectionFree(selected));
+  $("section-restore").onclick = guard(() => restoreSectionOriginal(selected));
   $("section-instrumental").onclick = guard(() => sectionToInstrumental(selected));
   $("compose-dice").onclick = () => { $("compose-seed").value = Math.floor(Math.random() * 2 ** 31); readForm(); };
   $("song-version-save").onclick = saveSongVersion;

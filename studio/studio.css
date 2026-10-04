@@ -141,3 +141,4 @@ details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap:
 .count { color: var(--muted); font-size: 12px; align-self: center; }
 .checks { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .checks label { flex-direction: row; gap: 4px; align-items: center; color: var(--text); }
+#section-restore.hidden { display: none; }

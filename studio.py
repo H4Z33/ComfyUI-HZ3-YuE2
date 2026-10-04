@@ -11,6 +11,7 @@ style catalog (singers, groups, genres), the assistant chat and an action log.
 import asyncio
 import io
 import json
+from fractions import Fraction
 from pathlib import Path
 import re
 import shutil
@@ -30,7 +31,7 @@ import torchaudio
 import folder_paths
 from comfy.text_encoders.yue2 import FRAMES_PER_SECOND
 
-from .abc_score import parse
+from .abc_score import DURATIONS, TOKEN, parse
 from .classical_lines import abc_phrases, add_lines, load_library
 from .section_generation import _build_section_specs
 from .vocal_harmonizer import _time_warp, _track
@@ -222,6 +223,77 @@ def _stage_audio(paths, name):
     filename = f"hz3studio_{name}.flac"
     soundfile.write(str(Path(folder_paths.get_input_directory()) / filename), torch.cat(parts, dim=1).T.numpy(), rate, format="FLAC")
     return filename
+
+
+def _rests(units):
+    text = ""
+    while units > 0:
+        size = max(value for value in DURATIONS if value <= units)
+        text += f"z{size}"
+        units -= size
+    return text
+
+
+def _bar_with_chords(bar, chords, unit, length):
+    """One Vocal bar with chord symbols at (quarter offset, symbol): before the nearest note or rest,
+    or, in a whole-bar rest, at the nearest beat."""
+    if bar == "Z":
+        per_quarter = int(1 / (4 * unit))
+        marks = {min(int(round(float(offset))), int(length) - 1) * per_quarter: symbol for offset, symbol in chords}
+        text, at = "", 0
+        for offset, symbol in sorted(marks.items()):
+            text += _rests(offset - at) + f'"{symbol}"'
+            at = offset
+        return text + _rests(int(length / (4 * unit)) - at)
+    starts, offset, cursor = [], Fraction(0), 0
+    while cursor < len(bar):
+        if bar[cursor].isspace():
+            cursor += 1
+            continue
+        match = TOKEN.match(bar, cursor)
+        if match.group("note"):
+            starts.append((offset, match.start()))
+            offset += int(match.group("duration") or "1") * unit * 4
+        cursor = match.end()
+    if not starts:
+        return bar
+    places = {}
+    for when, symbol in chords:
+        places[min(starts, key=lambda start: abs(start[0] - when))[1]] = symbol
+    for position in sorted(places, reverse=True):
+        bar = bar[:position] + f'"{places[position]}"' + bar[position:]
+    return bar
+
+
+def _freeze_chords(abc, transcription):
+    """The song's melody-only ABC with the chords SheetSage2 heard in a render of it.
+
+    Section renders keep the ABC's timing, so a chord at t seconds of the render falls at t in the score."""
+    score = parse(abc.strip() + "\n")
+    if score.voices["Vocal"].chords:
+        raise web.HTTPBadRequest(text="The song's ABC already has chord symbols.")
+    heard = parse(transcription.strip() + "\n")
+    chords, previous = [], None
+    for time, symbol in heard.voices["Vocal"].chords:
+        if symbol != previous:
+            chords.append((Fraction(float(time) * 60 / heard.bpm * score.bpm / 60).limit_denominator(64), symbol))
+            previous = symbol
+    if not chords:
+        raise web.HTTPBadRequest(text="SheetSage2 heard no chords in the render.")
+    lines = (abc.strip() + "\n").splitlines()
+    bars = iter(score.voices["Vocal"].bars)
+    for index in sorted(at for at, name in score.music_lines.items() if name == "Vocal"):
+        written = []
+        for bar in lines[index][:-1].split("|"):
+            rest = re.fullmatch(r"Z([2-4])?", bar.strip())
+            for part in ["Z"] * int(rest.group(1) or 1) if rest else [bar]:
+                start, length, _meter = next(bars)
+                inside = [(time - start, symbol) for time, symbol in chords if start <= time < start + length]
+                written.append(_bar_with_chords(part, inside, score.unit, length) if inside else part)
+        lines[index] = "|".join(written) + "|"
+    frozen = "\n".join(lines) + "\n"
+    parse(frozen)  # fail loudly rather than hand back an invalid score
+    return frozen
 
 
 def _reference_themes():
@@ -442,6 +514,11 @@ def register(routes):
             raise web.HTTPBadRequest(text="Choose at least one audio.")
         paths = [_output_file(file) for file in body["files"]]
         return web.json_response({"filename": await asyncio.to_thread(_stage_audio, paths, name)})
+
+    @routes.post("/hz3/studio/freeze_chords")
+    async def freeze_chords(request):
+        body = await request.json()
+        return web.json_response({"abc": await asyncio.to_thread(_freeze_chords, body["abc"], body["transcription"])})
 
     @routes.post("/hz3/studio/classical")
     async def classical(request):

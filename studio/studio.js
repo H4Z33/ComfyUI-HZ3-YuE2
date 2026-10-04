@@ -1146,7 +1146,7 @@ async function finishJob(promptId) {
 }
 
 function setBusy(busy) {
-  for (const id of ["render-song", "render-section", "analyze", "compose", "section-recompose", "voice-render"]) $(id).disabled = busy;
+  for (const id of ["render-song", "render-section", "analyze", "compose", "section-recompose", "voice-render", "abc-reimagine"]) $(id).disabled = busy;
 }
 
 function connectSocket() {
@@ -1437,7 +1437,14 @@ function buildPrompt(prefix, kept) {
   return { prompt, saves };
 }
 
-async function render(targets) {
+// The score's melody without its chord symbols (only music lines: the V: definitions hold quoted names too).
+function melodyOnly(abc) {
+  return abc.split("\n").map((line) => line.endsWith("|") && !line.startsWith("V:") ? line.replace(/"[^"\n]*"/g, "") : line).join("\n");
+}
+
+// reimagine: render the whole song in melody mode (YuE2 keeps the melody and invents harmony and arrangement), have
+// SheetSage2 hear the chords it played, and freeze them into the song's ABC, which then sings in full mode.
+async function render(targets, reimagine = false) {
   readForm();
   ensureName();
   await refreshSections();
@@ -1453,16 +1460,23 @@ async function render(targets) {
   });
   // A section takes the new render when asked for, edited since its take, or never rendered.
   const comped = new Set(sections.filter((section, index) =>
-    !targets || targets.includes(section.name) || isEdited(section, index) || !takeById(project.comp[section.name])
+    reimagine || !targets || targets.includes(section.name) || isEdited(section, index) || !takeById(project.comp[section.name])
   ).map((section) => section.name));
   // Untouched sections replay the tokens of their chosen take, so a new ending is matched to what plays next.
   const kept = Object.fromEntries(sections.filter((section) => !comped.has(section.name))
     .map((section) => [section.name, takeById(project.comp[section.name])?.sectionTokens?.[section.name]])
     .filter(([, tokens]) => tokens));
-  const { prompt, saves } = buildPrompt(`HZ3-Studio/${project.name}/take-${id}`, kept);
+  const { prompt, saves } = buildPrompt(`HZ3-Studio/${project.name}/take-${id}`, reimagine ? {} : kept);
+  const melody = melodyOnly(project.abc);
+  if (reimagine) {
+    Object.assign(prompt[2].inputs, { mode: "melody", abc: melody });
+    prompt[30] = { class_type: "AudioEncoderLoader", inputs: { audio_encoder_name: "sheetsage2_bf16.safetensors" } };
+    prompt[31] = { class_type: "HZ3_YuE2_SheetSage2Sections", inputs: { audio_encoder: ["30", 0], audio: ["5", 0], mode: "full" } };
+    prompt[32] = { class_type: "PreviewAny", inputs: { source: ["31", 0] } };
+  }
   const owner = project.name;
-  const version = targets ? null : songSnapshot(project, `take ${id}`);
-  await queue(prompt, RENDER_LABELS, async (outputs) => {
+  const version = targets ? null : songSnapshot(project, reimagine ? `take ${id} · reimaginado` : `take ${id}`);
+  await queue(prompt, { ...RENDER_LABELS, 31: "SheetSage2 (acordes del render)" }, async (outputs) => {
     for (const [node, track] of Object.entries(saves)) {
       const file = outputs[node]?.audio?.[0];
       if (file) take.files[track] = file;
@@ -1476,6 +1490,21 @@ async function render(targets) {
     });
     if (!current) return;
     await loadTake(take);
+    if (reimagine) {
+      const { abc } = await postJson("/hz3/studio/freeze_chords", { abc: melody, transcription: outputs[32]?.text?.[0] ?? "" });
+      keepAbcVersion(project, "antes de reimaginar el ABC");
+      project.abc = abc;
+      project.mode = "full";
+      writeForm();
+      await refreshSections();
+      // The take is what this frozen score describes, so its sections are not shown as edited.
+      take.sectionAbc = Object.fromEntries(sections.map((section) => [section.name, section.abc]));
+      await saveProject();
+      remember(`ABC reimaginado con el take ${take.id}: acordes congelados, modo full`);
+      status(`Take ${take.id} reimaginado: sus acordes quedaron en el ABC (modo full). «Regenerar» armonías para usarlos.`, 1);
+      draw();
+      return;
+    }
     remember(`Take ${take.id} · ${[...comped].join(", ")}`);
     status(`Take ${take.id} listo · ${[...comped].join(", ")}`, 1);
     draw();
@@ -2999,6 +3028,7 @@ async function init() {
     status("Versión del ABC restaurada; la que había quedó en las versiones.", 1);
   });
   $("render-song").onclick = guard(() => render(null));
+  $("abc-reimagine").onclick = guard(() => render(null, true));
   $("render-section").onclick = guard(() => render([selected]));
   $("export-mix").onclick = guard(exportMix);
   $("arrange").onclick = guard(arrange);

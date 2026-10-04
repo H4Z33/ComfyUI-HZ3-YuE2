@@ -124,7 +124,7 @@ details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap:
 .lane.group .lane-head > div { display: flex; justify-content: space-between; align-items: center; gap: 4px; white-space: nowrap; }
 .lane.group .lane-head button { padding: 0 6px; font-size: 11px; }
 .lane-head .generate { flex-direction: row; align-items: center; gap: 4px; font-size: 11px; }
-.inspector-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.inspector-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; position: sticky; top: -10px; z-index: 5; background: var(--bg); margin: -10px -12px 0; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .inspector-head button { padding: 0 8px; }
 .catalog.choice { width: min(560px, 92vw); }
 .choices { display: flex; flex-direction: column; gap: 6px; }

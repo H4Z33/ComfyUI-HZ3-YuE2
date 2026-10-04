@@ -9,6 +9,7 @@ style catalog (singers, groups, genres), the assistant chat and an action log.
 """
 
 import asyncio
+import hashlib
 import io
 import json
 from fractions import Fraction
@@ -33,7 +34,7 @@ from comfy.text_encoders.yue2 import FRAMES_PER_SECOND
 
 from .abc_score import DURATIONS, TOKEN, parse
 from .classical_lines import abc_phrases, add_lines, load_library
-from .section_generation import _build_section_specs
+from .section_generation import _build_section_specs, _stored_tokens_path
 from .vocal_harmonizer import _time_warp, _track
 from .vocal_harmony import PARTS, harmonize
 
@@ -225,6 +226,26 @@ def _stage_audio(paths, name):
     return filename
 
 
+def _slice_tokens(digests, start, frames):
+    """Stored section tokens cut to new section bounds: the frames [start, start + frames) of a take's sections
+    played one after another, as a stored token file of their own (None when the take does not reach that far)."""
+    stream = []
+    for digest in digests:
+        path = _stored_tokens_path(digest)
+        if not re.fullmatch(r"[0-9a-f]{64}", digest) or not path.is_file():
+            return None
+        stream += json.loads(path.read_text(encoding="utf-8"))
+    piece = stream[start:start + frames]
+    if len(piece) != frames:
+        return None
+    text = json.dumps(piece)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    path = _stored_tokens_path(digest)
+    if not path.is_file():
+        path.write_text(text, encoding="utf-8")
+    return digest
+
+
 def _rests(units):
     text = ""
     while units > 0:
@@ -338,9 +359,15 @@ def register(routes):
         frame = 0
         for spec in specs:
             timeline.append({"name": spec["name"], "lyrics": spec["lyrics"], "lyrics_index": spec["lyrics_index"], "abc": spec["abc"], "bars": spec["bars"],
-                             "start": frame / FRAMES_PER_SECOND, "end": (frame + spec["frames"]) / FRAMES_PER_SECOND})
+                             "start": frame / FRAMES_PER_SECOND, "end": (frame + spec["frames"]) / FRAMES_PER_SECOND,
+                             "start_frame": frame, "frames": spec["frames"]})
             frame += spec["frames"]
         return web.json_response({"sections": timeline})
+
+    @routes.post("/hz3/studio/slice_tokens")
+    async def slice_tokens(request):
+        body = await request.json()
+        return web.json_response({"tokens": [_slice_tokens(item["tokens"], item["start"], item["frames"]) for item in body["slices"]]})
 
     @routes.get("/hz3/studio/projects")
     async def projects(request):

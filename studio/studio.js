@@ -57,7 +57,6 @@ const ASSISTANT_TOOLS = [
   tool("set_sampling", "Change the song's sampling settings for rendering (only the given values change).", {
     temperature: num("default 0.9; higher = more random"), top_p: num("default 0.95"), top_k: num("default 100; higher = more varied"),
     repetition_penalty: num("default 1.2"), cfg_scale: num("default 2.0; how strongly style and lyrics are followed"),
-    mode: { type: "string", enum: ["full", "melody"], description: "full = chord-annotated ABC, melody = melody-only ABC" },
     seed: num("song seed, the default for every section"),
   }),
   tool("get_abc", "Read the song's ABC score, or one section of it.", { section: str("section name, omit for the whole score") }),
@@ -118,7 +117,7 @@ let pausedAt = 0;
 function newProject() {
   return {
     name: "", kind: "song", album: DEFAULT_ALBUM, notes: "", archived: false, license: null, source: null, sourceName: null, styleInstructions: "", analysis: null,
-    style: "", baseStyle: null, lora: null, lyrics: "", abc: "", abcVersions: [], seed: 60, mode: "full",
+    style: "", baseStyle: null, lora: null, lyrics: "", abc: "", abcVersions: [], seed: 60,
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
@@ -160,7 +159,7 @@ function escapeHtml(text) {
 const SAMPLING = ["temperature", "top_p", "top_k", "repetition_penalty", "cfg_scale"];
 
 function readForm() {
-  for (const key of ["style", "lyrics", "abc", "mode", "ckpt"]) project[key] = $(key).value;
+  for (const key of ["style", "lyrics", "abc", "ckpt"]) project[key] = $(key).value;
   project.styleInstructions = $("style-instructions").value;
   project.baseStyle = $("base-style").value || null;
   const lora = loras.find((item) => item.name === $("song-lora").value);
@@ -173,7 +172,7 @@ function readForm() {
 }
 
 function writeForm() {
-  for (const key of ["style", "lyrics", "abc", "mode"]) $(key).value = project[key];
+  for (const key of ["style", "lyrics", "abc"]) $(key).value = project[key];
   $("style-instructions").value = project.styleInstructions;
   $("base-style").innerHTML = styleOptions(["group", "genre"], "— ninguno", project.baseStyle);
   $("song-lora").innerHTML = `<option value="">— sin LoRA (solo el estilo)</option>`
@@ -367,20 +366,13 @@ function takeById(id) {
   return project.takes.find((take) => take.id === id);
 }
 
-// What changed in a section since its chosen take was rendered.
-function editReasons(section, index) {
-  const take = takeById(project.comp[section.name]);
-  if (!take) return [];
-  return [
-    (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim() && "letra",
-    take.sectionSeeds[section.name] !== sectionSeed(section, index) && "semilla",
-    (take.sectionStyles?.[section.name] ?? "") !== sectionStyle(section) && "estilo",
-    Boolean(take.sectionAbc && take.sectionAbc[section.name] !== section.abc) && "ABC/compases",
-  ].filter(Boolean);
-}
-
 function isEdited(section, index) {
-  return editReasons(section, index).length > 0;
+  const take = takeById(project.comp[section.name]);
+  if (!take) return false;
+  return (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim()
+    || take.sectionSeeds[section.name] !== sectionSeed(section, index)
+    || (take.sectionStyles?.[section.name] ?? "") !== sectionStyle(section)
+    || Boolean(take.sectionAbc && take.sectionAbc[section.name] !== section.abc);
 }
 
 // MixMash-style cues: global lines, then "[Section] description" lines.
@@ -820,7 +812,7 @@ function assistantState() {
     },
     song: {
       name: project.name, notes: project.notes, base_style: styleName(project.baseStyle), style: project.style, style_instructions: project.styleInstructions,
-      seed: project.seed, mode: project.mode, sampling: project.sampling, compose: project.compose, abc_versions: project.abcVersions.length,
+      seed: project.seed, sampling: project.sampling, compose: project.compose, abc_versions: project.abcVersions.length,
       lyrics: sections.length ? undefined : project.lyrics, has_abc: Boolean(project.abc.trim()), source_audio: Boolean(project.source),
       harmonize: project.harmonize, jobs_running: pending.size, takes: project.takes.map((take) => take.id),
       sections: sections.map((section, index) => ({
@@ -968,11 +960,10 @@ async function runAction(action) {
       return "Armonías arregladas";
     case "set_sampling": {
       for (const key of SAMPLING) if (Number.isFinite(Number(action[key])) && action[key] !== undefined) project.sampling[key] = Number(action[key]);
-      if (["full", "melody"].includes(action.mode)) project.mode = action.mode;
       if (Number.isFinite(Number(action.seed)) && action.seed !== undefined) project.seed = Number(action.seed);
       writeForm();
       draw();
-      return `Muestreo: ${SAMPLING.map((key) => `${key} ${project.sampling[key]}`).join(", ")} · modo ${project.mode} · semilla ${project.seed}`;
+      return `Muestreo: ${SAMPLING.map((key) => `${key} ${project.sampling[key]}`).join(", ")} · semilla ${project.seed}`;
     }
     case "get_abc":
       return action.section ? sectionNamed(action.section).abc : project.abc;
@@ -1324,7 +1315,7 @@ async function sectionToInstrumental(name) {
 }
 
 // What a full render was made from, kept per "Generar canción" so a song can go back to any of its versions.
-const SONG_STATE = ["style", "baseStyle", "lora", "lyrics", "abc", "seed", "mode", "sampling", "harmonize", "harmonyVoices",
+const SONG_STATE = ["style", "baseStyle", "lora", "lyrics", "abc", "seed", "sampling", "harmonize", "harmonyVoices",
   "sectionSeeds", "sectionStyles", "sectionSingers", "classicalPlan", "arrangement", "comp", "trackOn", "mixer", "voices"];
 
 function songSnapshot(source, label) {
@@ -1371,7 +1362,7 @@ async function compose(fromSection = null) {
     2: {
       class_type: "HZ3_YuE2_ContinueABC",
       inputs: {
-        clip: ["1", 1], style: globalStyle(), lyrics: project.lyrics, abc_start: abcStart(fromSection), seed, mode: project.mode,
+        clip: ["1", 1], style: globalStyle(), lyrics: project.lyrics, abc_start: abcStart(fromSection), seed, mode: "full",
         max_abc_tokens: 8192, temperature, top_p: 0.9, top_k: 30, repetition_penalty: 1.005,
       },
     },
@@ -1406,7 +1397,7 @@ function buildPrompt(prefix, kept) {
       class_type: "HZ3_YuE2_GenerateMusicSections",
       inputs: {
         clip: ["1", 1], style: globalStyle(), lyrics: project.lyrics, abc: project.abc, seed: project.seed,
-        mode: project.mode, ...project.sampling, section_seeds: overrides,
+        mode: "full", ...project.sampling, section_seeds: overrides,
         section_styles: sections.map((section) => [section.name, sectionStyle(section)]).filter(([, text]) => text.trim())
           .map(([name, text]) => `${name}: ${oneLine(text)}`).join("\n"),
         section_tokens: Object.entries(kept).map(([name, tokens]) => `${name} = ${tokens}`).join("\n"),
@@ -1449,6 +1440,40 @@ function melodyOnly(abc) {
   return abc.split("\n").map((line) => line.endsWith("|") && !line.startsWith("V:") ? line.replace(/"[^"\n]*"/g, "") : line).join("\n");
 }
 
+// The stored tokens each section not rendered again keeps: its take's own, or, when its bars changed (a moved
+// boundary, a split), the frames under its new bounds cut from its take's tokens, which is what plays there now.
+async function keptTokens(comped) {
+  const kept = {};
+  const slices = [];
+  for (const section of sections.filter((item) => !comped.has(item.name))) {
+    const take = takeById(project.comp[section.name]);
+    const own = take.sectionTokens?.[section.name];
+    if (own && take.sectionAbc?.[section.name] === section.abc) kept[section.name] = own;
+    else if (take.sectionTokens) slices.push({ name: section.name, tokens: takeStream(take), start: section.start_frame, frames: section.frames });
+  }
+  if (slices.length) {
+    const { tokens } = await postJson("/hz3/studio/slice_tokens", { slices });
+    slices.forEach((slice, index) => { if (tokens[index]) kept[slice.name] = tokens[index]; });
+  }
+  return kept;
+}
+
+function takeStream(take) {
+  if (take.tokenStream) return take.tokenStream;
+  // Older takes: their sections in the song's current order.
+  const at = (name) => { const index = sections.findIndex((section) => section.name === name); return index < 0 ? Infinity : index; };
+  return Object.keys(take.sectionTokens).sort((a, b) => at(a) - at(b)).map((name) => take.sectionTokens[name]);
+}
+
+function saveSongVersion() {
+  readForm();
+  const label = prompt("Nombre de la versión:", `versión ${project.songVersions.length + 1}`);
+  if (label === null) return;
+  project.songVersions = [...project.songVersions, songSnapshot(project, label.trim() || "sin nombre")].slice(-30);
+  writeForm();
+  status(`Versión «${label.trim() || "sin nombre"}» guardada. Guarda el proyecto para conservarla.`, 1);
+}
+
 // reimagine: render the whole song in melody mode (YuE2 keeps the melody and invents harmony and arrangement), have
 // SheetSage2 hear the chords it played, and freeze them into the song's ABC, which then sings in full mode.
 async function render(targets, reimagine = false) {
@@ -1465,29 +1490,20 @@ async function render(targets, reimagine = false) {
     take.sectionSeeds[section.name] = sectionSeed(section, index);
     if (sectionStyle(section)) take.sectionStyles[section.name] = sectionStyle(section);
   });
-  // A section takes the new render when asked for, edited since its take, or never rendered.
-  const comped = new Set(sections.filter((section, index) =>
-    reimagine || !targets || targets.includes(section.name) || isEdited(section, index) || !takeById(project.comp[section.name])
+  // "Generar canción" renders every section; "Regenerar sección" only the chosen ones (and any never rendered).
+  const comped = new Set(sections.filter((section) =>
+    reimagine || !targets || targets.includes(section.name) || !takeById(project.comp[section.name])
   ).map((section) => section.name));
-  // Regenerating a few sections also regenerates every edited or never-rendered one: say so before spending a render.
-  const extra = targets && !reimagine ? sections.map((section, index) => [section, index])
-    .filter(([section]) => comped.has(section.name) && !targets.includes(section.name)) : [];
-  if (extra.length) {
-    const why = extra.map(([section, index]) => {
-      const reasons = editReasons(section, index);
-      return `«${section.name}» (${reasons.length ? `cambió: ${reasons.join(", ")}` : "sin take"})`;
-    });
-    const go = await choose(`Se van a regenerar ${comped.size} de ${sections.length} secciones`,
-      `Además de ${targets.map((name) => `«${name}»`).join(", ")}, se regeneran las que cambiaron desde su take o no tienen uno, `
-      + `porque sus tokens guardados ya no corresponden: ${why.join("; ")}.`,
-      [{ value: true, label: `Regenerar las ${comped.size} secciones` }]);
+  const kept = reimagine ? {} : await keptTokens(comped);
+  const missing = sections.filter((section) => !comped.has(section.name) && !kept[section.name]).map((section) => section.name);
+  if (missing.length) {
+    const go = await choose(`También se regenerarían ${missing.length} secciones más`,
+      `No quedan tokens guardados que cubran ${missing.map((name) => `«${name}»`).join(", ")} con sus compases actuales, así que YuE2 las volvería a cantar.`,
+      [{ value: true, label: `Regenerar también esas ${missing.length}` }]);
     if (!go) return;
+    for (const name of missing) comped.add(name);
   }
-  // Untouched sections replay the tokens of their chosen take, so a new ending is matched to what plays next.
-  const kept = Object.fromEntries(sections.filter((section) => !comped.has(section.name))
-    .map((section) => [section.name, takeById(project.comp[section.name])?.sectionTokens?.[section.name]])
-    .filter(([, tokens]) => tokens));
-  const { prompt, saves } = buildPrompt(`HZ3-Studio/${project.name}/take-${id}`, reimagine ? {} : kept);
+  const { prompt, saves } = buildPrompt(`HZ3-Studio/${project.name}/take-${id}`, kept);
   const melody = melodyOnly(project.abc);
   if (reimagine) {
     Object.assign(prompt[2].inputs, { mode: "melody", abc: melody });
@@ -1496,7 +1512,7 @@ async function render(targets, reimagine = false) {
     prompt[32] = { class_type: "PreviewAny", inputs: { source: ["31", 0] } };
   }
   const owner = project.name;
-  const version = targets ? null : songSnapshot(project, reimagine ? `take ${id} · reimaginado` : `take ${id}`);
+  const version = songSnapshot(project, reimagine ? `take ${id} · reimaginado` : targets ? `take ${id} · ${targets.join(", ")}` : `take ${id}`);
   await queue(prompt, { ...RENDER_LABELS, 31: "SheetSage2 (acordes del render)" }, async (outputs) => {
     for (const [node, track] of Object.entries(saves)) {
       const file = outputs[node]?.audio?.[0];
@@ -1504,10 +1520,12 @@ async function render(targets, reimagine = false) {
     }
     if (!take.files.vocals) throw new Error("La generación terminó sin audio.");
     take.sectionTokens = outputs[2]?.section_tokens?.[0] ?? {};
+    // The take's tokens in song order (section renames reorder the keys above).
+    take.tokenStream = Object.values(take.sectionTokens);
     const current = await updateProject(owner, (target) => {
       target.takes.push(take);
       for (const name of comped) target.comp[name] = take.id;
-      if (version) target.songVersions = [...(target.songVersions ?? []), { ...version, comp: { ...target.comp } }].slice(-30);
+      target.songVersions = [...(target.songVersions ?? []), { ...version, comp: { ...target.comp } }].slice(-30);
     });
     if (!current) return;
     await loadTake(take);
@@ -1515,7 +1533,6 @@ async function render(targets, reimagine = false) {
       const { abc } = await postJson("/hz3/studio/freeze_chords", { abc: melody, transcription: outputs[32]?.text?.[0] ?? "" });
       keepAbcVersion(project, "antes de reimaginar el ABC");
       project.abc = abc;
-      project.mode = "full";
       writeForm();
       await refreshSections();
       // The take is what this frozen score describes, so its sections are not shown as edited.
@@ -2435,7 +2452,7 @@ async function renderVoice(voice) {
       inputs: {
         clip: ["1", 1], style: [voice.style, catalogStyle(voice.singer)?.text].filter((text) => text?.trim()).join("\n"),
         lyrics: project.lyrics, abc: line !== undefined ? ["20", line] : project.abc, seed: voice.seed,
-        mode: line !== undefined ? "melody" : project.mode, ...project.sampling, section_seeds: "", section_styles: "",
+        mode: line !== undefined ? "melody" : "full", ...project.sampling, section_seeds: "", section_styles: "",
       },
     },
     3: { class_type: "EmptyYuE2LatentAudio", inputs: { seconds: ["2", 1], batch_size: 1 } },
@@ -3081,6 +3098,7 @@ async function init() {
   $("section-free").onclick = guard(() => setSectionFree(selected));
   $("section-instrumental").onclick = guard(() => sectionToInstrumental(selected));
   $("compose-dice").onclick = () => { $("compose-seed").value = Math.floor(Math.random() * 2 ** 31); readForm(); };
+  $("song-version-save").onclick = saveSongVersion;
   $("song-versions").onchange = guard(async (event) => {
     if (event.target.value !== "") await restoreSongVersion(Number(event.target.value));
   });

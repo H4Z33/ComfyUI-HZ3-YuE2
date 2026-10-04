@@ -16,7 +16,7 @@ Rendering settings (set_sampling, used by every render):
 - temperature (default 0.9), top_p (0.95), top_k (100): higher values give a looser, more surprising performance and melody; lower values follow the most likely singing of the ABC.
 - repetition_penalty (1.2): discourages repeating the same audio tokens.
 - cfg_scale (2.0): how strongly the performance follows the style and lyrics. The ABC is part of both guided prompts, so cfg does not make the melody follow the ABC more or less.
-- mode: "full" sings from the chord-annotated ABC, "melody" from a melody-only ABC.
+- The song always renders and composes in full mode (chord-annotated ABC); only "Reimaginar ABC" renders in melody mode.
 - seed: the song seed; each section can have its own seed (set_section_seed). A new seed gives a new performance of the same ABC.
 
 The melody itself comes from the ABC. To get a melody that is really different from the current ABC:

@@ -55,12 +55,14 @@
       <label>Temperatura<input id="compose-temperature" type="number" step="0.05" min="0" title="Más alta = melodías menos previsibles (0.7 por defecto)"></label>
     </div>
     <label class="switch" title="YuE2 compone a partir del encabezado del ABC actual (K:, M:, Q:): misma tonalidad, compás y tempo, melodía nueva"><input id="compose-keep" type="checkbox"> Conservar tonalidad, compás y tempo del ABC actual</label>
-    <label title="Cada «Generar canción» completo guarda aquí todo lo que produjo ese take: estilo, letra, ABC, semillas, cantantes, comping y mezcla">Versiones de la canción<select id="song-versions"></select></label>
+    <div class="row">
+      <label title="Cada render (canción o sección) guarda aquí todo lo que produjo ese take: estilo, letra, ABC, semillas, cantantes, comping y mezcla. Elige una para restaurarla.">Versiones de la canción<select id="song-versions"></select></label>
+      <button id="song-version-save" title="Guarda el estado actual de la canción como una versión con nombre">Guardar versión</button>
+    </div>
     <button id="abc-reimagine" title="Renderiza la canción en modo melody (YuE2 conserva tu melodía y reinventa armonía y arreglo), SheetSage2 escucha los acordes que tocó y quedan escritos en el ABC, que pasa a modo full. El ABC anterior queda en las versiones.">Reimaginar ABC</button>
     <label>Versiones anteriores del ABC (elige una para restaurarla)<select id="abc-versions"></select></label>
     <div class="row">
       <label>Semilla<input id="seed" type="number" min="0" value="60"></label>
-      <label>Modo<select id="mode"><option>full</option><option>melody</option></select></label>
     </div>
     <details>
       <summary>Avanzado</summary>

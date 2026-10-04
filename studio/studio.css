@@ -124,3 +124,9 @@ details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap:
 .lane-head .generate { flex-direction: row; align-items: center; gap: 4px; font-size: 11px; }
 .inspector-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .inspector-head button { padding: 0 8px; }
+.catalog.choice { width: min(560px, 92vw); }
+.choices { display: flex; flex-direction: column; gap: 6px; }
+.choices button { text-align: left; }
+.lyric-arrows { position: absolute; bottom: 2px; transform: translateX(-50%); display: flex; gap: 1px; z-index: 2; }
+.lyric-arrows button { padding: 0 3px; font-size: 10px; line-height: 14px; opacity: .75; }
+.lyric-arrows button:hover { opacity: 1; }

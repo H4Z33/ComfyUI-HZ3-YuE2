@@ -253,16 +253,56 @@ function renameKeys(renames) {
   }
 }
 
-// keepLyrics: only the ABC changes (renaming sections after their lyric tags), so the lyrics keep their
-// "– who sings" cues and the blocks no ABC section sings.
-async function applySections(edited, renames = [], keepLyrics = false) {
+// The lyrics after a section edit, written here rather than taken from the ABC viewer: each section keeps its own
+// lyric tag (with its "– who sings" cue; only the name changes when the section was renamed), and the blocks no ABC
+// section sings stay after the section they followed. tagOf maps a section id to the id whose tag it takes (a merge).
+function rebuiltLyrics(edited, tagOf = {}) {
+  const blocks = lyricBlocks(project.lyrics);
+  const ids = sections.map((_, index) => `section-${index + 1}`);
+  const present = new Set(edited.map((section) => section.id));
+  const tags = new Map();
+  const after = new Map();
+  let anchor = "";
+  const owner = new Map(sections.map((section, index) => [section.lyrics_index, index]).filter(([block]) => block !== null));
+  blocks.forEach((block, index) => {
+    if (owner.has(index)) {
+      const at = owner.get(index);
+      const [, base, cue = ""] = block.name.match(/^(.*?)(\s+[–—-]\s+.*|\s*[:|(].*)?$/);
+      tags.set(ids[at], { name: sections[at].name, base: base.trim(), cue });
+      anchor = ids[at];
+    } else {
+      after.set(anchor, [...(after.get(anchor) ?? []), project.lyrics.slice(block.start, block.end).trim()]);
+    }
+  });
+  // Blocks that followed a section merged away now follow the section before it.
+  let kept = "";
+  for (const id of ids) {
+    if (present.has(id)) kept = id;
+    else if (after.has(id)) after.set(kept, [...(after.get(kept) ?? []), ...after.get(id)]);
+  }
+  const parts = [...(after.get("") ?? [])];
+  for (const section of edited) {
+    const tag = tags.get(tagOf[section.id] ?? section.id);
+    const body = section.lyrics.trim();
+    if (tag || body) {
+      const base = tag && tag.name === section.name ? tag.base : section.name;
+      parts.push(`[${base}${tag?.cue ?? ""}]` + (body ? `\n${body}` : ""));
+    }
+    if (present.has(section.id)) parts.push(...(after.get(section.id) ?? []));
+  }
+  return parts.join("\n\n") + "\n";
+}
+
+// keepLyrics: only the ABC changes (renaming sections after their own lyric tags).
+async function applySections(edited, renames = [], keepLyrics = false, tagOf = {}) {
   readForm();
   // Pin every section's seed by name so reshaping one section does not reroll the others.
   sections.forEach((section, index) => { project.sectionSeeds[section.name] ??= project.seed + index; });
+  const lyrics = keepLyrics ? project.lyrics : rebuiltLyrics(edited, tagOf);
   renameKeys(renames);
   const data = await postJson("/hz3/yue2/abc_viewer/data", { abc: project.abc, lyrics: project.lyrics, sections: edited });
   project.abc = data.edited_abc;
-  if (!keepLyrics) project.lyrics = data.edited_lyrics;
+  project.lyrics = lyrics;
   $("abc").value = project.abc;
   $("lyrics").value = project.lyrics;
   await refreshSections();
@@ -1764,7 +1804,33 @@ function drawLyrics() {
       await refreshSections();
     });
     body.append(area);
+    if (index > 0) {
+      // Moving the boundary between two sections in the lyrics moves one line across it.
+      const arrows = document.createElement("div");
+      arrows.className = "lyric-arrows";
+      arrows.style.left = `${section.start * pxPerSecond}px`;
+      arrows.innerHTML = `<button data-way="back" title="Pasa la primera línea de «${escapeHtml(section.name)}» a la sección anterior">⇠</button><button data-way="forward" title="Trae la última línea de la sección anterior a «${escapeHtml(section.name)}»">⇢</button>`;
+      arrows.querySelectorAll("button").forEach((button) => { button.onclick = guard(() => moveLyricLine(index, button.dataset.way)); });
+      body.append(arrows);
+    }
   });
+}
+
+// One lyric line across the boundary before section `index`: "back" gives its first line to the previous section,
+// "forward" brings the previous section's last line into it.
+async function moveLyricLine(index, way) {
+  const [earlier, later] = [sections[index - 1].lyrics.split("\n"), sections[index].lyrics.split("\n")];
+  const source = way === "back" ? later : earlier;
+  const at = way === "back" ? source.findIndex((line) => line.trim()) : source.findLastIndex((line) => line.trim());
+  if (at < 0) throw new Error("No hay líneas que mover en esa sección.");
+  const [line] = source.splice(at, 1);
+  if (way === "back") earlier.push(line);
+  else later.unshift(line);
+  // The later section first, then the earlier one with fresh pairings, since writing may create a lyric block.
+  setSectionLyrics(index, later.join("\n"));
+  await refreshSections();
+  setSectionLyrics(index - 1, earlier.join("\n"));
+  await refreshSections();
 }
 
 // The harmony tracks fold under one header; only the checked ones are generated or regenerated.
@@ -2171,6 +2237,8 @@ async function splitSection() {
   while (sections.some((section) => section.name === name)) name += "b";
   edited.splice(index + 1, 0, { id: `section-${Date.now()}`, name, start_bar: bar, end_bar: edited[index].end_bar, lyrics: "" });
   edited[index].end_bar = bar - 1;
+  // The new part keeps singing what the section sang: its style and singer.
+  for (const map of [project.sectionStyles, project.sectionSingers]) if (selected in map) map[name] = map[selected];
   selected = name;
   await applySections(edited);
 }
@@ -2188,11 +2256,49 @@ async function moveSectionStart(bars) {
 
 async function mergeSection() {
   const index = sections.findIndex((section) => section.name === selected);
+  const [first, second] = [sections[index], sections[index + 1]];
+  const describe = (section) => {
+    const style = project.sectionStyles[section.name];
+    const singer = catalogStyle(project.sectionSingers[section.name]);
+    return `estilo ${style ? `propio («${style.split("\n").at(-1).slice(0, 50)}»)` : "general"} · ${singer ? `canta ${singer.name}` : songSingerLabel().toLowerCase()}`;
+  };
+  // The merged section can only sing one style and one singer.
+  let keep = first;
+  if ((project.sectionStyles[first.name] ?? "") !== (project.sectionStyles[second.name] ?? "")
+      || (project.sectionSingers[first.name] ?? null) !== (project.sectionSingers[second.name] ?? null)) {
+    keep = await choose(`Unir «${first.name}» y «${second.name}»`,
+      "Tienen distinto estilo o cantante, y la sección unida solo puede tener uno. ¿Con cuál se queda?",
+      [{ value: first, label: `«${first.name}»: ${describe(first)}` }, { value: second, label: `«${second.name}»: ${describe(second)}` }]);
+    if (!keep) return;
+  }
+  for (const map of [project.sectionStyles, project.sectionSingers]) {
+    if (keep.name in map) map[first.name] = map[keep.name];
+    else delete map[first.name];
+    delete map[second.name];
+  }
   const edited = editableSections();
   const [next] = edited.splice(index + 1, 1);
   edited[index].end_bar = next.end_bar;
   edited[index].lyrics = [edited[index].lyrics.trim(), next.lyrics.trim()].filter(Boolean).join("\n");
-  await applySections(edited);
+  await applySections(edited, [], false, keep === second ? { [edited[index].id]: next.id } : {});
+}
+
+// A small modal choice; resolves to the chosen option's value, or null when cancelled.
+function choose(title, text, options) {
+  return new Promise((resolve) => {
+    const dialog = $("choice");
+    $("choice-title").textContent = title;
+    $("choice-text").textContent = text;
+    const answer = (value) => { dialog.onclose = null; dialog.close(); resolve(value); };
+    $("choice-options").replaceChildren(...options.map(({ value, label }) => {
+      const button = document.createElement("button");
+      button.textContent = label;
+      button.onclick = () => answer(value);
+      return button;
+    }), Object.assign(document.createElement("button"), { textContent: "Cancelar", onclick: () => answer(null) }));
+    dialog.onclose = () => resolve(null);
+    dialog.showModal();
+  });
 }
 
 // ---------- extra voices

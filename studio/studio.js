@@ -1314,7 +1314,7 @@ async function sectionToInstrumental(name) {
   status(`«${name}» es instrumental: su melodía pasó a la línea instrumental. La versión anterior (ABC y letra) quedó en las versiones.`, 1);
 }
 
-// What a full render was made from, kept per "Generar canción" so a song can go back to any of its versions.
+// What a song version holds: everything a render is made from, frozen only when the producer asks ("Guardar versión").
 const SONG_STATE = ["style", "baseStyle", "lora", "lyrics", "abc", "seed", "sampling", "harmonize", "harmonyVoices",
   "sectionSeeds", "sectionStyles", "sectionSingers", "classicalPlan", "arrangement", "comp", "trackOn", "mixer", "voices"];
 
@@ -1322,16 +1322,32 @@ function songSnapshot(source, label) {
   return { at: Date.now(), label, ...JSON.parse(JSON.stringify(Object.fromEntries(SONG_STATE.map((key) => [key, source[key]])))) };
 }
 
-async function restoreSongVersion(index) {
+async function pickSongVersion(index) {
   readForm();
   const version = project.songVersions[index];
-  project.songVersions = [...project.songVersions, songSnapshot(project, "antes de restaurar una versión")].slice(-30);
+  const automatic = project.songVersions.filter((item) => /^take \d+/.test(item.label) || item.label === "antes de restaurar una versión");
+  let action = await choose(`Versión «${version.label}»`, `Guardada el ${new Date(version.at).toLocaleString()}.`, [
+    { value: "restore", label: "Restaurarla (lo que tienes ahora se pierde si no lo guardaste como versión)" },
+    { value: "keep", label: "Guardar lo actual como versión y luego restaurarla" },
+    { value: "delete", label: "Borrar esta versión" },
+    // Earlier builds froze a version on every render and every restore.
+    ...(automatic.length ? [{ value: "automatic", label: `Borrar las ${automatic.length} versiones automáticas (de cada render o restauración)` }] : []),
+  ]);
+  if (action === "delete" || action === "automatic") {
+    const gone = action === "delete" ? [version] : automatic;
+    project.songVersions = project.songVersions.filter((item) => !gone.includes(item));
+    writeForm();
+    status(`${gone.length === 1 ? `Versión «${version.label}» borrada` : `${gone.length} versiones borradas`}. Guarda el proyecto para que quede así.`, 1);
+    return;
+  }
+  if (action === "keep" && !saveSongVersion()) action = null;
+  if (!action) { writeForm(); return; }
   for (const key of SONG_STATE) if (key in version) project[key] = JSON.parse(JSON.stringify(version[key]));
   writeForm();
   await refreshSections();
   draw();
   restartIfPlaying();
-  status(`Versión «${version.label}» restaurada; la que tenías quedó en las versiones. Guarda para conservarla.`, 1);
+  status(`Versión «${version.label}» restaurada. Guarda el proyecto para conservarla.`, 1);
 }
 
 function setAbc(abc, label) {
@@ -1468,10 +1484,11 @@ function takeStream(take) {
 function saveSongVersion() {
   readForm();
   const label = prompt("Nombre de la versión:", `versión ${project.songVersions.length + 1}`);
-  if (label === null) return;
+  if (label === null) return false;
   project.songVersions = [...project.songVersions, songSnapshot(project, label.trim() || "sin nombre")].slice(-30);
   writeForm();
   status(`Versión «${label.trim() || "sin nombre"}» guardada. Guarda el proyecto para conservarla.`, 1);
+  return true;
 }
 
 // reimagine: render the whole song in melody mode (YuE2 keeps the melody and invents harmony and arrangement), have
@@ -1512,7 +1529,6 @@ async function render(targets, reimagine = false) {
     prompt[32] = { class_type: "PreviewAny", inputs: { source: ["31", 0] } };
   }
   const owner = project.name;
-  const version = songSnapshot(project, reimagine ? `take ${id} · reimaginado` : targets ? `take ${id} · ${targets.join(", ")}` : `take ${id}`);
   await queue(prompt, { ...RENDER_LABELS, 31: "SheetSage2 (acordes del render)" }, async (outputs) => {
     for (const [node, track] of Object.entries(saves)) {
       const file = outputs[node]?.audio?.[0];
@@ -1525,7 +1541,6 @@ async function render(targets, reimagine = false) {
     const current = await updateProject(owner, (target) => {
       target.takes.push(take);
       for (const name of comped) target.comp[name] = take.id;
-      target.songVersions = [...(target.songVersions ?? []), { ...version, comp: { ...target.comp } }].slice(-30);
     });
     if (!current) return;
     await loadTake(take);
@@ -3101,7 +3116,7 @@ async function init() {
   $("compose-dice").onclick = () => { $("compose-seed").value = Math.floor(Math.random() * 2 ** 31); readForm(); };
   $("song-version-save").onclick = saveSongVersion;
   $("song-versions").onchange = guard(async (event) => {
-    if (event.target.value !== "") await restoreSongVersion(Number(event.target.value));
+    if (event.target.value !== "") await pickSongVersion(Number(event.target.value));
   });
   $("close-inspector").onclick = () => { selected = null; draw(); };
   $("close-voice-inspector").onclick = () => { selectedVoice = null; draw(); };

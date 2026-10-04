@@ -182,7 +182,7 @@ function writeForm() {
   $("compose-seed").value = project.compose.seed;
   $("compose-temperature").value = project.compose.temperature;
   $("compose-keep").checked = project.compose.keep;
-  $("song-versions").innerHTML = `<option value="">${project.songVersions.length ? `— ${project.songVersions.length} versiones —` : "— sin versiones todavía —"}</option>`
+  $("song-versions").innerHTML = `<option value="">${project.songVersions.length ? `— ${project.songVersions.length} versiones de la canción —` : "— sin versiones de la canción —"}</option>`
     + project.songVersions.map((version, index) => `<option value="${index}">${new Date(version.at).toLocaleString()} · ${escapeHtml(version.label)}</option>`).reverse().join("");
   $("abc-versions").innerHTML = `<option value="">${project.abcVersions.length ? `— ${project.abcVersions.length} versiones anteriores —` : "— sin versiones anteriores —"}</option>`
     + project.abcVersions.map((version, index) => `<option value="${index}">${new Date(version.at).toLocaleString()} · ${escapeHtml(version.label)}</option>`).reverse().join("");
@@ -433,6 +433,29 @@ function sectionStyle(section) {
   const own = project.sectionStyles[section.name];
   if (!own) return "";
   return [catalogStyle(project.baseStyle)?.text, own, singersStyle()].filter((text) => text?.trim()).join("\n");
+}
+
+// The current song's singer as a catalog singer: the vocal descriptors of its global style, its voice LoRA, and the
+// register its ABC melody is written in.
+async function addSongVoice() {
+  readForm();
+  const global = project.style.split("\n").filter((line) => line.trim() && !line.trim().startsWith("[")).join(", ");
+  const vocal = /\b(vocals?|voice|singer|singing|sung|rap|rapper|spoken|tenor|baritone|bass voice|soprano|alto|mezzo|falsetto|croon|choir|male|female|breathy|raspy|husky)\b/i;
+  const text = global.split(",").map((part) => part.trim()).filter((part) => vocal.test(part)).join(", ");
+  if (!text && !project.lora) throw new Error("El estilo de la canción no describe la voz (p. ej. «Spanish female lead vocal, warm») ni tiene LoRA de voz.");
+  const sung = score?.tracks.Vocal ?? [];
+  const median = sung.length ? sung.map((note) => note.pitch).sort((a, b) => a - b)[Math.floor(sung.length / 2)] : null;
+  const register = median === null ? null
+    : Object.entries(REGISTERS).reduce((best, entry) => Math.abs(entry[1].center - median) < Math.abs(best[1].center - median) ? entry : best)[0];
+  const style = { id: crypto.randomUUID().slice(0, 8), name: `Voz de ${project.name || "la canción"}`.slice(0, 60), kind: "singer", text };
+  if (register) style.register = register;
+  if (project.lora) style.lora = { ...project.lora };
+  album.styles.push(style);
+  await saveAlbum();
+  remember(`Cantante «${style.name}» creado con la voz de la canción`);
+  drawStyles();
+  writeForm();
+  status(`«${style.name}» agregado al catálogo${project.lora ? " con el LoRA de la canción" : ""}. Revisa su texto y nombre.`, 1);
 }
 
 function singerRegister(singer) {
@@ -3131,6 +3154,7 @@ async function init() {
   $("close-freeze").onclick = () => $("freeze").close();
   $("freeze-train").onclick = guard(freezeVoice);
   $("close-styles").onclick = () => $("styles").close();
+  $("add-song-voice").onclick = guard(addSongVoice);
   $("add-style").onclick = guard(async () => {
     album.styles.push({ id: crypto.randomUUID().slice(0, 8), name: `Cantante ${album.styles.length + 1}`, kind: "singer", text: "" });
     await saveAlbum();

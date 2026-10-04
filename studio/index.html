@@ -15,6 +15,8 @@
   <button id="open-catalog" title="Todas las canciones guardadas">Catálogo</button>
   <button id="open-styles" title="Cantantes, grupos y géneros del álbum">Estilos</button>
   <button id="save-project">Guardar</button>
+  <select id="song-versions" title="Las versiones que guardaste con «Guardar versión»: estilo, letra, ABC, semillas, cantantes, comping, mezcla e instrumentos. Elige una para restaurarla o borrarla."></select>
+  <button id="song-version-save" title="Guarda el estado actual de la canción como una versión con nombre">Guardar versión</button>
   <label class="file" title="Abre .mixmash desde tu disco">Abrir .mixmash<input id="import-package" type="file" accept=".mixmash"></label>
   <button id="download-package" title="Descarga el paquete con audio, letra, ABC y estado de la app">Descargar .mixmash</button>
   <label class="file" title="Sube un audio a la biblioteca y úsalo como audio original de esta canción">Audio original<input id="source-audio" type="file" accept="audio/*"></label>
@@ -49,17 +51,13 @@
     <button id="section-styles-from-cues" title="Convierte cada línea «[Sección] …» del estilo en el estilo propio de esa sección">Estilos por sección desde [Sección]</button>
     <label>Letra (si está vacía al analizar, se transcribe con Whisper)<textarea id="lyrics" rows="12"></textarea></label>
     <label>ABC<textarea id="abc" rows="8" spellcheck="false"></textarea></label>
+    <button id="abc-reimagine" title="Renderiza la canción en modo melody (YuE2 conserva tu melodía y reinventa armonía y arreglo), SheetSage2 escucha los acordes que tocó y quedan escritos en el ABC, que pasa a modo full. El ABC anterior queda en las versiones.">Reimaginar ABC</button>
     <div class="row">
       <label>Semilla para componer el ABC<input id="compose-seed" type="number" min="0"></label>
       <button id="compose-dice" title="Semilla nueva: «Generar ABC» saldrá con otra melodía">🎲</button>
       <label>Temperatura<input id="compose-temperature" type="number" step="0.05" min="0" title="Más alta = melodías menos previsibles (0.7 por defecto)"></label>
     </div>
     <label class="switch" title="YuE2 compone a partir del encabezado del ABC actual (K:, M:, Q:): misma tonalidad, compás y tempo, melodía nueva"><input id="compose-keep" type="checkbox"> Conservar tonalidad, compás y tempo del ABC actual</label>
-    <div class="row">
-      <label title="Las versiones que guardaste con «Guardar versión»: estilo, letra, ABC, semillas, cantantes, comping y mezcla. Elige una para restaurarla o borrarla.">Versiones de la canción<select id="song-versions"></select></label>
-      <button id="song-version-save" title="Guarda el estado actual de la canción como una versión con nombre">Guardar versión</button>
-    </div>
-    <button id="abc-reimagine" title="Renderiza la canción en modo melody (YuE2 conserva tu melodía y reinventa armonía y arreglo), SheetSage2 escucha los acordes que tocó y quedan escritos en el ABC, que pasa a modo full. El ABC anterior queda en las versiones.">Reimaginar ABC</button>
     <label>Versiones anteriores del ABC (elige una para restaurarla)<select id="abc-versions"></select></label>
     <div class="row">
       <label>Semilla<input id="seed" type="number" min="0" value="60"></label>
@@ -262,7 +260,7 @@
 </dialog>
 <dialog id="styles" class="catalog">
   <header><strong>Estilos del álbum <span id="styles-album"></span></strong>
-    <span><button id="add-style">+ Estilo</button> <button id="close-styles">Cerrar</button></span></header>
+    <span><button id="add-song-voice" title="Crea un cantante con la voz de la canción abierta: las partes de voz de su estilo, su LoRA de voz y el registro de su melodía">+ Voz de la canción actual</button> <button id="add-style">+ Estilo</button> <button id="close-styles">Cerrar</button></span></header>
   <p class="note">Un cantante se elige por sección en el timeline de la voz principal: su sección pasa a su registro en el ABC, su etiqueta de la letra dice quién canta y los cantantes de la canción se declaran en el estilo (así arma YuE2 los duetos). Una voz extra tiene un solo cantante. Un grupo o género se elige como estilo base de la canción. Las canciones guardan la referencia: editar un estilo aquí cambia todas las que lo usan.</p>
   <table>
     <thead><tr><th>Nombre</th><th>Tipo</th><th>Registro</th><th>Texto de estilo (YuE2, en inglés)</th><th>LoRA de voz · fuerza</th><th></th></tr></thead>

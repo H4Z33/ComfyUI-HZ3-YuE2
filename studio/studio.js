@@ -367,13 +367,20 @@ function takeById(id) {
   return project.takes.find((take) => take.id === id);
 }
 
-function isEdited(section, index) {
+// What changed in a section since its chosen take was rendered.
+function editReasons(section, index) {
   const take = takeById(project.comp[section.name]);
-  if (!take) return false;
-  return (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim()
-    || take.sectionSeeds[section.name] !== sectionSeed(section, index)
-    || (take.sectionStyles?.[section.name] ?? "") !== sectionStyle(section)
-    || Boolean(take.sectionAbc && take.sectionAbc[section.name] !== section.abc);
+  if (!take) return [];
+  return [
+    (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim() && "letra",
+    take.sectionSeeds[section.name] !== sectionSeed(section, index) && "semilla",
+    (take.sectionStyles?.[section.name] ?? "") !== sectionStyle(section) && "estilo",
+    Boolean(take.sectionAbc && take.sectionAbc[section.name] !== section.abc) && "ABC/compases",
+  ].filter(Boolean);
+}
+
+function isEdited(section, index) {
+  return editReasons(section, index).length > 0;
 }
 
 // MixMash-style cues: global lines, then "[Section] description" lines.
@@ -1462,6 +1469,20 @@ async function render(targets, reimagine = false) {
   const comped = new Set(sections.filter((section, index) =>
     reimagine || !targets || targets.includes(section.name) || isEdited(section, index) || !takeById(project.comp[section.name])
   ).map((section) => section.name));
+  // Regenerating a few sections also regenerates every edited or never-rendered one: say so before spending a render.
+  const extra = targets && !reimagine ? sections.map((section, index) => [section, index])
+    .filter(([section]) => comped.has(section.name) && !targets.includes(section.name)) : [];
+  if (extra.length) {
+    const why = extra.map(([section, index]) => {
+      const reasons = editReasons(section, index);
+      return `«${section.name}» (${reasons.length ? `cambió: ${reasons.join(", ")}` : "sin take"})`;
+    });
+    const go = await choose(`Se van a regenerar ${comped.size} de ${sections.length} secciones`,
+      `Además de ${targets.map((name) => `«${name}»`).join(", ")}, se regeneran las que cambiaron desde su take o no tienen uno, `
+      + `porque sus tokens guardados ya no corresponden: ${why.join("; ")}.`,
+      [{ value: true, label: `Regenerar las ${comped.size} secciones` }]);
+    if (!go) return;
+  }
   // Untouched sections replay the tokens of their chosen take, so a new ending is matched to what plays next.
   const kept = Object.fromEntries(sections.filter((section) => !comped.has(section.name))
     .map((section) => [section.name, takeById(project.comp[section.name])?.sectionTokens?.[section.name]])

@@ -507,7 +507,10 @@ def _train_style_lora(audio_input, clip_model, trigger="hz3_artist", style_capti
             llama.apply_rope = orig_apply_rope
             for layer_idx, orig_fwd in original_forwards.items():
                 layers[layer_idx].forward = orig_fwd
-            
+            # Also on an interrupted run: a later training would otherwise wrap these LoRA layers again.
+            for (layer_idx, block_name, proj_name), base_mod in original_layers.items():
+                setattr(getattr(layers[layer_idx], block_name), proj_name, base_mod)
+
         # Collect trained LoRA tensors
         lora_dict = {}
         for layer_idx, block_name, proj_name, lora_mod in lora_modules:
@@ -519,12 +522,6 @@ def _train_style_lora(audio_input, clip_model, trigger="hz3_artist", style_capti
             lora_dict[f"{base_prefix}.lora_up.weight"] = up_weight
             lora_dict[f"{base_prefix}.alpha"] = torch.tensor(float(lora_alpha))
 
-        # Restore original layers
-        for (layer_idx, block_name, proj_name), base_mod in original_layers.items():
-            layer = layers[layer_idx]
-            block = getattr(layer, block_name)
-            setattr(block, proj_name, base_mod)
-            
         duration = time.time() - t0
         return lora_dict, losses, duration
 

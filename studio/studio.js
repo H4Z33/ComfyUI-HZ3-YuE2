@@ -436,20 +436,33 @@ function sectionStyle(section) {
 }
 
 // The current song's singer as a catalog singer: the vocal descriptors of its global style, its voice LoRA, and the
-// register its ABC melody is written in.
-async function addSongVoice() {
-  readForm();
+// register its ABC melody is written in. A LoRA names the singer after its trigger.
+function songVoice() {
   const global = project.style.split("\n").filter((line) => line.trim() && !line.trim().startsWith("[")).join(", ");
   const vocal = /\b(vocals?|voice|singer|singing|sung|rap|rapper|spoken|tenor|baritone|bass voice|soprano|alto|mezzo|falsetto|croon|choir|male|female|breathy|raspy|husky)\b/i;
   const text = global.split(",").map((part) => part.trim()).filter((part) => vocal.test(part)).join(", ");
-  if (!text && !project.lora) throw new Error("El estilo de la canción no describe la voz (p. ej. «Spanish female lead vocal, warm») ni tiene LoRA de voz.");
+  if (!text && !project.lora) return null;
   const sung = score?.tracks.Vocal ?? [];
   const median = sung.length ? sung.map((note) => note.pitch).sort((a, b) => a - b)[Math.floor(sung.length / 2)] : null;
   const register = median === null ? null
     : Object.entries(REGISTERS).reduce((best, entry) => Math.abs(entry[1].center - median) < Math.abs(best[1].center - median) ? entry : best)[0];
-  const style = { id: crypto.randomUUID().slice(0, 8), name: `Voz de ${project.name || "la canción"}`.slice(0, 60), kind: "singer", text };
+  const named = project.lora?.trigger?.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+  const style = { id: crypto.randomUUID().slice(0, 8), name: (named || `Voz de ${project.name || "la canción"}`).slice(0, 60), kind: "singer", text };
   if (register) style.register = register;
   if (project.lora) style.lora = { ...project.lora };
+  return style;
+}
+
+// A singer already in the catalog: the same voice LoRA, or (without one) the same vocal description.
+function knownVoice(style) {
+  return album.styles.some((item) => item.kind === "singer"
+    && (style.lora ? item.lora?.name === style.lora.name : !item.lora && item.text === style.text));
+}
+
+async function addSongVoice() {
+  readForm();
+  const style = songVoice();
+  if (!style) throw new Error("El estilo de la canción no describe la voz (p. ej. «Spanish female lead vocal, warm») ni tiene LoRA de voz.");
   album.styles.push(style);
   await saveAlbum();
   remember(`Cantante «${style.name}» creado con la voz de la canción`);
@@ -3129,6 +3142,13 @@ async function openProject(name) {
   await listAlbums();
   writeForm();
   await refreshSections();
+  // A song from another machine brings its own voice: it joins the album's singers unless one already has it.
+  const voice = songVoice();
+  if (voice && !knownVoice(voice)) {
+    album.styles.push(voice);
+    await saveAlbum();
+    drawStyles();
+  }
   // Songs saved with repeated section names get unique ones, or every same-named section would be edited at once.
   const renamed = await uniqueSectionNames();
   status("Cargando audio…");

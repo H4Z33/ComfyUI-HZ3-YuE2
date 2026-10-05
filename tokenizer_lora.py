@@ -761,7 +761,8 @@ class HZ3_YuE2_AudioToLoRA:
             "learning_rate": str(lr),
             "created_at": str(time.strftime("%Y-%m-%d %H:%M:%S")),
         }
-        safetensors.torch.save_file(all_lora_weights, str(output_path), metadata=metadata)
+        # bf16 halves the file (it travels inside .mixmash songs) with no audible change.
+        safetensors.torch.save_file({key: value.to(torch.bfloat16) for key, value in all_lora_weights.items()}, str(output_path), metadata=metadata)
         
         file_size_mb = round(output_path.stat().st_size / (1024 * 1024), 2)
         summary = {

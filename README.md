@@ -85,7 +85,8 @@ source audio, `lyrics.txt`, `score.abc`, `style.txt` and the whole studio projec
 `Abrir .mixmash` move them between machines; take audio stays in the output folder, but the
 package carries every take's sampled section tokens (a few KB each), restored on open (replacing
 the local tokens of the same section key, since another GPU samples other tokens from the same inputs),
-so another machine replays them instead of sampling the song again.
+so another machine replays them instead of sampling the song again. It also carries the LoRAs of the song and of its singers (installed on open
+when missing), and opening a song adds its own voice to the album's singers when the catalog lacks it.
 
 ## Nodes
 

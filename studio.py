@@ -102,6 +102,17 @@ def _write_package(project):
             with zipfile.ZipFile(path) as old:
                 if f"tokens/{digest}.json" in old.namelist():
                     tokens[digest] = old.read(f"tokens/{digest}.json")
+    # So do the LoRAs the song and its singers sing with.
+    loras = {}
+    for name in _song_loras(project):
+        entry = "loras/" + name.replace("\\", "/")
+        stored = folder_paths.get_full_path("loras", name)
+        if stored:
+            loras[entry] = Path(stored).read_bytes()
+        elif path.is_file():
+            with zipfile.ZipFile(path) as old:
+                if entry in old.namelist():
+                    loras[entry] = old.read(entry)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
     with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as package:
@@ -113,6 +124,8 @@ def _write_package(project):
             package.writestr(f"source/{filename}", audio, compress_type=zipfile.ZIP_STORED)
         for digest, data in sorted(tokens.items()):
             package.writestr(f"tokens/{digest}.json", data)
+        for entry, data in sorted(loras.items()):
+            package.writestr(entry, data, compress_type=zipfile.ZIP_STORED)
     temporary.replace(path)
     # A song's copy also sits beside its takes (output/HZ3-Studio/<song>), so that folder holds the whole song.
     if project.get("kind", "song") == "song":
@@ -121,9 +134,27 @@ def _write_package(project):
         shutil.copyfile(path, takes / path.name)
 
 
+def _song_loras(project):
+    """LoRA file names (as ComfyUI lists them) used by the song and by the singers it keeps."""
+    uses = [project.get("lora")] + [style.get("lora") for style in project.get("styles") or [] if isinstance(style, dict)]
+    return sorted({str(use["name"]) for use in uses if isinstance(use, dict) and use.get("name")})
+
+
+def _install_lora(name, data):
+    """A packaged LoRA goes into the first loras folder unless ComfyUI already has one by that name."""
+    if folder_paths.get_full_path("loras", name):
+        return
+    folder = Path(folder_paths.get_folder_paths("loras")[0]).resolve()
+    target = (folder / name).resolve()
+    if target.suffix != ".safetensors" or not target.is_relative_to(folder):
+        raise web.HTTPBadRequest(text=f"Invalid LoRA name in the package: {name!r}.")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+
+
 def _read_package(package):
-    """Return the project of an open .mixmash zip, restoring its source audio to the input folder
-    and its takes' section tokens to the token store."""
+    """Return the project of an open .mixmash zip, restoring its source audio to the input folder,
+    its takes' section tokens to the token store and its LoRAs to the loras folder."""
     try:
         manifest = json.loads(package.read("manifest.json"))
     except (KeyError, json.JSONDecodeError) as error:
@@ -144,6 +175,8 @@ def _read_package(package):
             if not stored.is_file() or stored.read_bytes() != data:
                 stored.parent.mkdir(parents=True, exist_ok=True)
                 stored.write_bytes(data)
+        elif name.startswith("loras/"):
+            _install_lora(name.removeprefix("loras/"), package.read(name))
     return project
 
 

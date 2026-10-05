@@ -136,13 +136,14 @@ def _read_package(package):
         source = _source_path(filename)
         if not source.is_file() and f"source/{filename}" in package.namelist():
             source.write_bytes(package.read(f"source/{filename}"))
+    # The package's tokens win: the same section inputs sample other tokens on another GPU, under the same key.
     for name in package.namelist():
         digest = name.removeprefix("tokens/").removesuffix(".json")
         if name == f"tokens/{digest}.json" and TOKEN_DIGEST.fullmatch(digest):
-            stored = _stored_tokens_path(digest)
-            if not stored.is_file():
+            stored, data = _stored_tokens_path(digest), package.read(name)
+            if not stored.is_file() or stored.read_bytes() != data:
                 stored.parent.mkdir(parents=True, exist_ok=True)
-                stored.write_bytes(package.read(name))
+                stored.write_bytes(data)
     return project
 
 

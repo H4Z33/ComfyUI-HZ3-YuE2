@@ -83,8 +83,9 @@ style) and opens it. Projects are `.mixmash` packages under `output/HZ3-YuE2/stu
 source audio, `lyrics.txt`, `score.abc`, `style.txt` and the whole studio project
 (original analysis, takes, comping, harmonies, mixer). `Descargar .mixmash` and
 `Abrir .mixmash` move them between machines; take audio stays in the output folder, but the
-package carries every take's sampled section tokens (a few KB each), restored on open, so another
-machine replays them instead of sampling the song again.
+package carries every take's sampled section tokens (a few KB each), restored on open (replacing
+the local tokens of the same section key, since another GPU samples other tokens from the same inputs),
+so another machine replays them instead of sampling the song again.
 
 ## Nodes
 

@@ -51,6 +51,7 @@ PROJECT_NAME = re.compile(r"[\w \-()]{1,64}")
 AUDIO_TYPES = (".mp3", ".wav", ".flac", ".ogg", ".opus", ".m4a", ".aac")
 SOURCE_FILE = re.compile(r"hz3studio_[\w \-()]{1,64}_[\w \-]{1,80}(" + "|".join(re.escape(ext) for ext in AUDIO_TYPES) + ")")
 PACKAGE_FORMAT = "hz3-mixmash/1"
+TOKEN_DIGEST = re.compile(r"[0-9a-f]{64}")
 DEFAULT_ALBUM = "General"
 
 
@@ -89,6 +90,18 @@ def _write_package(project):
             with zipfile.ZipFile(path) as old:
                 if f"source/{filename}" in old.namelist():
                     audio = old.read(f"source/{filename}")
+    # The takes' sampled section tokens travel with the song: another machine replays them instead of resampling.
+    tokens = {}
+    for digest in {digest for take in project.get("takes", []) for digest in (take.get("sectionTokens") or {}).values()}:
+        if not TOKEN_DIGEST.fullmatch(str(digest)):
+            continue
+        stored = _stored_tokens_path(digest)
+        if stored.is_file():
+            tokens[digest] = stored.read_bytes()
+        elif path.is_file():
+            with zipfile.ZipFile(path) as old:
+                if f"tokens/{digest}.json" in old.namelist():
+                    tokens[digest] = old.read(f"tokens/{digest}.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
     with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as package:
@@ -98,6 +111,8 @@ def _write_package(project):
         package.writestr("style.txt", str(project.get("style", "")))
         if audio is not None:
             package.writestr(f"source/{filename}", audio, compress_type=zipfile.ZIP_STORED)
+        for digest, data in sorted(tokens.items()):
+            package.writestr(f"tokens/{digest}.json", data)
     temporary.replace(path)
     # A song's copy also sits beside its takes (output/HZ3-Studio/<song>), so that folder holds the whole song.
     if project.get("kind", "song") == "song":
@@ -107,7 +122,8 @@ def _write_package(project):
 
 
 def _read_package(package):
-    """Return the project of an open .mixmash zip, restoring its source audio to the input folder."""
+    """Return the project of an open .mixmash zip, restoring its source audio to the input folder
+    and its takes' section tokens to the token store."""
     try:
         manifest = json.loads(package.read("manifest.json"))
     except (KeyError, json.JSONDecodeError) as error:
@@ -120,6 +136,13 @@ def _read_package(package):
         source = _source_path(filename)
         if not source.is_file() and f"source/{filename}" in package.namelist():
             source.write_bytes(package.read(f"source/{filename}"))
+    for name in package.namelist():
+        digest = name.removeprefix("tokens/").removesuffix(".json")
+        if name == f"tokens/{digest}.json" and TOKEN_DIGEST.fullmatch(digest):
+            stored = _stored_tokens_path(digest)
+            if not stored.is_file():
+                stored.parent.mkdir(parents=True, exist_ok=True)
+                stored.write_bytes(package.read(name))
     return project
 
 

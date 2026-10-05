@@ -142,3 +142,7 @@ details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap:
 .checks { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .checks label { flex-direction: row; gap: 4px; align-items: center; color: var(--text); }
 #section-restore.hidden { display: none; }
+.span { position: absolute; top: 8px; bottom: 8px; border: 1px solid; border-radius: 3px; cursor: pointer; z-index: 2; }
+.span.on { background: rgba(74, 163, 224, .25); border-color: #4aa3e0; }
+.span.off { background: rgba(10, 10, 12, .65); border-color: var(--muted); }
+.span.preview { pointer-events: none; border-style: dashed; }

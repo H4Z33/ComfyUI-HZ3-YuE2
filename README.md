@@ -60,6 +60,8 @@ for a song editor on top of these nodes.
   editable in ms. A role (equal, second voice −4 dB, choir −9 dB) sets its level against
   the lead section by section (against the lead's typical level where the lead is off). A
   limiter on the sum keeps playback and `Exportar WAV` from clipping. Each voice track is switched per section like the harmonies.
+  A harmony track also takes free on/off spans: drag on its lane to switch it from any point to any
+  other regardless of sections (a click on a span removes it; a plain click still switches the section).
 - Classical instrumental lines: put public-domain MusicXML or MIDI scores (`.mxl`/`.musicxml`/`.mid`,
   e.g. CC0 [OpenScore String Quartets](https://github.com/OpenScore/StringQuartets) or
   [Mutopia](https://www.mutopiaproject.org) chorales and guitar studies) in

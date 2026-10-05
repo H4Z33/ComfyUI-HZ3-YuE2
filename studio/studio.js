@@ -122,7 +122,7 @@ function newProject() {
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
-    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
+    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, trackSpans: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
     arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {}, classicalPlan: {}, classicalReport: [],
   };
 }
@@ -1412,7 +1412,7 @@ async function sectionToInstrumental(name) {
 
 // What a song version holds: everything a render is made from, frozen only when the producer asks ("Guardar versión").
 const SONG_STATE = ["style", "baseStyle", "lora", "lyrics", "abc", "seed", "sampling", "harmonize", "harmonyVoices",
-  "sectionSeeds", "sectionStyles", "sectionSingers", "classicalPlan", "arrangement", "comp", "trackOn", "mixer", "voices", "instruments", "fx"];
+  "sectionSeeds", "sectionStyles", "sectionSingers", "classicalPlan", "arrangement", "comp", "trackOn", "trackSpans", "mixer", "voices", "instruments", "fx"];
 
 function songSnapshot(source, label) {
   return { at: Date.now(), label, ...JSON.parse(JSON.stringify(Object.fromEntries(SONG_STATE.map((key) => [key, source[key]])))) };
@@ -1734,23 +1734,32 @@ function trackBuffer(track, takeId) {
   return file ? buffers.get(fileUrl(file)) : undefined;
 }
 
-function sectionGains(track, takeId) {
-  return sections.map((section) => (project.comp[section.name] === takeId ? 1 : 0)
-    * (trackEnabled(track, section) ? 1 : 0));
+// Free on/off spans of a track ({ start, end, on } in seconds), drawn by dragging on its lane: where one lies it wins
+// over the section switches, so a harmony can start or stop anywhere inside a section.
+function trackOnAt(track, time) {
+  const span = (project.trackSpans[track] ?? []).findLast((item) => item.start <= time && time < item.end);
+  return span ? span.on : trackEnabled(track, sections.findLast((section) => section.start <= time) ?? sections[0]);
 }
 
-function scheduleGain(param, values, start, from) {
+// Gain breakpoints [[time, value]] of one take of a track: on where the comp plays that take and the track is on.
+function trackGate(track, takeId) {
+  const times = [...new Set([0, ...sections.map((section) => section.start),
+    ...(project.trackSpans[track] ?? []).flatMap((span) => [span.start, span.end])])].sort((a, b) => a - b);
+  return times.map((time) => {
+    const section = sections.findLast((item) => item.start <= time) ?? sections[0];
+    return [time, project.comp[section.name] === takeId && trackOnAt(track, time) ? 1 : 0];
+  });
+}
+
+function scheduleGain(param, points, start, from) {
   const at = (time) => start + time - from;
-  const current = Math.max(0, sections.findLastIndex((section) => section.start <= from));
-  param.setValueAtTime(values[current] ?? 0, start);
-  for (let index = 1; index < sections.length; index++) {
-    if (values[index] === values[index - 1]) continue;
-    const boundary = sections[index].start;
-    if (boundary + FADE / 2 <= from) continue;
-    const fadeStart = Math.max(at(boundary - FADE / 2), start);
-    param.setValueAtTime(values[index - 1], fadeStart);
-    param.linearRampToValueAtTime(values[index], Math.max(at(boundary + FADE / 2), fadeStart + 0.001));
-  }
+  param.setValueAtTime((points.findLast(([time]) => time <= from) ?? points[0])[1], start);
+  points.forEach(([time, value], index) => {
+    if (!index || value === points[index - 1][1] || time + FADE / 2 <= from) return;
+    const fadeStart = Math.max(at(time - FADE / 2), start);
+    param.setValueAtTime(points[index - 1][1], fadeStart);
+    param.linearRampToValueAtTime(value, Math.max(at(time + FADE / 2), fadeStart + 0.001));
+  });
 }
 
 function muted(track) {
@@ -1837,7 +1846,7 @@ function buildGraph(target, destination, from, start) {
       // A take track nudged in time (ms per section, + = later) plays section by section.
       const offsets = trackFx(track.id).offsets ?? {};
       for (const takeId of takeIds) {
-        if (!Object.values(offsets).some(Boolean)) connect(trackBuffer(track.id, takeId), trackGain, sectionGains(track.id, takeId));
+        if (!Object.values(offsets).some(Boolean)) connect(trackBuffer(track.id, takeId), trackGain, trackGate(track.id, takeId));
         else connectSections(trackBuffer(track.id, takeId), trackGain, sections.filter((section) => project.comp[section.name] === takeId && trackEnabled(track.id, section))
           .map((section) => ({ section, shift: -(offsets[section.name] ?? 0), level: 1 })));
       }
@@ -2309,6 +2318,7 @@ function drawTrack(track) {
     toggle.style.width = `${(section.end - section.start) * pxPerSecond}px`;
     toggle.title = `${track.name} · ${section.name}: ${enabled ? "encendido" : "apagado"} (clic para cambiar)`;
     toggle.onclick = () => {
+      if (body.dataset.dragged) return;
       (project.trackOn[track.id] ??= {})[section.name] = !enabled;
       draw();
       restartIfPlaying();
@@ -2318,6 +2328,55 @@ function drawTrack(track) {
     }
     body.append(toggle);
   });
+  if (track.harmony) drawTrackSpans(track, body);
+}
+
+// A harmony lane takes free on/off spans: dragging draws one that flips the state found where the drag began,
+// a click on a span removes it, and a plain click still switches the whole section.
+function drawTrackSpans(track, body) {
+  const spans = project.trackSpans[track.id] ??= [];
+  for (const span of spans) {
+    const block = document.createElement("div");
+    block.className = `span${span.on ? " on" : " off"}`;
+    block.style.left = `${span.start * pxPerSecond}px`;
+    block.style.width = `${(span.end - span.start) * pxPerSecond}px`;
+    block.title = `${track.name} ${span.on ? "encendido" : "apagado"} de ${fmt(span.start)} a ${fmt(span.end)} (clic para quitar)`;
+    block.onclick = (event) => {
+      event.stopPropagation();
+      spans.splice(spans.indexOf(span), 1);
+      draw();
+      restartIfPlaying();
+    };
+    body.append(block);
+  }
+  const timeAt = (event) => Math.min(duration(), Math.max(0, (event.clientX - body.getBoundingClientRect().left) / pxPerSecond));
+  body.onpointerdown = (event) => {
+    if (event.button !== 0 || event.target.closest(".span, select")) return;
+    const start = timeAt(event);
+    const preview = document.createElement("div");
+    delete body.dataset.dragged;
+    body.setPointerCapture(event.pointerId);
+    body.onpointermove = (move) => {
+      if (Math.abs(move.clientX - event.clientX) < 4) return;
+      body.dataset.dragged = "1";
+      const [from, to] = [start, timeAt(move)].sort((a, b) => a - b);
+      preview.className = `span preview${trackOnAt(track.id, start) ? " off" : " on"}`;
+      preview.style.left = `${from * pxPerSecond}px`;
+      preview.style.width = `${(to - from) * pxPerSecond}px`;
+      if (!preview.isConnected) body.append(preview);
+    };
+    body.onpointerup = (up) => {
+      body.onpointermove = body.onpointerup = null;
+      preview.remove();
+      if (!body.dataset.dragged) return;
+      const [from, to] = [start, timeAt(up)].sort((a, b) => a - b);
+      spans.push({ start: Math.round(from * 100) / 100, end: Math.round(to * 100) / 100, on: !trackOnAt(track.id, start) });
+      draw();
+      restartIfPlaying();
+      // The click that ends a drag must not also switch the section under it.
+      setTimeout(() => delete body.dataset.dragged, 0);
+    };
+  };
 }
 
 function applyMixer() {

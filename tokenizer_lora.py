@@ -21,6 +21,7 @@ import comfy.sd
 
 DEFAULT_DATASET = r"E:\GEN_AI\YuE2_Training\artist"
 DEFAULT_RUNTIME = r"E:\GEN_AI\YuE2_Training\runtime"
+TRAIN_LENGTH = 1024  # prompt plus music tokens per style training step
 
 
 def _safe_name(value):
@@ -387,7 +388,7 @@ def _train_voice_lora(audio_latents, diffusion_model, clip_model=None, trigger="
         return lora_dict, losses, duration
 
 
-def _train_style_lora(audio_input, clip_model, trigger="hz3_artist", style_caption="", lyrics="", steps=80, rank=32, alpha=None, lr=3e-4, device="cuda"):
+def _train_style_lora(audio_input, clip_model, trigger="hz3_artist", style_caption="", lyrics="", steps=80, rank=32, alpha=None, lr=3e-4, device="cuda", music_tokens=None):
     """Train a LoRA adapter on YuE2's autoregressive text & semantic music model (AR branch)."""
     with torch.inference_mode(False), torch.enable_grad():
         torch_device = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -450,32 +451,32 @@ def _train_style_lora(audio_input, clip_model, trigger="hz3_artist", style_capti
         dtype = torch.bfloat16 if (use_cuda and torch.cuda.is_bf16_supported()) else torch.float32
         
         target_tokens_count = max(32, min(256, int(len(raw_waveform) / sample_rate * 25)))
-        music_tokens = None
-        try:
-            with torch.inference_mode():
-                gen_tokens, _ = clip_te._generate(
-                    prefix_ids, 42, target_tokens_count, "semantic", dtype,
-                    negative=token_dict.get("negative", [151643]) + [151851],
-                    min_tokens=min(16, target_tokens_count),
-                    temperature=token_dict.get("temperature", 1.0),
-                    top_p=token_dict.get("top_p", 0.95),
-                    top_k=token_dict.get("top_k", 50),
-                    repetition_penalty=token_dict.get("repetition_penalty", 1.1),
-                    penalty_window=50,
-                    cfg_scale=token_dict.get("cfg_scale", 1.5)
-                )
-            if gen_tokens and len(gen_tokens) >= 16:
-                music_tokens = [int(t) for t in gen_tokens]
-        except Exception:
-            music_tokens = None
-            
+        if not music_tokens:
+            try:
+                with torch.inference_mode():
+                    gen_tokens, _ = clip_te._generate(
+                        prefix_ids, 42, target_tokens_count, "semantic", dtype,
+                        negative=token_dict.get("negative", [151643]) + [151851],
+                        min_tokens=min(16, target_tokens_count),
+                        temperature=token_dict.get("temperature", 1.0),
+                        top_p=token_dict.get("top_p", 0.95),
+                        top_k=token_dict.get("top_k", 50),
+                        repetition_penalty=token_dict.get("repetition_penalty", 1.1),
+                        cfg_scale=token_dict.get("cfg_scale", 1.5)
+                    )
+                if gen_tokens and len(gen_tokens) >= 16:
+                    music_tokens = [int(t) for t in gen_tokens]
+            except Exception:
+                music_tokens = None
+
         if not music_tokens:
             music_tokens = [int(151853 + (i * 17) % 32768) for i in range(target_tokens_count)]
 
-        full_sequence = prefix_ids + [151851] + music_tokens + [151852]
-        seq_tensor = torch.tensor([full_sequence], device=torch_device, dtype=torch.long)
         prefix_len = len(prefix_ids)
-        
+        # A long take is learned in windows: each step a random stretch of its tokens after the prompt.
+        window = max(64, TRAIN_LENGTH - prefix_len - 2)
+        generator = torch.Generator().manual_seed(0)
+
         losses = []
         t0 = time.time()
         prev_training_state = getattr(comfy.model_management, "in_training", False)
@@ -485,8 +486,8 @@ def _train_style_lora(audio_input, clip_model, trigger="hz3_artist", style_capti
                 comfy.model_management.throw_exception_if_processing_interrupted()
                 opt.zero_grad(set_to_none=True)
                 
-                max_len = min(seq_tensor.shape[1], 1024)
-                input_ids = seq_tensor[:, :max_len]
+                offset = int(torch.randint(0, max(1, len(music_tokens) - window + 1), (1,), generator=generator))
+                input_ids = torch.tensor([prefix_ids + [151851] + music_tokens[offset:offset + window]], device=torch_device, dtype=torch.long)
                 targets = input_ids[:, 1:].clone()
                 
                 with torch.amp.autocast("cuda", enabled=use_cuda, dtype=dtype):
@@ -666,11 +667,12 @@ class HZ3_YuE2_AudioToLoRA:
                 "clip": ("CLIP",),
                 "vae": ("VAE",),
                 "custom_output_dir": ("STRING", {"default": ""}),
+                "music_tokens": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional JSON list of the reference's real YuE2 codec tokens (e.g. a take's section tokens in order). Style mode learns them instead of tokens it samples itself."}),
             }
         }
 
     def generate_lora(self, audio, mode, lora_name, trigger, steps, rank, learning_rate, save_to_loras_folder,
-                      alpha=64.0, style_caption="", lyrics="", model=None, clip=None, vae=None, custom_output_dir="", **kwargs):
+                      alpha=64.0, style_caption="", lyrics="", model=None, clip=None, vae=None, custom_output_dir="", music_tokens="", **kwargs):
         audio_in = _defensive_scalar(audio)
         selected_mode = _defensive_scalar(mode, "joint (voice + style) [Recommended]")
         target_lora_name = _safe_name(_defensive_scalar(lora_name, "yue2_artist_lora"))
@@ -737,6 +739,7 @@ class HZ3_YuE2_AudioToLoRA:
         if selected_mode.startswith("style") or selected_mode.startswith("joint"):
             style_lora, style_losses, style_sec = _train_style_lora(
                 audio_in, loaded_clip, trigger=target_trigger, style_caption=caption_text, lyrics=lyrics_text,
+                music_tokens=[int(token) for token in json.loads(music_tokens)] if music_tokens.strip() else None,
                 steps=num_steps, rank=target_rank, alpha=target_alpha, lr=lr, device=target_device
             )
             all_lora_weights.update(style_lora)

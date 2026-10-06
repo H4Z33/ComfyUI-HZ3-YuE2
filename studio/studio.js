@@ -102,6 +102,7 @@ const clientId = crypto.randomUUID();
 
 let project = newProject();
 let album = { name: DEFAULT_ALBUM, styles: [], chat: [], log: [] };
+let browseAlbum = DEFAULT_ALBUM;  // the album whose songs the top bar lists (the open song may belong to another)
 let loras = [];  // YuE2 LoRAs ComfyUI can load: { name, trigger, type }
 let catalog = [];
 let sections = [];
@@ -767,19 +768,30 @@ async function saveAlbum() {
 
 async function listAlbums() {
   const { albums } = await api("/hz3/studio/albums");
-  if (!albums.includes(project.album)) albums.push(project.album);
-  $("album-list").innerHTML = albums.map((name) => `<option${name === project.album ? " selected" : ""}>${escapeHtml(name)}</option>`).join("")
+  if (!albums.includes(browseAlbum)) albums.push(browseAlbum);
+  $("album-list").innerHTML = albums.map((name) => `<option${name === browseAlbum ? " selected" : ""}>${escapeHtml(name)}</option>`).join("")
     + `<option value="${NEW_ALBUM}">+ Nuevo álbum…</option>`;
+}
+
+// The top bar's album only chooses which songs are listed next to it; moving a song between albums is done in the catalog.
+async function browseTo(name) {
+  if (name === NEW_ALBUM) {
+    name = (prompt("Nombre del nuevo álbum") ?? "").trim();
+    if (!name) { $("album-list").value = browseAlbum; return; }
+    const { albums } = await api("/hz3/studio/albums");
+    if (!albums.includes(name)) await postJson("/hz3/studio/album", { name, notes: "", styles: [], chat: [], log: [] });
+  }
+  browseAlbum = name;
+  await listAlbums();
+  await listProjects();
+  status(`Álbum «${name}»: elige una canción o «+ Canción nueva».`, 1);
 }
 
 async function moveToAlbum(name) {
   readForm();
-  if (name === NEW_ALBUM) {
-    name = (prompt("Nombre del nuevo álbum") ?? "").trim();
-    if (!name) { $("album-list").value = project.album; return; }
-  }
   const used = referencedStyles();
   project.album = name;
+  browseAlbum = name;
   await loadAlbum(name);
   await addStylesToAlbum(name, used);
   await saveAlbum();
@@ -2939,12 +2951,10 @@ async function saveProject() {
 async function listProjects() {
   const { projects } = await api("/hz3/studio/projects");
   catalog = projects;
-  const albums = [...new Set(projects.map((entry) => entry.album))].sort((a, b) => a.localeCompare(b));
-  const inAlbum = (name) => projects.filter((entry) => entry.album === name);
-  // Archived songs stay out of the quick list (unless open); the catalog shows them.
-  $("project-list").innerHTML = `<option value="">— proyectos —</option><option value="${NEW_SONG}">+ Canción nueva</option>`
-    + albums.map((name) => `<optgroup label="${escapeHtml(name)}">` + inAlbum(name).filter((entry) => entry.kind !== "source" && (!entry.archived || entry.name === project.name))
-      .map((entry) => `<option${entry.name === project.name ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("") + "</optgroup>").join("");
+  // Only the browsed album's songs; archived ones stay out of the quick list (unless open), the catalog shows them.
+  const songs = projects.filter((entry) => entry.album === browseAlbum).filter((entry) => entry.kind !== "source" && (!entry.archived || entry.name === project.name));
+  $("project-list").innerHTML = `<option value="">— ${songs.length} canciones —</option><option value="${NEW_SONG}">+ Canción nueva</option>`
+    + songs.map((entry) => `<option${entry.name === project.name ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("");
   const sources = projects.filter((entry) => entry.kind === "source");
   $("source-pick").innerHTML = `<option value="">— sin audio de la biblioteca —</option>`
     + sources.map((entry) => `<option${entry.name === project.sourceName ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("");
@@ -3087,7 +3097,8 @@ async function drawCatalog() {
         ${entry.source ? `audio: ${escapeHtml(entry.source)}` : "compuesta"}${entry.license ? ` · ${escapeHtml(entry.license.name)}` : ""}</small></td>
       <td>${entry.sections} secciones<br>${entry.takes} takes · ${entry.voices} voces</td>
       <td><select title="Mover a otro álbum">${albumOptions}</select></td>
-      <td class="actions"><button data-action="archive">${entry.archived ? "Desarchivar" : "Archivar"}</button>
+      <td class="actions"><button data-action="download" title="Descarga su .mixmash: audio, letra, ABC, tokens, LoRAs y estado de la app">Descargar</button>
+        <button data-action="archive">${entry.archived ? "Desarchivar" : "Archivar"}</button>
         <button data-action="delete" title="El paquete se mueve a la carpeta deleted">Eliminar</button></td>`;
     const [name, notes, target] = [row.querySelector("input"), row.querySelector("textarea"), row.querySelector("select")];
     name.value = entry.name;
@@ -3099,6 +3110,10 @@ async function drawCatalog() {
     name.onchange = guard(() => renameSong(entry.name, name.value));
     notes.onchange = guard(() => updateProject(entry.name, (stored) => { stored.notes = notes.value; }));
     target.onchange = guard(() => moveSong(entry.name, target.value));
+    row.querySelector('[data-action="download"]').onclick = guard(async () => {
+      if (entry.name === project.name) await saveProject();
+      location.href = `/hz3/studio/package?name=${encodeURIComponent(entry.name)}`;
+    });
     row.querySelector('[data-action="archive"]').onclick = guard(() => updateProject(entry.name, (stored) => { stored.archived = !entry.archived; }));
     row.querySelector('[data-action="delete"]').onclick = guard(() => deleteSong(entry.name));
     rows.append(row);
@@ -3177,6 +3192,7 @@ async function saveAlbumNotes(notes) {
 async function newSong() {
   pause();
   pausedAt = 0;
+  if (album.name !== browseAlbum) await loadAlbum(browseAlbum);
   project = { ...newProject(), album: album.name };
   savedName = null;
   selected = null;
@@ -3197,6 +3213,7 @@ async function openProject(name) {
   selectedTrack = null;
   instrumentAudio.clear();
   if (album.name !== project.album) await loadAlbum(project.album);
+  browseAlbum = project.album;
   await addStylesToAlbum(album.name, project.styles);
   await listAlbums();
   writeForm();
@@ -3281,7 +3298,7 @@ async function init() {
   $("album-delete").onclick = guard(deleteAlbum);
   $("album-notes").onchange = guard((event) => saveAlbumNotes(event.target.value));
   $("close-catalog").onclick = () => $("catalog").close();
-  $("album-list").onchange = guard((event) => moveToAlbum(event.target.value));
+  $("album-list").onchange = guard((event) => browseTo(event.target.value));
   $("open-styles").onclick = guard(async () => {
     loras = (await api("/hz3/studio/loras")).loras;
     drawStyles();
@@ -3370,12 +3387,9 @@ async function init() {
     form.append("file", event.target.files[0]);
     event.target.value = "";
     const { name } = await api("/hz3/studio/package", { method: "POST", body: form });
+    $("catalog").close();
     await listProjects();
     await openProject(name);
-  });
-  $("download-package").onclick = guard(async () => {
-    await saveProject();
-    location.href = `/hz3/studio/package?name=${encodeURIComponent(project.name)}`;
   });
   $("section-name").addEventListener("change", guard((event) => renameSection(event.target.value)));
   $("section-split").onclick = guard(splitSection);

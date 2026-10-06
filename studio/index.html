@@ -8,21 +8,15 @@
 </head>
 <body>
 <header class="bar">
+  <button id="toggle-song" class="icon" title="Mostrar u ocultar el panel lateral">☰</button>
   <strong class="brand">HZ3 Studio</strong>
-  <button id="toggle-song" title="Mostrar u ocultar el panel de la canción">Canción</button>
-  <select id="album-list" title="Álbum de la canción: agrupa canciones y guarda su catálogo de estilos, el chat y la bitácora"></select>
-  <select id="project-list" title="Proyectos guardados"></select>
-  <button id="open-catalog" title="Todas las canciones guardadas">Catálogo</button>
-  <button id="open-styles" title="Cantantes, grupos y géneros del álbum">Estilos</button>
-  <button id="save-project">Guardar</button>
+  <select id="album-list" title="Álbum: muestra sus canciones en la lista de al lado (mover una canción de álbum se hace en el Catálogo)"></select>
+  <select id="project-list" title="Canciones del álbum elegido"></select>
   <select id="song-versions" title="Las versiones que guardaste con «Guardar versión»: estilo, letra, ABC, semillas, cantantes, comping, mezcla e instrumentos. Elige una para restaurarla o borrarla."></select>
   <button id="song-version-save" title="Guarda el estado actual de la canción como una versión con nombre">Guardar versión</button>
-  <label class="file" title="Abre .mixmash desde tu disco">Abrir .mixmash<input id="import-package" type="file" accept=".mixmash"></label>
-  <button id="download-package" title="Descarga el paquete con audio, letra, ABC y estado de la app">Descargar .mixmash</button>
-  <label class="file" title="Sube un audio a la biblioteca y úsalo como audio original de esta canción">Audio original<input id="source-audio" type="file" accept="audio/*"></label>
-  <button id="analyze" title="SheetSage2 (ABC) + Whisper (letra) + MixMash (estilo)">Analizar audio</button>
-  <button id="compose" title="YuE2 compone el ABC (melodía y acordes) a partir del estilo y la letra">Generar ABC (YuE2)</button>
-  <label class="file" title="JSON con style, lyrics y abc">Importar JSON<input id="import-json" type="file" accept=".json"></label>
+  <button id="save-project">Guardar</button>
+  <button id="open-catalog" title="Álbumes y canciones, audios de la biblioteca, referencias; abrir y descargar .mixmash">Catálogo</button>
+  <button id="open-styles" title="Cantantes, grupos y géneros del álbum">Estilos</button>
   <span class="spacer"></span>
   <label class="switch"><input id="harmonize" type="checkbox" checked> Armonías</label>
   <button id="arrange" title="El agente decide en qué secciones y con qué voces van las armonías">Armonías con agente</button>
@@ -35,32 +29,43 @@
 
 <main>
   <aside class="song">
+    <h4>Origen</h4>
     <div class="row">
       <label>Audio original (biblioteca)<select id="source-pick"></select></label>
-      <button id="source-bring" title="Copia a esta canción el ABC, la letra y el estilo analizados de ese audio (el ABC actual queda en las versiones)">Traer análisis</button>
+      <label class="file" title="Sube un audio a la biblioteca y úsalo como audio original de esta canción">Subir<input id="source-audio" type="file" accept="audio/*"></label>
     </div>
+    <div class="row">
+      <button id="source-bring" title="Copia a esta canción el ABC, la letra y el estilo analizados de ese audio (el ABC actual queda en las versiones)">Traer análisis</button>
+      <button id="analyze" title="SheetSage2 (ABC) + Whisper (letra) + MixMash (estilo)">Analizar audio</button>
+      <label class="file" title="JSON con style, lyrics y abc">Importar JSON<input id="import-json" type="file" accept=".json"></label>
+    </div>
+    <h4>Estilo</h4>
     <label>Indicaciones de estilo (MixMash y asistente)<textarea id="style-instructions" rows="3" placeholder="p. ej. intro en piano, romántico, big band después del solo"></textarea></label>
     <button id="apply-style-instructions" title="El asistente reescribe el estilo general y los de sección según las indicaciones">Aplicar indicaciones con el asistente</button>
     <label>Estilo base (grupo o género del catálogo)<select id="base-style"></select></label>
     <div class="row">
       <label title="LoRA de voz del cantante de la canción: se aplica en las secciones que no tienen otro cantante del catálogo">LoRA de voz de la canción<select id="song-lora"></select></label>
-      <label>Fuerza<input id="song-lora-strength" type="number" min="0" max="2" step="0.05" value="1"></label>
+      <label class="narrow">Fuerza<input id="song-lora-strength" type="number" min="0" max="2" step="0.05" value="1"></label>
     </div>
     <label>Estilo<textarea id="style" rows="6"></textarea></label>
-    <button id="apply-classical" title="Escribe en la línea instrumental frases de cuartetos de dominio público (carpeta references/), en las secciones marcadas">Aplicar líneas clásicas</button>
     <button id="section-styles-from-cues" title="Convierte cada línea «[Sección] …» del estilo en el estilo propio de esa sección">Estilos por sección desde [Sección]</button>
+    <h4>Letra</h4>
     <label>Letra (si está vacía al analizar, se transcribe con Whisper)<textarea id="lyrics" rows="12"></textarea></label>
+    <h4>ABC</h4>
     <label>ABC<textarea id="abc" rows="8" spellcheck="false"></textarea></label>
-    <button id="abc-reimagine" title="Renderiza la canción en modo melody (YuE2 conserva tu melodía y reinventa armonía y arreglo), SheetSage2 escucha los acordes que tocó y quedan escritos en el ABC, que pasa a modo full. El ABC anterior queda en las versiones.">Reimaginar ABC</button>
     <div class="row">
-      <label>Semilla para componer el ABC<input id="compose-seed" type="number" min="0"></label>
+      <label>Semilla para componer<input id="compose-seed" type="number" min="0"></label>
       <button id="compose-dice" title="Semilla nueva: «Generar ABC» saldrá con otra melodía">🎲</button>
-      <label>Temperatura<input id="compose-temperature" type="number" step="0.05" min="0" title="Más alta = melodías menos previsibles (0.7 por defecto)"></label>
+      <label>Temperatura al componer<input id="compose-temperature" type="number" step="0.05" min="0" title="Más alta = melodías menos previsibles (0.7 por defecto)"></label>
     </div>
     <label class="switch" title="YuE2 compone a partir del encabezado del ABC actual (K:, M:, Q:): misma tonalidad, compás y tempo, melodía nueva"><input id="compose-keep" type="checkbox"> Conservar tonalidad, compás y tempo del ABC actual</label>
+    <button id="compose" title="YuE2 compone el ABC (melodía y acordes) a partir del estilo y la letra">Generar ABC (YuE2)</button>
+    <button id="apply-classical" title="Escribe en la línea instrumental frases de obras de dominio público (carpeta references/), en las secciones marcadas en el inspector">Aplicar líneas clásicas</button>
+    <button id="abc-reimagine" title="Renderiza la canción en modo melody (YuE2 conserva tu melodía y reinventa armonía y arreglo), SheetSage2 escucha los acordes que tocó y quedan escritos en el ABC, que pasa a modo full. El ABC anterior queda en las versiones.">Reimaginar ABC</button>
     <label>Versiones anteriores del ABC (elige una para restaurarla)<select id="abc-versions"></select></label>
+    <h4>Render</h4>
     <div class="row">
-      <label>Semilla<input id="seed" type="number" min="0" value="60"></label>
+      <label>Semilla de la canción<input id="seed" type="number" min="0" value="60"></label>
     </div>
     <details>
       <summary>Avanzado</summary>
@@ -219,6 +224,7 @@
 <dialog id="catalog" class="catalog">
   <header><strong>Catálogo</strong>
     <span class="tabs"><button data-tab="manage" class="active">Álbumes y canciones</button><button data-tab="sources">Audios</button><button data-tab="references">Referencias</button></span>
+    <label class="file" title="Abre un .mixmash desde tu disco: se agrega como canción y se abre">Abrir .mixmash<input id="import-package" type="file" accept=".mixmash"></label>
     <button id="close-catalog">Cerrar</button></header>
   <div id="tab-manage" class="manage">
     <nav id="album-nav" class="album-nav"></nav>

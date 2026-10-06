@@ -13,15 +13,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchaudio
 import safetensors.torch
+from transformers import AutoFeatureExtractor, AutoModel
 
 import folder_paths
 import comfy.model_management
+import comfy.model_prefetch
+import comfy.ops
 import comfy.sd
+
+from .token_stream import _prefixes, _prepare_model, _tokenize
 
 
 DEFAULT_DATASET = r"E:\GEN_AI\YuE2_Training\artist"
 DEFAULT_RUNTIME = r"E:\GEN_AI\YuE2_Training\runtime"
 TRAIN_LENGTH = 1024  # prompt plus music tokens per style training step
+MERT_DIR = Path(folder_paths.models_dir) / "HZ3-YuE2" / "MERT-v2-FullSong"
+CODEC_OFFSET = 151853  # first YuE2 semantic token id
+HEAD_WINDOW = 512  # frames the real-audio tokenizer head reads at once
 
 
 def _safe_name(value):
@@ -128,6 +136,65 @@ def _find_tokenizer_head():
         if p.exists():
             return str(p)
     return None
+
+
+class _TokenizerHead(nn.Module):
+    """Upstream real-audio tokenizer head (tokenizer_head_joint_v4.pt): MERT-v2-FullSong layer 20 -> 32768 YuE2 semantic codes."""
+
+    def __init__(self, width=512, layers=8, heads=8):
+        super().__init__()
+        self.inp = nn.Linear(1024, width)
+        self.pos = nn.Parameter(torch.empty(1, HEAD_WINDOW, width))
+        layer = nn.TransformerEncoderLayer(width, heads, 4 * width, dropout=0.0, batch_first=True, norm_first=True, activation="gelu")
+        self.enc = nn.TransformerEncoder(layer, layers)
+        self.norm = nn.LayerNorm(width)
+        self.head = nn.Linear(width, 32768)
+
+    def forward(self, x):
+        return self.head(self.norm(self.enc(self.inp(x) + self.pos[:, :x.shape[1]])))
+
+
+def _real_audio_tokens(audio_input, device):
+    """YuE2 semantic tokens of a real recording at 25 Hz, so a LoRA learns that recording rather than tokens YuE2 samples itself."""
+    head_path = _find_tokenizer_head()
+    if head_path is None or not (MERT_DIR / "model.safetensors").exists():
+        raise FileNotFoundError(f"Tokenizing real audio needs tokenizer_head_joint_v4.pt and m-a-p/MERT-v2-FullSong in {MERT_DIR}.")
+    waveform = audio_input["waveform"].detach().float().cpu()
+    if waveform.ndim == 3:
+        waveform = waveform[0]
+    mono = torchaudio.functional.resample(waveform.mean(0), int(audio_input["sample_rate"]), 24000).numpy()
+    frames = int(round(len(mono) / 24000 * 25))
+
+    processor = AutoFeatureExtractor.from_pretrained(MERT_DIR, trust_remote_code=True, local_files_only=True)
+    mert = AutoModel.from_pretrained(MERT_DIR, trust_remote_code=True, local_files_only=True).to(device).eval()
+    features = []
+    for start in range(0, len(mono), 24000 * 30):
+        piece = mono[start:start + 24000 * 30]
+        if len(piece) < 24000:
+            break
+        inputs = {key: value.to(device) for key, value in processor([piece], sampling_rate=24000, return_tensors="pt").items()}
+        with torch.autocast(torch.device(device).type, dtype=torch.bfloat16):
+            features.append(mert(**inputs, output_hidden_states=True).hidden_states[20].reshape(-1, 1024).float())
+    del mert
+    hidden = torch.cat(features)
+    hidden = F.interpolate(hidden.T[None], size=frames, mode="linear", align_corners=False)[0].T
+    hidden = (hidden - hidden.mean(0)) / (hidden.std(0) + 1e-5)
+
+    head = _TokenizerHead().to(device).eval()
+    head.load_state_dict(torch.load(head_path, map_location=device)["model"])
+    codes = torch.zeros(frames, dtype=torch.long)
+    starts = list(range(0, max(1, frames - HEAD_WINDOW + 1), HEAD_WINDOW // 2))
+    if starts[-1] + HEAD_WINDOW < frames:
+        starts.append(max(0, frames - HEAD_WINDOW))
+    # Overlapping windows; each keeps its middle half except at the ends of the recording.
+    for start in starts:
+        window = hidden[start:start + HEAD_WINDOW]
+        with torch.autocast(torch.device(device).type, dtype=torch.bfloat16):
+            predicted = head(window[None])[0].argmax(-1).cpu()
+        low = start + (0 if start == 0 else HEAD_WINDOW // 4)
+        high = start + len(window) - (0 if start + len(window) >= frames else HEAD_WINDOW // 4)
+        codes[low:high] = predicted[low - start:high - start]
+    return [CODEC_OFFSET + int(code) for code in codes]
 
 
 def _extract_audio_latents(audio_input, vae_model, device):
@@ -255,12 +322,36 @@ def _prepare_model_for_training(model: torch.nn.Module, target_device: torch.dev
     return restore
 
 
-def _train_voice_lora(audio_latents, diffusion_model, clip_model=None, trigger="hz3_artist", style_caption="", steps=100, rank=32, alpha=None, lr=5e-4, device="cuda"):
+VOICE_WINDOW = 256  # latent frames per voice training step
+
+
+def _voice_windows(clip, music_tokens, frames, trigger, style_caption, lyrics):
+    """Acoustic conditioning of the recording's own tokens for each voice training window (both are 25 Hz),
+    built the way Music From Token Stream builds it, before any training setup touches the models."""
+    style = f"{trigger}, in the style of {trigger}. {(style_caption or '').strip()}".strip()
+    tokens, _mode = _tokenize(clip, style, lyrics or "[instrumental]", "", "full", 0, VOICE_WINDOW, 0.0, 1.0, 1, 1.0)
+    prefix, _negative, _abc = _prefixes(tokens)
+    model, device, dtype = _prepare_model(clip, tokens)
+    total = min(frames, len(music_tokens))
+    window = min(total, VOICE_WINDOW)
+    windows = {}
+    with comfy.model_management.cuda_device_context(device), comfy.ops.use_quantized_matmul(model, device):
+        for start in range(0, max(1, total - window + 1), 128):
+            windows[start] = model._acoustic_conditioning(prefix, music_tokens[start:start + window], dtype)
+    comfy.model_prefetch.cleanup_prefetch_queues()
+    return windows
+
+
+def _train_voice_lora(audio_latents, windows, diffusion_model, steps=100, rank=32, alpha=None, lr=5e-4, device="cuda"):
     """Train a LoRA adapter on YuE2's acoustic diffusion transformer (NAR branch)."""
     with torch.inference_mode(False), torch.enable_grad():
         torch_device = torch.device(device if torch.cuda.is_available() else "cpu")
         diffusion_model.to(torch_device)
         audio_latents = audio_latents.detach().clone()
+        use_cuda = (torch_device.type == "cuda")
+        window_len = min(audio_latents.shape[-1], VOICE_WINDOW)
+        dtype = torch.bfloat16 if (use_cuda and torch.cuda.is_bf16_supported()) else torch.float32
+        starts = list(windows)
         restore_model = _prepare_model_for_training(diffusion_model, torch_device)
         
         lora_alpha = float(alpha if alpha is not None else (rank * 2.0))
@@ -300,37 +391,7 @@ def _train_voice_lora(audio_latents, diffusion_model, clip_model=None, trigger="
                     lora_params.extend([lora_mod.lora_down, lora_mod.lora_up])
 
         opt = torch.optim.AdamW(lora_params, lr=lr, weight_decay=1e-4, betas=(0.9, 0.95))
-        use_cuda = (torch_device.type == "cuda")
-        
-        total_frames = audio_latents.shape[-1]
-        window_len = min(total_frames, 256)
-        dtype = torch.bfloat16 if (use_cuda and torch.cuda.is_bf16_supported()) else torch.float32
-        
-        # Build prompt-aware acoustic conditioning KV cache if clip_model is provided
-        ctx = None
-        chunks = None
-        if clip_model is not None:
-            try:
-                clip_te = getattr(clip_model, "cond_stage_model", clip_model)
-                style_str = f"in the style of {trigger}. {(style_caption or '').strip()}".strip()
-                tok = clip_model.tokenize(style_str, lyrics="", cot="off")
-                p = tok.get("prefix", [151643])
-                dummy_tokens = [151853] * window_len
-                with torch.inference_mode():
-                    cond, c_chunks = clip_te._acoustic_conditioning(p, dummy_tokens, dtype)
-                if cond is not None and len(c_chunks) > 0:
-                    with torch.inference_mode(False):
-                        ctx = cond.to(torch_device, dtype=dtype).clone()
-                    chunks = list(c_chunks)
-            except Exception:
-                ctx = None
-                chunks = None
 
-        if ctx is None or chunks is None:
-            # Fallback zero acoustic context [1, window_len, 28 * 2 * 8 * 128]
-            ctx = torch.zeros(1, window_len, 28 * 2 * 8 * 128, device=torch_device, dtype=dtype)
-            chunks = [(0, window_len, 0, window_len)]
-        
         losses = []
         t0 = time.time()
         prev_training_state = getattr(comfy.model_management, "in_training", False)
@@ -340,10 +401,11 @@ def _train_voice_lora(audio_latents, diffusion_model, clip_model=None, trigger="
                 comfy.model_management.throw_exception_if_processing_interrupted()
                 opt.zero_grad(set_to_none=True)
                 
-                max_start = max(0, total_frames - window_len)
-                start_idx = 0 if max_start == 0 else torch.randint(0, max_start + 1, (1,)).item()
+                start_idx = starts[torch.randint(0, len(starts), (1,)).item()]
                 clean_slice = audio_latents[:, :, start_idx:start_idx + window_len].to(torch_device, dtype=dtype)
-                
+                cond, chunks = windows[start_idx]
+                ctx = cond.to(torch_device, dtype=dtype).clone()
+
                 # Flow-matching velocity target: t in [0.01, 0.99]
                 t = torch.rand(1, device=torch_device).clamp(0.01, 0.99)
                 eps = torch.randn_like(clean_slice)
@@ -388,7 +450,7 @@ def _train_voice_lora(audio_latents, diffusion_model, clip_model=None, trigger="
         return lora_dict, losses, duration
 
 
-def _train_style_lora(audio_input, clip_model, trigger="hz3_artist", style_caption="", lyrics="", steps=80, rank=32, alpha=None, lr=3e-4, device="cuda", music_tokens=None):
+def _train_style_lora(music_tokens, clip_model, trigger="hz3_artist", style_caption="", lyrics="", steps=80, rank=32, alpha=None, lr=3e-4, device="cuda"):
     """Train a LoRA adapter on YuE2's autoregressive text & semantic music model (AR branch)."""
     with torch.inference_mode(False), torch.enable_grad():
         torch_device = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -440,37 +502,8 @@ def _train_style_lora(audio_input, clip_model, trigger="hz3_artist", style_capti
         token_dict = clip_model.tokenize(style_text, lyrics=lyrics_text, cot="off")
         prefix_ids = token_dict.get("prefix", [151643])
         
-        sample_rate = int(audio_input.get("sample_rate", 48000))
-        raw_waveform = audio_input["waveform"].detach().float().cpu()
-        if raw_waveform.ndim == 3:
-            raw_waveform = raw_waveform[0]
-        if raw_waveform.ndim == 2:
-            raw_waveform = raw_waveform.mean(0)
-            
         use_cuda = (torch_device.type == "cuda")
         dtype = torch.bfloat16 if (use_cuda and torch.cuda.is_bf16_supported()) else torch.float32
-        
-        target_tokens_count = max(32, min(256, int(len(raw_waveform) / sample_rate * 25)))
-        if not music_tokens:
-            try:
-                with torch.inference_mode():
-                    gen_tokens, _ = clip_te._generate(
-                        prefix_ids, 42, target_tokens_count, "semantic", dtype,
-                        negative=token_dict.get("negative", [151643]) + [151851],
-                        min_tokens=min(16, target_tokens_count),
-                        temperature=token_dict.get("temperature", 1.0),
-                        top_p=token_dict.get("top_p", 0.95),
-                        top_k=token_dict.get("top_k", 50),
-                        repetition_penalty=token_dict.get("repetition_penalty", 1.1),
-                        cfg_scale=token_dict.get("cfg_scale", 1.5)
-                    )
-                if gen_tokens and len(gen_tokens) >= 16:
-                    music_tokens = [int(t) for t in gen_tokens]
-            except Exception:
-                music_tokens = None
-
-        if not music_tokens:
-            music_tokens = [int(151853 + (i * 17) % 32768) for i in range(target_tokens_count)]
 
         prefix_len = len(prefix_ids)
         # A long take is learned in windows: each step a random stretch of its tokens after the prompt.
@@ -664,7 +697,7 @@ class HZ3_YuE2_AudioToLoRA:
                 "clip": ("CLIP",),
                 "vae": ("VAE",),
                 "custom_output_dir": ("STRING", {"default": ""}),
-                "music_tokens": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional JSON list of the reference's real YuE2 codec tokens (e.g. a take's section tokens in order). Style mode learns them instead of tokens it samples itself."}),
+                "music_tokens": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional JSON list of the reference's real YuE2 codec tokens (e.g. a take's section tokens in order). Without them the reference audio is tokenized with the real-audio tokenizer (MERT-v2-FullSong + tokenizer_head_joint_v4)."}),
             }
         }
 
@@ -689,9 +722,8 @@ class HZ3_YuE2_AudioToLoRA:
         loaded_model = model
         loaded_clip = clip
         loaded_vae = vae
-        if (selected_mode.startswith("voice") and (loaded_model is None or loaded_vae is None)) or \
-           (selected_mode.startswith("style") and loaded_clip is None) or \
-           (selected_mode.startswith("joint") and (loaded_model is None or loaded_clip is None or loaded_vae is None)):
+        # Every mode needs the CLIP (AR) model: voice builds its acoustic conditioning from the recording's tokens with it.
+        if loaded_clip is None or (not selected_mode.startswith("style") and (loaded_model is None or loaded_vae is None)):
             ckpt_file = _find_yue2_checkpoint()
             if not ckpt_file:
                 raise FileNotFoundError("YuE2 checkpoint was not found. Connect model/vae/clip inputs or install yue2_3b_int8_convrot.safetensors.")
@@ -702,6 +734,17 @@ class HZ3_YuE2_AudioToLoRA:
                 loaded_clip = checkpoint_bundle[1]
             if loaded_vae is None:
                 loaded_vae = checkpoint_bundle[2]
+
+        all_lora_weights = {}
+        reports = []
+        if music_tokens.strip():
+            tokens = [int(token) for token in json.loads(music_tokens)]
+        else:
+            tokens = _real_audio_tokens(audio_in, target_device)
+            reports.append(f"Tokenized the reference: {len(tokens)} semantic tokens ({len(tokens) / 25:.1f} s)")
+        if not selected_mode.startswith("style"):
+            latents = _extract_audio_latents(audio_in, loaded_vae, device=target_device)
+            windows = _voice_windows(loaded_clip, tokens, latents.shape[-1], target_trigger, caption_text, lyrics_text)
 
         # Ensure training models are loaded onto GPU if managed by ComfyUI
         # VAE is purely an inference model and manages its own GPU memory inside VAE.encode() under inference_mode
@@ -718,15 +761,11 @@ class HZ3_YuE2_AudioToLoRA:
             except Exception:
                 pass
 
-        all_lora_weights = {}
-        reports = []
-
         # 1. Voice LoRA (NAR acoustic model)
         if selected_mode.startswith("voice") or selected_mode.startswith("joint"):
             diff_module = loaded_model.model.diffusion_model if hasattr(loaded_model, "model") else loaded_model
-            latents = _extract_audio_latents(audio_in, loaded_vae, device=target_device)
             voice_lora, voice_losses, voice_sec = _train_voice_lora(
-                latents, diff_module, clip_model=loaded_clip, trigger=target_trigger, style_caption=caption_text,
+                latents, windows, diff_module,
                 steps=num_steps, rank=target_rank, alpha=target_alpha, lr=lr, device=target_device
             )
             all_lora_weights.update(voice_lora)
@@ -735,8 +774,7 @@ class HZ3_YuE2_AudioToLoRA:
         # 2. Style LoRA (AR musical model)
         if selected_mode.startswith("style") or selected_mode.startswith("joint"):
             style_lora, style_losses, style_sec = _train_style_lora(
-                audio_in, loaded_clip, trigger=target_trigger, style_caption=caption_text, lyrics=lyrics_text,
-                music_tokens=[int(token) for token in json.loads(music_tokens)] if music_tokens.strip() else None,
+                tokens, loaded_clip, trigger=target_trigger, style_caption=caption_text, lyrics=lyrics_text,
                 steps=num_steps, rank=target_rank, alpha=target_alpha, lr=lr, device=target_device
             )
             all_lora_weights.update(style_lora)

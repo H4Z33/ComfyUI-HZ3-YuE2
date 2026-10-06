@@ -125,6 +125,12 @@ The audio classifier expects `discogs-effnet-bsdynamic-1.onnx` and its matching
 JSON metadata under `models/audio_classifiers/discogs_effnet`. The Ollama nodes
 expect a locally reachable Ollama server.
 
+`Audio to LoRA` learns from the reference's own YuE2 semantic tokens: either `music_tokens`
+(e.g. a take's section tokens) or, when empty, the recording tokenized with the real-audio
+tokenizer — `tokenizer_head_joint_v4.pt` from yue2-mothersuperior-realaudio-tokenizer-v4 and
+`m-a-p/MERT-v2-FullSong` in `models/HZ3-YuE2/MERT-v2-FullSong`. Style mode trains the AR model
+on those tokens; voice mode trains the NAR on the recording's latents conditioned on them.
+
 ## Vocal Harmony
 
 Connect `MixMash.abc_repaired` to `Vocal Harmony.score_abc`. The node creates

@@ -3097,7 +3097,8 @@ async function drawCatalog() {
         ${entry.source ? `audio: ${escapeHtml(entry.source)}` : "compuesta"}${entry.license ? ` · ${escapeHtml(entry.license.name)}` : ""}</small></td>
       <td>${entry.sections} secciones<br>${entry.takes} takes · ${entry.voices} voces</td>
       <td><select title="Mover a otro álbum">${albumOptions}</select></td>
-      <td class="actions"><button data-action="download" title="Descarga su .mixmash: audio, letra, ABC, tokens, LoRAs y estado de la app">Descargar</button>
+      <td class="actions"><button data-action="duplicate" title="Crea «${escapeHtml(entry.name)} (copia)» en el mismo álbum y la abre; el original no cambia">Duplicar</button>
+        <button data-action="download" title="Descarga su .mixmash: audio, letra, ABC, tokens, LoRAs y estado de la app">Descargar</button>
         <button data-action="archive">${entry.archived ? "Desarchivar" : "Archivar"}</button>
         <button data-action="delete" title="El paquete se mueve a la carpeta deleted">Eliminar</button></td>`;
     const [name, notes, target] = [row.querySelector("input"), row.querySelector("textarea"), row.querySelector("select")];
@@ -3110,6 +3111,10 @@ async function drawCatalog() {
     name.onchange = guard(() => renameSong(entry.name, name.value));
     notes.onchange = guard(() => updateProject(entry.name, (stored) => { stored.notes = notes.value; }));
     target.onchange = guard(() => moveSong(entry.name, target.value));
+    row.querySelector('[data-action="duplicate"]').onclick = guard(async () => {
+      $("catalog").close();
+      await duplicateSong(entry.name);
+    });
     row.querySelector('[data-action="download"]').onclick = guard(async () => {
       if (entry.name === project.name) await saveProject();
       location.href = `/hz3/studio/package?name=${encodeURIComponent(entry.name)}`;
@@ -3118,6 +3123,15 @@ async function drawCatalog() {
     row.querySelector('[data-action="delete"]').onclick = guard(() => deleteSong(entry.name));
     rows.append(row);
   }
+}
+
+// A copy of a song beside it ("<name> (copia)"): the original is only read, the copy opens.
+async function duplicateSong(name) {
+  if (name === project.name) await saveProject();
+  const { name: copy } = await postJson("/hz3/studio/duplicate", { name });
+  await listProjects();
+  await openProject(copy);
+  status(`«${copy}» es una copia de «${name}»: lo que cambies aquí no toca el original.`, 1);
 }
 
 async function renameSong(from, to) {
@@ -3216,11 +3230,13 @@ async function openProject(name) {
   browseAlbum = project.album;
   await addStylesToAlbum(album.name, project.styles);
   await listAlbums();
+  await listProjects();
   writeForm();
   await refreshSections();
-  // A song from another machine brings its own voice: it joins the album's singers unless one already has it.
+  // A song from another machine brings its own voice LoRA: it joins the album's singers unless one already has it.
+  // (A voice only described in the style is added by hand with «Voz de la canción», or every test song would add one.)
   const voice = songVoice();
-  if (voice && !knownVoice(voice)) {
+  if (voice?.lora && !knownVoice(voice)) {
     album.styles.push(voice);
     await saveAlbum();
     drawStyles();
@@ -3263,6 +3279,10 @@ async function init() {
   $("save-project").onclick = guard(async () => {
     ensureName();
     await saveProject();
+  });
+  $("duplicate-project").onclick = guard(async () => {
+    if (!project.name) throw new Error("Guarda primero la canción.");
+    await duplicateSong(project.name);
   });
   $("open-catalog").onclick = guard(async () => {
     managedAlbum = project.album;

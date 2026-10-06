@@ -542,6 +542,26 @@ def register(routes):
         await asyncio.to_thread(_write_package, project)
         return web.json_response({"name": target.stem})
 
+    @routes.post("/hz3/studio/duplicate")
+    async def duplicate_project(request):
+        source = _package_path(str((await request.json()).get("name", "")))
+        if not source.is_file():
+            raise web.HTTPNotFound(text="Project not found.")
+        # "<name> (copia)", then "(copia 2)"...: the original package is only read.
+        for number in range(1, 100):
+            suffix = " (copia)" if number == 1 else f" (copia {number})"
+            target = _package_path(source.stem[:64 - len(suffix)] + suffix)
+            if not target.exists():
+                break
+        else:
+            raise web.HTTPConflict(text="Too many copies of this project.")
+        shutil.copyfile(source, target)
+        project = _project_of(target)
+        project["name"] = target.stem
+        project["archived"] = False
+        await asyncio.to_thread(_write_package, project)
+        return web.json_response({"name": target.stem})
+
     @routes.post("/hz3/studio/delete")
     async def delete_project(request):
         path = _package_path(str((await request.json()).get("name", "")))

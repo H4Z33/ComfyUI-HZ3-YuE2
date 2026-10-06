@@ -154,3 +154,8 @@ details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap:
 .span.off { background: rgba(10, 10, 12, .65); border-color: var(--muted); }
 .span.preview { pointer-events: none; border-style: dashed; }
 .row label.file { flex: 0 0 auto; align-self: flex-end; }
+.catalog .album-detail { overflow-x: auto; }
+.catalog table { min-width: 900px; }
+.catalog td input { width: 100%; min-width: 140px; }
+.catalog td textarea { min-width: 140px; }
+.catalog td.actions { white-space: nowrap; }

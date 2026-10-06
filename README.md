@@ -87,6 +87,8 @@ for a song editor on top of these nodes.
 
 The top bar's album menu only chooses which songs the song menu lists (a new song goes into that album);
 moving a song to another album is done in `Catálogo`. `☰` folds the side panel.
+`Duplicar` (top bar for the open song, or on any song in `Catálogo`) writes `<name> (copia)` in the same album
+and opens it; the original package is only read.
 `Catálogo` lists every project (date, source audio or composed, sections, takes, voices,
 style) and opens it. Projects are `.mixmash` packages under `output/HZ3-YuE2/studio`: a zip with the
 source audio, `lyrics.txt`, `score.abc`, `style.txt` and the whole studio project
@@ -95,7 +97,7 @@ source audio, `lyrics.txt`, `score.abc`, `style.txt` and the whole studio projec
 package carries every take's sampled section tokens (a few KB each), restored on open (replacing
 the local tokens of the same section key, since another GPU samples other tokens from the same inputs),
 so another machine replays them instead of sampling the song again. It also carries the LoRAs of the song and of its singers (installed on open
-when missing), and opening a song adds its own voice to the album's singers when the catalog lacks it.
+when missing), and opening a song that sings with a voice LoRA adds that voice to the album's singers when the catalog lacks it.
 
 ## Nodes
 

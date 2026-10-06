@@ -44,6 +44,11 @@ for a song editor on top of these nodes.
   the new take, with short crossfades at the boundaries.
   The other sections replay the exact tokens of their chosen take, and the new
   section's last bar is picked from several tries to lead into the next one.
+- `Melodía libre` turns a section's vocal line into rests with the chords kept, so YuE2
+  speaks or raps its words (with a `spoken word ... no singing` cue in that section's style).
+  Speech runs at about 3.5–4 syllables per second and does not wait for the section's end:
+  size a spoken section to its text, or YuE2 moves on to the next section's words early and
+  repeats lines at the end. `Restaurar melodía escrita` brings the written melody back.
 - Every track (lead, instrumental, harmonies, extra voices) is switched on or off per
   section by clicking it, e.g. for a duet;
   each track has mute, solo and volume. `Armonías con agente` asks the local

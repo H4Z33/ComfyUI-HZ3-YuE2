@@ -65,11 +65,11 @@ for a song editor on top of these nodes.
   editable in ms. A role (equal, second voice −4 dB, choir −9 dB) sets its level against
   the lead section by section (against the lead's typical level where the lead is off). A
   limiter on the sum keeps playback and `Exportar FLAC` from clipping (output ceiling -1 dBFS). Each voice track is switched per section like the harmonies.
+  A harmony track also takes free on/off spans: drag on its lane to switch it from any point to any
+  other regardless of sections (a click on a span removes it; a plain click still switches the section).
 - The transport shows a peak meter per channel in dBFS, how much the master limiter is reducing, and a CLIP light
   that stays on until clicked. A take's own `mix` file is YuE2's raw decode at full scale: export the song with
   `Exportar FLAC` rather than using that file.
-  A harmony track also takes free on/off spans: drag on its lane to switch it from any point to any
-  other regardless of sections (a click on a span removes it; a plain click still switches the section).
 - Classical instrumental lines: put public-domain MusicXML or MIDI scores (`.mxl`/`.musicxml`/`.mid`,
   e.g. CC0 [OpenScore String Quartets](https://github.com/OpenScore/StringQuartets) or
   [Mutopia](https://www.mutopiaproject.org) chorales and guitar studies) in

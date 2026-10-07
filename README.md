@@ -37,8 +37,9 @@ for a song editor on top of these nodes.
   Drag a section's left edge, or use `◀ Un compás antes` / `Un compás después ▶` in the
   inspector, to move its start by bars; rename, split at the cursor or merge sections there. ABC markers and lyric
   headers are rewritten together.
-- `Generar canción` queues Generate Music Sections, KSampler, separation into
-  lead and instrumental, and (with `Armonías` on) the Vocal Harmonizer voices.
+- `Generar canción` queues Generate Music Sections, KSampler (`dpmpp_2m`, 40 steps: as good as `dpm_2` in 79
+  by ear and log-mel, 4x faster) and separation into lead and instrumental; the take is playable then. With
+  `Armonías` on, its Vocal Harmonizer voices follow as a job of their own, shown as in progress on their lanes.
   Every render is a take of the whole song. Edit a section's lyrics or seed and
   `Regenerar sección`: only that section (and any other edited one) switches to
   the new take, with short crossfades at the boundaries.

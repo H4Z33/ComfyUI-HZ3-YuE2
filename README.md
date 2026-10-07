@@ -37,6 +37,9 @@ for a song editor on top of these nodes.
   Drag a section's left edge, or use `◀ Un compás antes` / `Un compás después ▶` in the
   inspector, to move its start by bars; rename, split at the cursor or merge sections there. ABC markers and lyric
   headers are rewritten together.
+  `Terminar la canción aquí` ends the song at the cursor's bar: later bars, and sections left without any (with
+  their lyrics), are removed, the old ABC kept in the versions. A section only cut short is not marked edited (its
+  take still covers it) and the song fades out over its last second.
 - `Generar canción` queues Generate Music Sections, KSampler (`dpmpp_2m`, 40 steps: as good as `dpm_2` in 79
   by ear and log-mel, 4x faster) and separation into lead and instrumental; the take is playable then. With
   `Armonías` on, its Vocal Harmonizer voices follow as a job of their own, shown as in progress on their lanes.

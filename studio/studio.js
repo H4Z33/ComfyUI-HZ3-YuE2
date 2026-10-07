@@ -375,10 +375,84 @@ function takeById(id) {
 function isEdited(section, index) {
   const take = takeById(project.comp[section.name]);
   if (!take) return false;
+  const abc = take.sectionAbc?.[section.name];
   return (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim()
     || take.sectionSeeds[section.name] !== sectionSeed(section, index)
     || (take.sectionStyles?.[section.name] ?? "") !== sectionStyle(section)
-    || Boolean(take.sectionAbc && take.sectionAbc[section.name] !== section.abc);
+    || Boolean(take.sectionAbc && abc !== section.abc && !trimmedFrom(abc, section.abc));
+}
+
+// Bars of a score's music lines per voice, a multi-bar rest "Z3" counted as three bars.
+function barsByVoice(abc) {
+  const bars = { Vocal: [], Ins: [] };
+  let voice = null;
+  for (const line of (abc ?? "").split("\n")) {
+    if (/^V:\s*(Vocal|Ins)\s*$/.test(line.trim())) voice = line.trim().slice(2).trim();
+    else if (voice && line.trim().endsWith("|") && !/^[A-Za-z]:/.test(line)) {
+      for (const bar of line.trim().slice(0, -1).split("|")) {
+        const rest = bar.trim().match(/^Z(\d+)$/);
+        bars[voice].push(...(rest ? Array(Number(rest[1])).fill("Z") : [bar.trim()]));
+      }
+    }
+  }
+  return bars;
+}
+
+// A section whose bars are the first bars of what its take sang: the take still covers it, it just ends sooner.
+function trimmedFrom(original, abc) {
+  if (!original) return false;
+  const [before, after] = [barsByVoice(original), barsByVoice(abc)];
+  return after.Vocal.length > 0 && after.Vocal.length < before.Vocal.length
+    && ["Vocal", "Ins"].every((voice) => after[voice].every((bar, index) => bar.replace(/-$/, "") === before[voice][index].replace(/-$/, "")));
+}
+
+// The song keeps its first `keep` bars: later bars and the sections (with their lyrics) left without any are removed.
+function truncateAbc(abc, keep) {
+  const out = [];
+  const counts = { Vocal: 0, Ins: 0 };
+  let voice = null, switchLine = null, marker = null;
+  for (const line of abc.split("\n")) {
+    if (line.startsWith("% ")) { marker = line; continue; }
+    if (/^V:\s*(Vocal|Ins)\s*$/.test(line.trim())) { voice = line.trim().slice(2).trim(); switchLine = line; continue; }
+    if (voice && line.trim().endsWith("|") && !/^[A-Za-z]:/.test(line)) {
+      const bars = barsByVoice(`V: ${voice}\n${line}`)[voice];
+      const kept = bars.slice(0, Math.max(0, keep - counts[voice]));
+      counts[voice] += bars.length;
+      if (!kept.length) continue;
+      if (counts[voice] >= keep) kept[kept.length - 1] = kept.at(-1).replace(/-\s*$/, "");
+      if (marker) { out.push(marker); marker = null; }
+      out.push(switchLine, kept.join("|") + "|");
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
+async function endSongHere() {
+  const bar = nearestBar(position());
+  if (bar < 1 || bar >= score.bars.length) throw new Error("Pon el cursor en el compás donde debe terminar la canción.");
+  readForm();
+  const removed = sections.filter((section) => section.start >= barSeconds(bar) - 1e-6);
+  const blocks = lyricBlocks(project.lyrics);
+  let lyrics = project.lyrics;
+  for (const index of removed.map((section) => section.lyrics_index).filter((index) => index !== null).sort((a, b) => b - a)) {
+    lyrics = lyrics.slice(0, blocks[index].start) + lyrics.slice(blocks[index].end);
+  }
+  keepAbcVersion(project, `antes de terminar la canción en el compás ${bar + 1}`, true);
+  project.abc = truncateAbc(project.abc, bar);
+  project.lyrics = lyrics.trimEnd() + "\n";
+  writeForm();
+  await refreshSections();
+  await saveProject();
+  status(`La canción termina ahora en ${fmt(duration())}${removed.length ? ` · quitadas: ${removed.map((section) => section.name).join(", ")}` : ""}. El ABC anterior quedó en las versiones.`, 1);
+}
+
+// A song cut inside its last section fades out over its last second instead of stopping dead.
+function endsTrimmed() {
+  const last = sections.at(-1);
+  const take = last && takeById(project.comp[last.name]);
+  return Boolean(take && trimmedFrom(take.sectionAbc?.[last.name], last.abc));
 }
 
 // MixMash-style cues: global lines, then "[Section] description" lines.
@@ -1830,6 +1904,11 @@ function buildGraph(target, destination, from, start) {
   const into = target.createGain();
   const out = target.createGain();
   into.gain.value = 0.5;
+  const end = duration();
+  if (endsTrimmed() && end - 1 > from) {
+    into.gain.setValueAtTime(0.5, start + end - 1 - from);
+    into.gain.linearRampToValueAtTime(0.0001, start + end - from);
+  }
   // The ceiling's 1.0 lands at -1 dBFS, so exports keep headroom for encoders and editors (true peaks).
   out.gain.value = 2 * CEILING;
   limiter.connect(into).connect(ceiling).connect(out).connect(destination);
@@ -3496,6 +3575,7 @@ async function init() {
   });
   $("section-name").addEventListener("change", guard((event) => renameSection(event.target.value)));
   $("section-split").onclick = guard(splitSection);
+  $("song-end").onclick = guard(endSongHere);
   $("section-merge").onclick = guard(mergeSection);
   $("section-earlier").onclick = guard(() => moveSectionStart(-1));
   $("section-later").onclick = guard(() => moveSectionStart(1));

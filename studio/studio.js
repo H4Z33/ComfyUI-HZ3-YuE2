@@ -1514,6 +1514,30 @@ async function compose(fromSection = null) {
   status("Composición en cola…", 0);
 }
 
+const WINDOW_MARGIN = 4;  // seconds rendered around regenerated sections; the comp crossfades inside them
+
+// The stretch to render for these sections, or null when it is most of the song anyway.
+// Measured: a 4 s margin renders a section as close to a whole-song render as another noise seed does.
+function renderWindow(names) {
+  const chosen = sections.filter((section) => names.has(section.name));
+  if (!chosen.length) return null;
+  const end = sections.at(-1).end;
+  const start = Math.max(0, Math.min(...chosen.map((section) => section.start)) - WINDOW_MARGIN);
+  const stop = Math.min(end, Math.max(...chosen.map((section) => section.end)) + WINDOW_MARGIN);
+  return stop - start < 0.7 * end ? [Math.round(start * 25) / 25, Math.round(stop * 25) / 25] : null;
+}
+
+// The KSampler renders [start, stop) only; silence ahead of it keeps every file on the song's timeline.
+function renderOnly(prompt, start, stop) {
+  Object.assign(prompt[2].inputs, { window_start: start, window_seconds: stop - start });
+  prompt[40] = { class_type: "EmptyAudio", inputs: { duration: start, sample_rate: 48000, channels: 2 } };
+  prompt[41] = { class_type: "AudioConcat", inputs: { audio1: ["5", 0], audio2: ["40", 0], direction: "before" } };
+  for (const [id, node] of Object.entries(prompt)) {
+    if (id === "41") continue;
+    for (const [key, value] of Object.entries(node.inputs)) if (Array.isArray(value) && value[0] === "5") node.inputs[key] = ["41", 0];
+  }
+}
+
 function buildPrompt(prefix, kept) {
   const overrides = Object.entries(project.sectionSeeds)
     .filter(([name]) => sections.some((section) => section.name === name))
@@ -1636,6 +1660,9 @@ async function render(targets, reimagine = false) {
     for (const name of missing) comped.add(name);
   }
   const { prompt, saves } = buildPrompt(`HZ3-Studio/${project.name}/take-${id}`, kept);
+  // Regenerating some sections renders only their stretch (plus a margin), placed at its time in the take's files.
+  take.window = !reimagine && targets ? renderWindow(comped) : null;
+  if (take.window) renderOnly(prompt, ...take.window);
   const melody = melodyOnly(project.abc);
   if (reimagine) {
     Object.assign(prompt[2].inputs, { mode: "melody", abc: melody });

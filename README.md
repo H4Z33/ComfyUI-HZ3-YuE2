@@ -43,6 +43,10 @@ for a song editor on top of these nodes.
   Every render is a take of the whole song. Edit a section's lyrics or seed and
   `Regenerar sección`: only that section (and any other edited one) switches to
   the new take, with short crossfades at the boundaries.
+  Unless the edited sections span most of the song, the KSampler renders only their stretch plus 4 s on each
+  side (`window_start` / `window_seconds` of Generate Music Sections, built from the window's own tokens),
+  placed at its time in the take: a section is rendered as close to a whole-song render as another noise seed
+  is, in a fraction of the time.
   The other sections replay the exact tokens of their chosen take, and the new
   section's last bar is picked from several tries to lead into the next one.
 - `Melodía libre` turns a section's vocal line into rests with the chords kept, so YuE2

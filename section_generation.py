@@ -389,6 +389,15 @@ class HZ3_YuE2_GenerateMusicSections:
                                "this node reports for an earlier render. Keeps a section exactly as in that take "
                                "and makes a resampled previous section end into it.",
                 }),
+                "window_start": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 900.0, "step": 0.04,
+                    "tooltip": "With window_seconds, the acoustic conditioning covers only this stretch of the song "
+                               "(the tokens are still the whole song's), so the KSampler renders just that part.",
+                }),
+                "window_seconds": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 900.0, "step": 0.04,
+                    "tooltip": "Length of the rendered stretch; 0 renders the whole song.",
+                }),
             },
         }
 
@@ -408,6 +417,8 @@ class HZ3_YuE2_GenerateMusicSections:
         section_seeds="",
         section_styles="",
         section_tokens="",
+        window_start=0.0,
+        window_seconds=0.0,
     ):
         specs = _build_section_specs(abc, lyrics)
         style = str(style or "").strip()
@@ -540,7 +551,10 @@ class HZ3_YuE2_GenerateMusicSections:
                             "tokens": path.stem,
                         }
                     )
-                conditioning, chunks = model._acoustic_conditioning(positive, history, dtype)
+                # A window keeps the frames aligned with their own tokens: built from the tokens, not cut afterwards.
+                first = min(len(history) - 1, round(float(window_start) * FRAMES_PER_SECOND))
+                last = len(history) if window_seconds <= 0 else min(len(history), first + round(float(window_seconds) * FRAMES_PER_SECOND))
+                conditioning, chunks = model._acoustic_conditioning(positive, history[first:last], dtype)
         finally:
             comfy.model_prefetch.cleanup_prefetch_queues()
 
@@ -548,11 +562,11 @@ class HZ3_YuE2_GenerateMusicSections:
             "pooled_output": None,
             "yue2_chunks": chunks,
             "yue2_abc_ids": abc_ids,
-            "yue2_frames": total_frames,
+            "yue2_frames": last - first,
             "yue2_truncated": False,
             "hz3_section_layout": section_layout,
         }
-        seconds = total_frames / FRAMES_PER_SECOND
+        seconds = (last - first) / FRAMES_PER_SECOND
         resampled = sum(not section["reused"] for section in section_layout)
         report_lines = [
             f"Generated {len(specs)} ABC/lyrics sections · {seconds:.2f} s · "

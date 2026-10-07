@@ -90,6 +90,8 @@
       <button id="play">▶</button>
       <button id="stop">■</button>
       <span id="clock">0:00 / 0:00</span>
+      <span class="meter" title="Nivel de salida por canal (L arriba, R abajo) en dBFS: verde, amarillo desde −12, rojo desde −3. La raya blanca es el pico reciente; el número, el pico más alto. CLIP se enciende si una muestra llega a −0.1 dBFS; clic para apagarlo. La salida tiene techo en −1 dBFS.">
+        <canvas id="meter-bars" width="160" height="16"></canvas><span id="meter-peak">−∞</span><span id="meter-limit" title="Cuánto está bajando el limitador del master: más de 6 dB significa que la mezcla sin él saturaría; baja el volumen de las pistas."></span><button id="meter-clip" class="clip">CLIP</button></span>
       <button id="score-play" title="Escucha la partitura completa desde el cursor (melodía, línea instrumental y acordes)">♪ Partitura</button>
       <button id="add-voice" title="Agrega un cantante generado aparte, alineado con la voz principal">+ Voz</button>
       <button id="add-instrument" title="Agrega una pista de instrumento SoundFont: notas en piano roll o escritas desde el ABC, sin YuE2">+ Instrumento</button>

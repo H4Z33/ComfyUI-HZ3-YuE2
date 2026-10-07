@@ -1807,8 +1807,11 @@ function buildGraph(target, destination, from, start) {
   const into = target.createGain();
   const out = target.createGain();
   into.gain.value = 0.5;
-  out.gain.value = 2;
+  // The ceiling's 1.0 lands at -1 dBFS, so exports keep headroom for encoders and editors (true peaks).
+  out.gain.value = 2 * CEILING;
   limiter.connect(into).connect(ceiling).connect(out).connect(destination);
+  // Live playback feeds the level meter from what reaches the speakers.
+  const meters = target === audioContext ? levelMeters(target, out) : null;
   const buses = effectBuses(target, limiter);
   const connect = (entry, trackGain, values) => {
     if (!entry || from >= entry.buffer.duration) return;
@@ -1864,7 +1867,7 @@ function buildGraph(target, destination, from, start) {
       }
     }
   }
-  return { sources, trackGains };
+  return { sources, trackGains, meters, limiter };
 }
 
 function voiceEnabled(voice, section) {
@@ -1873,6 +1876,54 @@ function voiceEnabled(voice, section) {
 
 function voiceShift(voice, section) {
   return voice.offset + (voice.sectionOffsets[section.name] ?? 0);
+}
+
+const CEILING = 10 ** (-1 / 20);
+let peakHold = [0, 0];
+let clipped = false;
+
+// One analyser per channel after the master ceiling.
+function levelMeters(target, node) {
+  const split = target.createChannelSplitter(2);
+  node.connect(split);
+  return [0, 1].map((channel) => {
+    const analyser = target.createAnalyser();
+    analyser.fftSize = 2048;
+    split.connect(analyser, channel);
+    return analyser;
+  });
+}
+
+const dbfs = (value) => (value > 0 ? 20 * Math.log10(value) : -Infinity);
+
+// Peak bars (-48..0 dBFS: green, yellow above -12, red above -3), a held peak per channel, the loudest peak so far and
+// a CLIP light that stays on until clicked: a sample at or above -0.1 dBFS.
+function drawMeter() {
+  const canvas = $("meter-bars");
+  const draw = canvas.getContext("2d");
+  draw.clearRect(0, 0, canvas.width, canvas.height);
+  const data = new Float32Array(2048);
+  const scale = (db) => Math.max(0, Math.min(1, (db + 48) / 48)) * canvas.width;
+  (playback?.meters ?? []).forEach((analyser, channel) => {
+    analyser.getFloatTimeDomainData(data);
+    const peak = data.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
+    peakHold[channel] = Math.max(peak, peakHold[channel] * 0.995);
+    if (peak >= 0.989) clipped = true;
+    const y = channel * (canvas.height / 2), h = canvas.height / 2 - 1, width = scale(dbfs(peak));
+    for (const [from, color] of [[-48, "#4caf50"], [-12, "#e0c34a"], [-3, "#e05a4a"]]) {
+      const left = scale(from);
+      if (width > left) { draw.fillStyle = color; draw.fillRect(left, y, width - left, h); }
+    }
+    draw.fillStyle = "#e6e6ea";
+    draw.fillRect(scale(dbfs(peakHold[channel])) - 1, y, 2, h);
+  });
+  const loudest = Math.max(...peakHold);
+  $("meter-peak").textContent = loudest > 0 ? `${dbfs(loudest).toFixed(1)} dB` : "−∞";
+  // How hard the master limiter is pressing: the mix itself would clip without it.
+  const reduction = playback?.limiter.reduction ?? 0;
+  $("meter-limit").textContent = reduction < -0.5 ? `limitador ${reduction.toFixed(1)} dB` : "";
+  $("meter-limit").classList.toggle("hot", reduction < -6);
+  $("meter-clip").classList.toggle("on", clipped);
 }
 
 function position() {
@@ -1913,6 +1964,7 @@ function tick() {
   if (!playback) return;
   if (position() >= duration()) { pause(); pausedAt = 0; }
   updatePlayhead();
+  drawMeter();
   if (playback) requestAnimationFrame(tick);
 }
 
@@ -1932,6 +1984,8 @@ async function exportMix() {
   buildGraph(offline, offline.destination, 0, 0);
   status("Exportando mezcla…");
   const rendered = await offline.startRendering();
+  const peak = Math.max(...[...Array(rendered.numberOfChannels).keys()].map((channel) =>
+    rendered.getChannelData(channel).reduce((max, value) => Math.max(max, Math.abs(value)), 0)));
   const response = await fetch("/hz3/studio/flac", { method: "POST", body: wav(rendered) });
   if (!response.ok) throw new Error(`No se pudo codificar el FLAC: ${await response.text()}`);
   const link = document.createElement("a");
@@ -1939,7 +1993,7 @@ async function exportMix() {
   link.download = `${project.name || "hz3-studio"}.flac`;
   link.click();
   URL.revokeObjectURL(link.href);
-  status("Mezcla exportada.", 1);
+  status(`Mezcla exportada · pico ${dbfs(peak).toFixed(1)} dBFS.`, 1);
 }
 
 function wav(buffer) {
@@ -3395,6 +3449,7 @@ async function init() {
   $("arrange").onclick = guard(arrange);
   $("play").onclick = guard(play);
   $("stop").onclick = () => { pause(); pausedAt = 0; updatePlayhead(); };
+  $("meter-clip").onclick = () => { clipped = false; peakHold = [0, 0]; drawMeter(); };
   $("zoom").oninput = (event) => { pxPerSecond = Number(event.target.value); draw(); };
   $("import-json").onchange = guard(async (event) => {
     const data = JSON.parse(await event.target.files[0].text());

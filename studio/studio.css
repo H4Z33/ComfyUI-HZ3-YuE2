@@ -159,3 +159,10 @@ details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap:
 .catalog td input { width: 100%; min-width: 140px; }
 .catalog td textarea { min-width: 140px; }
 .catalog td.actions { white-space: nowrap; }
+.meter { display: flex; align-items: center; gap: 6px; }
+.meter canvas { background: #0e0f12; border: 1px solid var(--line); border-radius: 3px; }
+#meter-peak { min-width: 58px; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+.clip { padding: 0 6px; font-size: 11px; color: var(--muted); }
+.clip.on { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
+#meter-limit { font-size: 11px; color: var(--muted); min-width: 92px; }
+#meter-limit.hot { color: var(--danger); }

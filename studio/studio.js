@@ -244,6 +244,17 @@ function editableSections() {
   });
 }
 
+// What the song keeps per section, for sections that no longer exist (renamed or removed long ago), is dropped.
+// Takes and saved song versions keep theirs: they describe what was sung then.
+function dropStaleSections() {
+  if (!sections.length) return;
+  const names = new Set(sections.map((section) => section.name));
+  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
+  for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
+  for (const entry of Object.values(project.mixer)) if (entry.offsets) maps.push(entry.offsets);
+  for (const map of maps) for (const name of Object.keys(map ?? {})) if (!names.has(name)) delete map[name];
+}
+
 // Renames are [from, to] pairs; several sections may share an old name (YuE2 repeats "% chorus"), so each new name
 // gets a copy of what the old name held.
 function renameKeys(renames) {
@@ -2523,23 +2534,25 @@ function drawTrackSpans(track, body) {
     body.append(block);
   }
   const timeAt = (event) => Math.min(duration(), Math.max(0, (event.clientX - body.getBoundingClientRect().left) / pxPerSecond));
+  // The gesture is followed on the window, not captured by the lane: a plain click must still reach the section
+  // switch under the pointer.
   body.onpointerdown = (event) => {
     if (event.button !== 0 || event.target.closest(".span, select")) return;
     const start = timeAt(event);
     const preview = document.createElement("div");
     delete body.dataset.dragged;
-    body.setPointerCapture(event.pointerId);
-    body.onpointermove = (move) => {
-      if (Math.abs(move.clientX - event.clientX) < 4) return;
+    const move = (moved) => {
+      if (Math.abs(moved.clientX - event.clientX) < 4) return;
       body.dataset.dragged = "1";
-      const [from, to] = [start, timeAt(move)].sort((a, b) => a - b);
+      const [from, to] = [start, timeAt(moved)].sort((a, b) => a - b);
       preview.className = `span preview${trackOnAt(track.id, start) ? " off" : " on"}`;
       preview.style.left = `${from * pxPerSecond}px`;
       preview.style.width = `${(to - from) * pxPerSecond}px`;
       if (!preview.isConnected) body.append(preview);
     };
-    body.onpointerup = (up) => {
-      body.onpointermove = body.onpointerup = null;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", (up) => {
+      window.removeEventListener("pointermove", move);
       preview.remove();
       if (!body.dataset.dragged) return;
       const [from, to] = [start, timeAt(up)].sort((a, b) => a - b);
@@ -2548,7 +2561,7 @@ function drawTrackSpans(track, body) {
       restartIfPlaying();
       // The click that ends a drag must not also switch the section under it.
       setTimeout(() => delete body.dataset.dragged, 0);
-    };
+    }, { once: true });
   };
 }
 
@@ -3103,6 +3116,7 @@ async function saveProject() {
   // A new name on an opened project renames its package instead of copying it.
   if (savedName && savedName !== project.name) await postJson("/hz3/studio/rename", { from: savedName, to: project.name });
   project.styles = referencedStyles();
+  dropStaleSections();
   await postJson("/hz3/studio/project", project);
   savedName = project.name;
   await listProjects();

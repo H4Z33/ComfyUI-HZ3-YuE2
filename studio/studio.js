@@ -126,7 +126,7 @@ function newProject() {
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
-    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, trackSpans: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
+    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], deletedSongVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, trackSpans: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
     arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {}, classicalPlan: {}, classicalReport: [],
   };
 }
@@ -187,7 +187,10 @@ function writeForm() {
   $("compose-temperature").value = project.compose.temperature;
   $("compose-keep").checked = project.compose.keep;
   $("song-versions").innerHTML = `<option value="">${project.songVersions.length ? `— ${project.songVersions.length} versiones de la canción —` : "— sin versiones de la canción —"}</option>`
-    + project.songVersions.map((version, index) => `<option value="${index}">${new Date(version.at).toLocaleString()} · ${escapeHtml(version.label)}</option>`).reverse().join("");
+    + project.songVersions.map((version, index) => `<option value="${index}">${new Date(version.at).toLocaleString()} · ${escapeHtml(version.label)}</option>`).reverse().join("")
+    + ((project.deletedSongVersions ?? []).length ? `<optgroup label="Borradas (elige una para recuperarla)">`
+      + project.deletedSongVersions.map((version, index) => `<option value="deleted-${index}">${new Date(version.at).toLocaleString()} · ${escapeHtml(version.label)}</option>`).reverse().join("")
+      + "</optgroup>" : "");
   $("abc-versions").innerHTML = `<option value="">${project.abcVersions.length ? `— ${project.abcVersions.length} versiones anteriores —` : "— sin versiones anteriores —"}</option>`
     + project.abcVersions.map((version, index) => `<option value="${index}">${new Date(version.at).toLocaleString()} · ${escapeHtml(version.label)}</option>`).reverse().join("");
   if ([...$("ckpt").options].some((option) => option.value === project.ckpt)) $("ckpt").value = project.ckpt;
@@ -1537,22 +1540,38 @@ function songSnapshot(source, label) {
   return { at: Date.now(), label, ...JSON.parse(JSON.stringify(Object.fromEntries(SONG_STATE.map((key) => [key, source[key]])))) };
 }
 
+async function recoverSongVersion(index) {
+  const version = project.deletedSongVersions[index];
+  const recover = await choose(`Versión borrada «${version.label}»`, `Guardada el ${new Date(version.at).toLocaleString()}.`, [
+    { value: true, label: "Recuperarla (vuelve a la lista de versiones)" },
+  ]);
+  if (!recover) { writeForm(); return; }
+  project.deletedSongVersions.splice(index, 1);
+  project.songVersions = [...project.songVersions, version].sort((a, b) => a.at - b.at);
+  writeForm();
+  await saveProject();
+  status(`Versión «${version.label}» recuperada.`, 1);
+}
+
 async function pickSongVersion(index) {
   readForm();
   const version = project.songVersions[index];
   const automatic = project.songVersions.filter((item) => /^take \d+/.test(item.label) || item.label === "antes de restaurar una versión");
-  let action = await choose(`Versión «${version.label}»`, `Guardada el ${new Date(version.at).toLocaleString()}.`, [
-    { value: "restore", label: "Restaurarla (lo que tienes ahora se pierde si no lo guardaste como versión)" },
-    { value: "keep", label: "Guardar lo actual como versión y luego restaurarla" },
-    { value: "delete", label: "Borrar esta versión" },
+  let action = await choose(`Versión «${version.label}»`, `Guardada el ${new Date(version.at).toLocaleString()}. ¿Qué quieres hacer con ella?`, [
+    { value: "keep", label: "Abrirla, guardando antes lo que tienes ahora como versión" },
+    { value: "restore", label: "Abrirla sin guardar lo que tienes ahora" },
+    { value: "delete", label: "Borrarla (pasa a «Borradas» en este mismo menú y se puede recuperar)" },
     // Earlier builds froze a version on every render and every restore.
-    ...(automatic.length ? [{ value: "automatic", label: `Borrar las ${automatic.length} versiones automáticas (de cada render o restauración)` }] : []),
+    ...(automatic.length ? [{ value: "automatic", label: `Borrar las ${automatic.length} versiones automáticas (también pasan a «Borradas»)` }] : []),
   ]);
   if (action === "delete" || action === "automatic") {
     const gone = action === "delete" ? [version] : automatic;
     project.songVersions = project.songVersions.filter((item) => !gone.includes(item));
+    // A deleted version is kept apart, so a slip can be undone from the same menu.
+    project.deletedSongVersions = [...(project.deletedSongVersions ?? []), ...gone].slice(-30);
     writeForm();
-    status(`${gone.length === 1 ? `Versión «${version.label}» borrada` : `${gone.length} versiones borradas`}. Guarda el proyecto para que quede así.`, 1);
+    await saveProject();
+    status(`${gone.length === 1 ? `Versión «${version.label}» movida` : `${gone.length} versiones movidas`} a «Borradas»: elígela en el menú de versiones para recuperarla.`, 1);
     return;
   }
   if (action === "keep" && !saveSongVersion()) action = null;
@@ -3570,7 +3589,9 @@ async function init() {
   $("compose-dice").onclick = () => { $("compose-seed").value = Math.floor(Math.random() * 2 ** 31); readForm(); };
   $("song-version-save").onclick = saveSongVersion;
   $("song-versions").onchange = guard(async (event) => {
-    if (event.target.value !== "") await pickSongVersion(Number(event.target.value));
+    const value = event.target.value;
+    if (value.startsWith("deleted-")) await recoverSongVersion(Number(value.slice(8)));
+    else if (value !== "") await pickSongVersion(Number(value));
   });
   $("close-inspector").onclick = () => { selected = null; draw(); };
   $("close-voice-inspector").onclick = () => { selectedVoice = null; draw(); };

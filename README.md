@@ -101,6 +101,8 @@ The top bar's album menu only chooses which songs the song menu lists (a new son
 moving a song to another album is done in `Catálogo`. `☰` folds the side panel.
 `Duplicar` (top bar for the open song, or on any song in `Catálogo`) writes `<name> (copia)` in the same album
 and opens it; the original package is only read.
+`Guardar versión` freezes the song's state under a name; the versions menu opens one (saving the current state
+first, or not) or deletes it into «Borradas» in the same menu, where it can be recovered.
 `Catálogo` lists every project (date, source audio or composed, sections, takes, voices,
 style) and opens it. Projects are `.mixmash` packages under `output/HZ3-YuE2/studio`: a zip with the
 source audio, `lyrics.txt`, `score.abc`, `style.txt` and the whole studio project

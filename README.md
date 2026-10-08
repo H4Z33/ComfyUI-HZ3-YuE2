@@ -64,7 +64,8 @@ for a song editor on top of these nodes.
   which voices sing in each section; its reason shows in the section inspector.
 - A section's own style (inspector, or `Estilos por sección desde [Sección]` from the
   `[Section] …` cue lines of the style) samples it under that style while continuing
-  from the music before it.
+  from the music before it. Section styles made from the cues follow later edits of the style, and a style
+  change marks the sections singing it as edited.
 - `+ Voz` adds another singer: a whole separate generation with its own style and
   seed, singing the lead melody or a Vocal Harmony line, optionally an octave up or
   down (the written register decides the kind of voice YuE2 sings, more than the

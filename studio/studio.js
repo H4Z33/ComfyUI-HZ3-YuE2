@@ -387,6 +387,8 @@ function isEdited(section, index) {
   const take = takeById(project.comp[section.name]);
   if (!take) return false;
   const abc = take.sectionAbc?.[section.name];
+  // Takes since the global style was recorded: a section singing the global style is edited when that style changed.
+  if (!project.sectionStyles[section.name] && take.style !== undefined && take.style !== globalStyle()) return true;
   return (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim()
     || take.sectionSeeds[section.name] !== sectionSeed(section, index)
     || (take.sectionStyles?.[section.name] ?? "") !== sectionStyle(section)
@@ -469,13 +471,30 @@ function endsTrimmed() {
 // MixMash-style cues: global lines, then "[Section] description" lines.
 // A section's cue is found by its ABC name ("verse 2") or by the lyric tag it is paired with ("Verse 2"),
 // since ABC sections are often named "verse" while the cues follow the lyrics.
-function sectionCueStyle(section) {
-  const lines = project.style.split("\n").filter((line) => line.trim());
+function sectionCueStyle(section, style = project.style) {
+  const lines = style.split("\n").filter((line) => line.trim());
   const global = lines.filter((line) => !line.trim().startsWith("[")).join("\n").trim();
   const header = section.lyrics_index === null ? "" : lyricBlocks(project.lyrics)[section.lyrics_index]?.name.split(/\s+[–—-]\s+|\s*[:|(]/)[0].trim() ?? "";
   const cues = lines.map((line) => line.match(/^\s*\[([^\]]+)\]\s*(.+)$/)).filter(Boolean);
   const cue = [section.name, header].filter(Boolean).map((name) => cues.find((match) => match[1].trim().toLowerCase() === name.toLowerCase())).find(Boolean);
   return { global, cue: cue?.[2].trim() };
+}
+
+// Section styles made from the cues follow later edits of the song's style: a section whose own style is still what
+// the previous text gave it is rewritten from the new text (or goes back to the global style if its cue is gone).
+function followStyle(before, after) {
+  if (before === after) return;
+  let count = 0;
+  for (const section of sections) {
+    const old = sectionCueStyle(section, before);
+    if (!old.cue || project.sectionStyles[section.name] !== `${old.global}\n${old.cue}`) continue;
+    const { global, cue } = sectionCueStyle(section, after);
+    if (cue) project.sectionStyles[section.name] = `${global}\n${cue}`;
+    else delete project.sectionStyles[section.name];
+    count++;
+  }
+  if (count) status(`${count} estilos de sección actualizados con el estilo nuevo.`, 1);
+  draw();
 }
 
 function stylesFromCues() {
@@ -1725,6 +1744,7 @@ async function render(targets, reimagine = false) {
   const id = Math.max(0, ...project.takes.map((take) => take.id)) + 1;
   const take = { id, created: Date.now(), harmonized: project.harmonize, files: {}, sectionLyrics: {}, sectionSeeds: {} };
   take.sectionStyles = {};
+  take.style = globalStyle();
   take.sectionAbc = Object.fromEntries(sections.map((section) => [section.name, section.abc]));
   sections.forEach((section, index) => {
     take.sectionLyrics[section.name] = section.lyrics;
@@ -3450,6 +3470,9 @@ async function init() {
   connectSocket();
 
   for (const id of ["lyrics", "abc"]) $(id).addEventListener("input", scheduleSections);
+  let styleBefore = "";
+  $("style").addEventListener("focus", () => { styleBefore = $("style").value; });
+  $("style").addEventListener("change", () => { readForm(); followStyle(styleBefore, project.style); styleBefore = project.style; });
   $("project-list").onchange = guard((event) => event.target.value === NEW_SONG ? newSong() : event.target.value && openProject(event.target.value));
   $("save-project").onclick = guard(async () => {
     ensureName();

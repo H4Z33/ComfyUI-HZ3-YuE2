@@ -387,15 +387,22 @@ function takeById(id) {
 }
 
 function isEdited(section, index) {
+  return editedParts(section, index).length > 0;
+}
+
+// What of a section differs from what its take sang (so a render would change it): "letra", "estilo", "semilla", "partitura".
+function editedParts(section, index) {
   const take = takeById(project.comp[section.name]);
-  if (!take) return false;
+  if (!take) return [];
   const abc = take.sectionAbc?.[section.name];
-  // Takes since the global style was recorded: a section singing the global style is edited when that style changed.
-  if (!project.sectionStyles[section.name] && take.style !== undefined && take.style !== globalStyle()) return true;
-  return (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim()
-    || take.sectionSeeds[section.name] !== sectionSeed(section, index)
-    || (take.sectionStyles?.[section.name] ?? "") !== sectionStyle(section)
-    || Boolean(take.sectionAbc && abc !== section.abc && !trimmedFrom(abc, section.abc));
+  // Takes since the global style was recorded: a section singing the global style changes when that style changed.
+  const globalChanged = !project.sectionStyles[section.name] && take.style !== undefined && take.style !== globalStyle();
+  return [
+    (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim() && "letra",
+    (globalChanged || (take.sectionStyles?.[section.name] ?? "") !== sectionStyle(section)) && "estilo",
+    take.sectionSeeds[section.name] !== sectionSeed(section, index) && "semilla",
+    Boolean(take.sectionAbc && abc !== section.abc && !trimmedFrom(abc, section.abc)) && "partitura",
+  ].filter(Boolean);
 }
 
 // Bars of a score's music lines per voice, a multi-bar rest "Z3" counted as three bars.
@@ -2345,7 +2352,8 @@ function drawSections() {
     block.textContent = section.name;
     const takeId = project.comp[section.name];
     if (takeId) block.insertAdjacentHTML("beforeend", `<span class="take">T${takeId}</span>`);
-    if (isEdited(section, index)) block.insertAdjacentHTML("beforeend", `<span class="edited">editado</span>`);
+    const parts = editedParts(section, index);
+    if (parts.length) block.insertAdjacentHTML("beforeend", `<span class="edited" title="${escapeHtml(`La ${parts.join(", ")} de esta sección no es la que cantó el take ${project.comp[section.name]}: «Regenerar sección» la canta así. Si solo corregiste el texto, puedes dejarla.`)}">editado: ${parts.join(", ")}</span>`);
     block.onclick = () => { selected = section.name; selectedVoice = null; selectedTrack = null; draw(); };
     if (index > 0 && score) {
       const handle = document.createElement("div");

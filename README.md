@@ -52,6 +52,13 @@ for a song editor on top of these nodes.
   is, in a fraction of the time.
   The other sections replay the exact tokens of their chosen take, and the new
   section's last bar is picked from several tries to lead into the next one.
+- `Reimaginar ABC…` offers: `Acordes` (a melody-mode render of the whole song; SheetSage2 hears the chords YuE2
+  played and they are written into the ABC), `Nuevo instrumental` (the same with the instrument line emptied, so the
+  vocal line stays and YuE2 plays its own), `Variar la melodía` (of the selected section or the whole song: a chosen
+  share of the notes moves a step or a third, to a chord tone when one is that near, keeping rhythm, ties, syllables,
+  range and each phrase's last note; seeded by `Semilla para componer`) and, with a section selected,
+  `Recomponer solo` that section (YuE2 composes it after the song before it; later sections stay). The previous ABC
+  goes to the ABC versions.
 - `Melodía libre` turns a section's vocal line into rests with the chords kept, so YuE2
   speaks or raps its words (with a `spoken word ... no singing` cue in that section's style).
   Speech runs at about 3.5–4 syllables per second and does not wait for the section's end:

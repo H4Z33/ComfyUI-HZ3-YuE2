@@ -1610,7 +1610,22 @@ function abcStart(fromSection) {
   return project.compose.keep && key >= 0 ? lines.slice(0, key + 1).join("\n") + "\n" : "";
 }
 
-async function compose(fromSection = null) {
+// `name`'s block (its "% name" marker up to the next marker) taken from `composed` into `abc`.
+function spliceSection(abc, composed, name) {
+  const block = (text) => {
+    const lines = text.split("\n");
+    const start = lines.findIndex((line) => line.trim().startsWith("% ") && line.trim().slice(2).trim() === name);
+    const end = lines.findIndex((line, index) => index > start && line.trim().startsWith("% "));
+    return { lines, start, end: end < 0 ? lines.length : end };
+  };
+  const old = block(abc);
+  const fresh = block(composed);
+  if (fresh.start < 0) throw new Error(`YuE2 no devolvió «${name}».`);
+  return [...old.lines.slice(0, old.start), ...fresh.lines.slice(fresh.start, fresh.end), ...old.lines.slice(old.end)].join("\n");
+}
+
+// only: YuE2 composes `fromSection` after the song before it, and the sections after it stay as they are.
+async function compose(fromSection = null, only = false) {
   readForm();
   if (!project.style.trim() || !project.lyrics.trim()) throw new Error("Escribe estilo y letra con encabezados [Sección] antes de generar el ABC.");
   const { seed, temperature } = project.compose;
@@ -1630,15 +1645,14 @@ async function compose(fromSection = null) {
     const abc = outputs[3]?.text?.[0] ?? "";
     if (!abc.trim()) throw new Error("YuE2 no devolvió ABC.");
     const replaced = (target) => {
-      keepAbcVersion(target, fromSection ? `antes de recomponer desde «${fromSection}»` : `antes de componer con semilla ${seed}`);
-      target.abc = abc;
+      keepAbcVersion(target, only ? `antes de recomponer «${fromSection}»` : fromSection ? `antes de recomponer desde «${fromSection}»` : `antes de componer con semilla ${seed}`);
+      target.abc = only ? spliceSection(target.abc, abc, fromSection) : abc;
     };
     if (!await updateProject(owner, replaced)) return;
-    $("abc").value = abc;
     await refreshSections().catch((error) => status(`ABC generado; revisa las secciones: ${error.message}`, null, true));
     await uniqueSectionNames();
     await saveProject();
-    remember(fromSection ? `YuE2 recompuso el ABC desde «${fromSection}»` : "YuE2 compuso un ABC nuevo");
+    remember(only ? `YuE2 recompuso «${fromSection}»` : fromSection ? `YuE2 recompuso el ABC desde «${fromSection}»` : "YuE2 compuso un ABC nuevo");
     status("ABC generado: revisa las secciones en la partitura.", 1);
   });
   status("Composición en cola…", 0);
@@ -1725,6 +1739,140 @@ function melodyOnly(abc) {
   return abc.split("\n").map((line) => line.endsWith("|") && !line.startsWith("V:") ? line.replace(/"[^"\n]*"/g, "") : line).join("\n");
 }
 
+// The score with its instrument line silenced bar by bar (inline fields and multi-bar rests kept), so YuE2 plays its own.
+function withoutIns(abc) {
+  let ins = false;
+  return abc.split("\n").map((line) => {
+    if (line.startsWith("V:")) ins = line.slice(2).trim() === "Ins";
+    if (!ins || line.startsWith("V:") || !line.endsWith("|")) return line;
+    return line.slice(0, -1).split("|").map((bar) => /^\s*Z\d*\s*$/.test(bar) ? bar : `${(bar.match(/\[[^\]]*\]/g) ?? []).join("")}Z`).join("|") + "|";
+  }).join("\n");
+}
+
+const LETTERS = "CDEFGAB";
+
+// A note's diatonic step (C4 = 28) and back; written without accidentals, the key signature keeps it in the key.
+function noteStep(letter, marks) {
+  const octave = (letter === letter.toLowerCase() ? 5 : 4) + [...marks].reduce((sum, mark) => sum + (mark === "'" ? 1 : -1), 0);
+  return octave * 7 + LETTERS.indexOf(letter.toUpperCase());
+}
+
+function stepNote(step) {
+  const octave = Math.floor(step / 7);
+  const letter = LETTERS[step % 7];
+  return octave >= 5 ? letter.toLowerCase() + "'".repeat(octave - 5) : letter + ",".repeat(4 - octave);
+}
+
+// Light variations of the vocal melody of sections `names`: about `amount` of its notes move a step or a third (to a
+// tone of the bar's chord when one is that near), keeping rhythm, ties, syllables, range and the note closing each
+// phrase. Notes with accidentals, and bars holding any, are left alone (an accidental lasts the bar in ABC).
+function varyMelody(abc, names, amount, seed) {
+  let state = seed >>> 0;
+  const random = () => {
+    state = (state + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(state ^ (state >>> 15), state | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 2 ** 32;
+  };
+  const lines = abc.split("\n");
+  const events = [];
+  let section = null;
+  let vocal = false;
+  let body = false;
+  let chord = null;
+  lines.forEach((line, index) => {
+    const text = line.trim();
+    if (text.startsWith("K:")) body = true;
+    if (!body) return;
+    if (text.startsWith("% ")) { section = text.slice(2).trim(); chord = null; return; }
+    if (text.startsWith("V:")) { vocal = text.slice(2).trim() === "Vocal"; return; }
+    if (!vocal || !names.has(section) || !text.endsWith("|")) return;
+    let offset = 0;
+    for (const bar of line.split("|")) {
+      const accidental = /[\^_=]/.test(bar.replace(/"[^"]*"/g, ""));
+      for (const match of bar.matchAll(/"([^"]*)"|\[[^\]]*\]|([\^_=]*)([A-Ga-g])([,']*)[\d/]*(-?)|[zZx]/g)) {
+        if (match[1] !== undefined) chord = match[1];
+        else if (match[3]) {
+          events.push({ section, line: index, at: offset + match.index + match[2].length, length: match[3].length + match[4].length,
+            step: noteStep(match[3], match[4]), tie: Boolean(match[5]), fixed: Boolean(match[2]) || accidental, chord });
+        } else if (!match[0].startsWith("[")) events.push({ section, rest: true });
+      }
+      offset += bar.length + 1;
+    }
+  });
+  // Tied notes move together; a rest closes a phrase.
+  const groups = [];
+  events.forEach((event, index) => {
+    const previous = events[index - 1];
+    if (event.rest) groups.push(null);
+    else if (previous && !previous.rest && previous.tie && previous.section === event.section) groups.at(-1).push(event);
+    else groups.push([event]);
+  });
+  const range = {};
+  for (const event of events.filter((item) => !item.rest)) {
+    const [low, high] = range[event.section] ?? [event.step, event.step];
+    range[event.section] = [Math.min(low, event.step), Math.max(high, event.step)];
+  }
+  let changed = 0;
+  groups.forEach((group, index) => {
+    const next = groups[index + 1];
+    const previous = groups[index - 1];
+    if (!group || !next || next[0].section !== group[0].section || group.some((event) => event.fixed) || random() >= amount) return;
+    const { step, section: name, chord: symbol } = group[0];
+    const [low, high] = range[name];
+    const near = [-2, -1, 1, 2].map((delta) => step + delta).filter((candidate) => candidate >= low && candidate <= high
+      && Math.abs(candidate - next[0].step) <= 4 && (!previous || previous[0].section !== name || Math.abs(candidate - previous[0].step) <= 4));
+    const root = LETTERS.indexOf(symbol?.[0]);
+    const tones = root < 0 ? [] : [root, (root + 2) % 7, (root + 4) % 7];
+    const chordTones = near.filter((candidate) => tones.includes(candidate % 7));
+    const pool = chordTones.length ? chordTones : near.filter((candidate) => Math.abs(candidate - step) === 1);
+    if (!pool.length) return;
+    const moved = pool[Math.floor(random() * pool.length)];
+    for (const event of group) { event.step = moved; event.changed = true; }
+    changed++;
+  });
+  for (const event of events.filter((item) => item.changed).sort((a, b) => b.line - a.line || b.at - a.at)) {
+    const line = lines[event.line];
+    lines[event.line] = line.slice(0, event.at) + stepNote(event.step) + line.slice(event.at + event.length);
+  }
+  return { abc: lines.join("\n"), changed };
+}
+
+// «Reimaginar ABC»: new chords (melody kept), a new instrument line and chords (vocal line kept), light variations of
+// the melody, or one section composed again after the song before it.
+async function reimagineAbc() {
+  readForm();
+  await refreshSections();
+  const section = sections.some((item) => item.name === selected) ? selected : null;
+  const action = await choose("Reimaginar ABC", "El ABC anterior queda en las versiones del ABC.", [
+    { value: "chords", label: "Acordes: la melodía queda igual; YuE2 reinventa armonía y arreglo (genera la canción)" },
+    { value: "instrumental", label: "Nuevo instrumental: la voz queda igual en la partitura; se reinventan la línea instrumental y los acordes (genera la canción)" },
+    ...(section ? [{ value: "vary-section", label: `Variar la melodía de «${section}»: cambia algunas notas, mismo ritmo y sílabas (al instante)` }] : []),
+    { value: "vary", label: "Variar la melodía de toda la canción: cambia algunas notas, mismo ritmo y sílabas (al instante)" },
+    ...(section ? [{ value: "section", label: `Recomponer solo «${section}»: YuE2 la compone de nuevo después de lo anterior; lo demás queda igual` }] : []),
+  ]);
+  if (!action) return;
+  if (action === "chords" || action === "instrumental") return render(null, action);
+  if (action === "section") return compose(section, true);
+  const answer = prompt("¿Qué porcentaje de las notas cambiar? (las que cierran cada frase no se tocan)", "20");
+  if (answer === null) return;
+  const amount = Math.min(100, Math.max(0, Number(answer) || 0)) / 100;
+  const names = new Set(action === "vary" ? sections.map((item) => item.name) : [section]);
+  const { abc, changed } = varyMelody(project.abc, names, amount, project.compose.seed);
+  if (!changed) {
+    status("No quedó ninguna nota por variar ahí.", 1);
+    return;
+  }
+  keepAbcVersion(project, `antes de variar la melodía (${Math.round(amount * 100)} %)`);
+  project.abc = abc;
+  writeForm();
+  await refreshSections();
+  await saveProject();
+  remember(`Melodía variada (${changed} notas, semilla ${project.compose.seed})${action === "vary" ? "" : ` en «${section}»`}`);
+  status(`${changed} notas variadas. Escúchalas con «▶ Partitura» y regenera las secciones marcadas para cantarlas; 🎲 en «Semilla para componer» da otra variación.`, 1);
+  draw();
+}
+
 // The stored tokens each section not rendered again keeps: its take's own, or, when its bars changed (a moved
 // boundary, a split), the frames under its new bounds cut from its take's tokens, which is what plays there now.
 async function keptTokens(comped) {
@@ -1760,9 +1908,10 @@ function saveSongVersion() {
   return true;
 }
 
-// reimagine: render the whole song in melody mode (YuE2 keeps the melody and invents harmony and arrangement), have
-// SheetSage2 hear the chords it played, and freeze them into the song's ABC, which then sings in full mode.
-async function render(targets, reimagine = false) {
+// reimagine: render the whole song in melody mode (YuE2 keeps the melody and invents harmony and arrangement; with
+// "instrumental" the instrument line is emptied as well), have SheetSage2 hear the chords it played, and freeze them
+// into the song's ABC, which then sings in full mode.
+async function render(targets, reimagine = null) {
   readForm();
   ensureName();
   await refreshSections();
@@ -1794,7 +1943,7 @@ async function render(targets, reimagine = false) {
   // Regenerating some sections renders only their stretch (plus a margin), placed at its time in the take's files.
   take.window = !reimagine && targets ? renderWindow(comped) : null;
   if (take.window) renderOnly(prompt, ...take.window);
-  const melody = melodyOnly(project.abc);
+  const melody = reimagine === "instrumental" ? withoutIns(melodyOnly(project.abc)) : melodyOnly(project.abc);
   if (reimagine) {
     Object.assign(prompt[2].inputs, { mode: "melody", abc: melody });
     Object.assign(prompt, hearChords(["5", 0], 30));
@@ -1825,15 +1974,15 @@ async function render(targets, reimagine = false) {
     await loadTake(take);
     if (reimagine) {
       const { abc } = await postJson("/hz3/studio/freeze_chords", { abc: melody, transcription: outputs[32]?.text?.[0] ?? "" });
-      keepAbcVersion(project, "antes de reimaginar el ABC");
+      keepAbcVersion(project, reimagine === "instrumental" ? "antes de reimaginar el instrumental" : "antes de reimaginar el ABC");
       project.abc = abc;
       writeForm();
       await refreshSections();
       // The take is what this frozen score describes, so its sections are not shown as edited.
       take.sectionAbc = Object.fromEntries(sections.map((section) => [section.name, section.abc]));
       await saveProject();
-      remember(`ABC reimaginado con el take ${take.id}: acordes congelados, modo full`);
-      status(`Take ${take.id} reimaginado: sus acordes quedaron en el ABC (modo full). «Regenerar» armonías para usarlos.`, 1);
+      remember(`ABC reimaginado con el take ${take.id}: ${reimagine === "instrumental" ? "línea instrumental vacía, " : ""}acordes congelados, modo full`);
+      status(`Take ${take.id} reimaginado: sus acordes quedaron en el ABC (modo full)${reimagine === "instrumental" ? " y la línea instrumental quedó libre para YuE2" : ""}. «Regenerar» armonías para usarlos.`, 1);
       draw();
       return;
     }
@@ -3616,7 +3765,7 @@ async function init() {
     status("Versión del ABC restaurada; la que había quedó en las versiones.", 1);
   });
   $("render-song").onclick = guard(() => render(null));
-  $("abc-reimagine").onclick = guard(() => render(null, true));
+  $("abc-reimagine").onclick = guard(reimagineAbc);
   $("render-section").onclick = guard(() => render([selected]));
   $("export-mix").onclick = guard(exportMix);
   $("arrange").onclick = guard(arrange);

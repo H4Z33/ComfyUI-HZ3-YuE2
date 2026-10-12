@@ -84,8 +84,10 @@ def parse_bar(body: str, voice: Voice, unit: Fraction, context: str) -> None:
     start = voice.time
     offset = Fraction(0)
     local = {}  # Native exporters propagate accidentals by letter, across octaves.
+    # A tie into a rest or another pitch only joins the notes in writing (as when a section is pasted next to
+    # another): it is dropped and each note sounds on its own.
     if body == "Z":
-        fail(voice.pending is not None, f"{context}: tie enters a full-measure rest")
+        voice.pending = None
         offset = length
     else:
         cursor = 0
@@ -116,7 +118,7 @@ def parse_bar(body: str, voice: Voice, unit: Fraction, context: str) -> None:
             fail("," in octave and "'" in octave, f"{context}: mixed octave marks")
             if note == "z":
                 fail(bool(acc or octave or tie), f"{context}: a rest cannot have accidentals, octave marks or ties")
-                fail(voice.pending is not None, f"{context}: tie enters a rest")
+                voice.pending = None
             else:
                 letter = note.upper()
                 written = 60 + NATURAL[letter] + (12 if note.islower() else 0)
@@ -132,7 +134,7 @@ def parse_bar(body: str, voice: Voice, unit: Fraction, context: str) -> None:
                     # a barline. It does not alter later untied notes in that bar.
                     if not acc and written == old_written:
                         pitch = old_pitch
-                    fail(pitch != old_pitch, f"{context}: tie changes pitch from {old_pitch} to {pitch}")
+                if voice.pending is not None and pitch == voice.pending[0]:
                     voice.notes[-1][2] += duration
                 else:
                     fail(not 0 <= pitch <= 127, f"{context}: pitch {pitch} is outside MIDI range")
@@ -210,8 +212,6 @@ def parse(text: str) -> Score:
             for bar in bars:
                 parse_bar(bar, voice, unit, f"{context}, bar {len(voice.bars) + 1}")
         fail(counts[0] != counts[1], f"group {group}: voices have different measure counts")
-    for name, voice in voices.items():
-        fail(voice.pending is not None, f"{name}: unresolved tie at end of score")
     fail(voices["Ins"].chords != [], "Native chord symbols belong in Vocal, not Ins")
     fail(voices["Vocal"].bars != voices["Ins"].bars, "Voice meter/time grids differ")
     fail(voices["Vocal"].keys != voices["Ins"].keys, "Voice key-change timelines differ")

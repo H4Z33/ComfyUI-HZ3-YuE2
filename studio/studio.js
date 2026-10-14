@@ -3597,6 +3597,8 @@ async function openProject(name) {
   selected = null;
   selectedTrack = null;
   instrumentAudio.clear();
+  // Decoded takes of the previous song would otherwise stay in memory for the whole session (gigabytes over an album).
+  buffers.clear();
   if (album.name !== project.album) await loadAlbum(project.album);
   browseAlbum = project.album;
   await addStylesToAlbum(album.name, project.styles);

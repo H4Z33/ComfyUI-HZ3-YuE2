@@ -728,6 +728,71 @@ async function setSectionFree(name) {
   await refreshSections();
 }
 
+// A melody sung into the microphone becomes the section's Vocal line: a bar of clicks counts in, the song plays from
+// the section (headphones keep it out of the recording) and the take ends with the section; chords stay.
+async function recordSectionMelody(name) {
+  readForm();
+  const section = sections.find((item) => item.name === name);
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  const audio = context();
+  await audio.resume();
+  pause();
+  const bar = (section.end - section.start) / section.bars;
+  const seconds = section.end - section.start;
+  const begin = audio.currentTime + 0.3 + bar;
+  // A click per beat: the count-in bar, and the whole section too when there is no take to sing along with.
+  const clicks = project.takes.length ? 4 : 4 + 4 * section.bars;
+  for (let beat = 0; beat < clicks; beat++) {
+    const at = begin - bar + beat * bar / 4;
+    const click = audio.createOscillator();
+    const gain = audio.createGain();
+    click.frequency.value = beat % 4 ? 1000 : 1500;
+    gain.gain.setValueAtTime(0.3, at);
+    gain.gain.exponentialRampToValueAtTime(0.001, at + 0.05);
+    click.connect(gain).connect(audio.destination);
+    click.start(at);
+    click.stop(at + 0.06);
+  }
+  if (project.takes.length) {
+    playback = { from: section.start, start: begin, ...buildGraph(audio, audio.destination, section.start, begin) };
+    $("play").textContent = "❚❚";
+    requestAnimationFrame(tick);
+  }
+  // The singer follows what they hear, which leaves the speakers outputLatency after it was scheduled.
+  const heard = begin + (audio.outputLatency || audio.baseLatency || 0);
+  const input = audio.createMediaStreamSource(stream);
+  const recorder = audio.createScriptProcessor(1024, 1, 1);
+  const mute = audio.createGain();
+  mute.gain.value = 0;
+  const samples = new Float32Array(Math.ceil(seconds * audio.sampleRate));
+  recorder.onaudioprocess = (event) => {
+    const data = event.inputBuffer.getChannelData(0);
+    const at = Math.round((audio.currentTime - data.length / audio.sampleRate - heard) * audio.sampleRate);
+    for (let index = Math.max(0, -at); index < data.length && at + index < samples.length; index++) samples[at + index] = data[index];
+  };
+  input.connect(recorder).connect(mute).connect(audio.destination);
+  status(`Cuenta un compás y canta «${name}» (${fmt(seconds)})…`, 0);
+  while (audio.currentTime < heard + seconds + 0.2) await new Promise((resolve) => setTimeout(resolve, 100));
+  recorder.disconnect();
+  input.disconnect();
+  stream.getTracks().forEach((track) => track.stop());
+  pause();
+  const take = audio.createBuffer(1, samples.length, audio.sampleRate);
+  take.copyToChannel(samples, 0);
+  const form = new FormData();
+  form.append("abc", project.abc);
+  form.append("name", name);
+  form.append("audio", new Blob([wav(take)], { type: "audio/wav" }), "voz.wav");
+  const response = await fetch("/hz3/studio/sung_melody", { method: "POST", body: form });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error);
+  if (!result.notes) throw new Error("No se oyó ninguna nota cantada: revisa el micrófono y vuelve a grabar.");
+  setAbc(result.abc, `antes de grabar la melodía de «${name}»`);
+  await refreshSections();
+  remember(`Melodía de «${name}» grabada con el micrófono (${result.notes} notas)`);
+  status(`«${name}»: ${result.notes} notas de tu voz en la partitura. Escúchalas con «▶ Partitura» y regenera la sección para que YuE2 las cante.`, 1);
+}
+
 // Lead singer of a section: its melody moves to the singer's register and its lyric tag says who sings.
 async function setSectionSinger(name, id) {
   const index = sections.findIndex((section) => section.name === name);
@@ -2503,6 +2568,8 @@ function drawSections() {
     if (takeId) block.insertAdjacentHTML("beforeend", `<span class="take">T${takeId}</span>`);
     const parts = editedParts(section, index);
     if (parts.length) block.insertAdjacentHTML("beforeend", `<span class="edited" title="${escapeHtml(`La ${parts.join(", ")} de esta sección no es la que cantó el take ${project.comp[section.name]}: «Regenerar sección» la canta así. Si solo corregiste el texto, puedes dejarla.`)}">editado: ${parts.join(", ")}</span>`);
+    const fit = melodyFit(section);
+    if (fit) block.insertAdjacentHTML("beforeend", `<span class="edited" title="${escapeHtml(fit.title)}">${fit.label}</span>`);
     block.onclick = () => { selected = section.name; selectedVoice = null; selectedTrack = null; draw(); };
     if (index > 0 && score) {
       const handle = document.createElement("div");
@@ -2513,6 +2580,20 @@ function drawSections() {
     }
     body.append(block);
   });
+}
+
+// YuE2 lays the song's syllables on its notes in order: a section short of notes sings its leftover words on the
+// next section's melody, and spare notes get invented words. A free section (no notes) has no such limit.
+function melodyFit(section) {
+  const { notes, syllables } = section;
+  if (!notes || !syllables) return null;
+  if (syllables > notes + 2) {
+    return { label: `faltan ${syllables - notes} notas`, title: `${notes} notas para unas ${syllables} sílabas: lo que no cabe se canta sobre la melodía de la sección siguiente. Dale más compases o notas, acorta la letra o déjala en melodía libre.` };
+  }
+  if (notes > syllables * 1.25 + 4) {
+    return { label: `sobran ${notes - syllables} notas`, title: `${notes} notas para unas ${syllables} sílabas: en las notas que sobran YuE2 alarga vocales o inventa palabras.` };
+  }
+  return null;
 }
 
 function dragBoundary(index, body) {
@@ -2897,7 +2978,8 @@ function drawInspector() {
   $("inspector").classList.toggle("hidden", index < 0);
   if (index < 0) return;
   const section = sections[index];
-  $("inspector-title").textContent = `${section.name} · ${fmt(section.start)}–${fmt(section.end)} · ${section.bars} compases`;
+  $("inspector-title").textContent = `${section.name} · ${fmt(section.start)}–${fmt(section.end)} · ${section.bars} compases · ` +
+    (section.notes ? `${section.notes} notas, ~${section.syllables} sílabas` : "melodía libre");
   $("section-arrangement").textContent = project.arrangement[section.name] ? `Agente: ${project.arrangement[section.name]}` : "";
   if (document.activeElement !== $("section-name")) $("section-name").value = section.name;
   if (document.activeElement !== $("section-lyrics")) $("section-lyrics").value = section.lyrics;
@@ -3743,6 +3825,7 @@ async function init() {
   $("compose").onclick = guard(() => compose());
   $("section-recompose").onclick = guard(() => compose(selected));
   $("section-free").onclick = guard(() => setSectionFree(selected));
+  $("section-record").onclick = guard(() => recordSectionMelody(selected));
   $("section-restore").onclick = guard(() => restoreSectionOriginal(selected));
   $("section-instrumental").onclick = guard(() => sectionToInstrumental(selected));
   $("compose-dice").onclick = () => { $("compose-seed").value = Math.floor(Math.random() * 2 ** 31); readForm(); };

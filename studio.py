@@ -37,8 +37,9 @@ from .classical_lines import abc_phrases, add_lines, load_library
 from .instrument_patterns import pattern_notes
 from .score_lyric_aligner import _model_roots
 from .section_generation import _build_section_specs, _stored_tokens_path
-from .vocal_harmonizer import _time_warp, _track
-from .vocal_harmony import PARTS, harmonize
+from .procedural_prosody import _line_metrics
+from .vocal_harmonizer import FRAME_SECONDS, _note_runs, _time_warp, _track
+from .vocal_harmony import PARTS, _layout, _render_bar, harmonize
 
 
 STATIC = Path(__file__).parent / "studio"
@@ -397,6 +398,47 @@ def _reference_themes():
     return themes
 
 
+def _sung_melody(abc, name, wave, sample_rate):
+    """The ABC with section `name`'s Vocal melody replaced by what is sung in a recording that starts on the section's
+    first beat: pitch-tracked notes snapped to sixteenths, cut at the section's end. Chords and inline keys stay."""
+    score = parse(abc.strip() + "\n")
+    if score.unit > Fraction(1, 16):
+        raise ValueError("La partitura necesita L:1/16 o menor para escribir semicorcheas.")
+    groups, marks = _layout(score)
+    vocal = score.voices["Vocal"]
+    names = [mark for _, mark in marks]
+    if name not in names:
+        raise ValueError(f"El ABC no tiene la sección «{name}».")
+    at = names.index(name)
+    start = marks[at][0]
+    end = marks[at + 1][0] if at + 1 < len(marks) else vocal.time
+    sixteenths = 4 * score.bpm / 60  # per second
+    notes = []
+    for first, last, pitch, _ in _note_runs(_track(wave.mean(1), sample_rate)):
+        on = start + Fraction(round(first * FRAME_SECONDS * sixteenths), 4)
+        off = max(on + Fraction(1, 4), start + Fraction(round(last * FRAME_SECONDS * sixteenths), 4))
+        if on >= end:
+            break
+        if notes and notes[-1][0] + notes[-1][2] > on:
+            notes[-1][2] = on - notes[-1][0]
+            if not notes[-1][2]:
+                notes.pop()
+        notes.append([on, int(pitch), min(off, end) - on])
+    lines = score.text.splitlines()
+    for line_index, voice, bars in groups:
+        if voice != "Vocal" or not start <= bars[0][0] < end:
+            continue
+        rendered = []
+        for bar_start, length, inline_keys in bars:
+            body = _render_bar(notes, bar_start, length, inline_keys, score.unit, vocal.keys)
+            chords = [(time - bar_start, symbol) for time, symbol in vocal.chords if bar_start <= time < bar_start + length]
+            rendered.append(_bar_with_chords(body, chords, score.unit, length) if chords else body)
+        lines[line_index] = "|".join(rendered) + "|"
+    result = "\n".join(lines) + "\n"
+    parse(result)
+    return result, len(notes)
+
+
 def _warp(path, score_abc, line):
     """ABC-to-audio time warp of one sung line (the lead, or a Vocal Harmony part)."""
     wave, sample_rate = soundfile.read(str(path), dtype="float32", always_2d=True)
@@ -423,13 +465,21 @@ def register(routes):
             specs = _build_section_specs(body["abc"], body["lyrics"])
         except ValueError as error:
             return web.json_response({"error": str(error)}, status=400)
+        # YuE2 lays the song's syllables on its notes in order, so a section with fewer notes than syllables sings the
+        # rest on the next section's melody: each section reports both counts.
+        vocal = parse(body["abc"].strip() + "\n").voices["Vocal"]
         timeline = []
-        frame = 0
+        frame = bar = 0
         for spec in specs:
+            start = vocal.bars[bar][0]
+            end = vocal.bars[bar + spec["bars"]][0] if bar + spec["bars"] < len(vocal.bars) else vocal.time
+            syllables = sum(_line_metrics(line)["connected_syllable_estimate"] for line in spec["lyrics"].splitlines() if line.strip())
             timeline.append({"name": spec["name"], "lyrics": spec["lyrics"], "lyrics_index": spec["lyrics_index"], "abc": spec["abc"], "bars": spec["bars"],
                              "start": frame / FRAMES_PER_SECOND, "end": (frame + spec["frames"]) / FRAMES_PER_SECOND,
-                             "start_frame": frame, "frames": spec["frames"]})
+                             "start_frame": frame, "frames": spec["frames"],
+                             "notes": sum(start <= note[0] < end for note in vocal.notes), "syllables": syllables})
             frame += spec["frames"]
+            bar += spec["bars"]
         return web.json_response({"sections": timeline})
 
     @routes.post("/hz3/studio/slice_tokens")
@@ -633,6 +683,16 @@ def register(routes):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         return web.json_response({"name": path.stem})
+
+    @routes.post("/hz3/studio/sung_melody")
+    async def sung_melody(request):
+        form = await request.post()
+        wave, sample_rate = soundfile.read(io.BytesIO(form["audio"].file.read()), dtype="float32", always_2d=True)
+        try:
+            abc, notes = await asyncio.to_thread(_sung_melody, form["abc"], form["name"], wave, sample_rate)
+        except ValueError as error:
+            return web.json_response({"error": str(error)}, status=400)
+        return web.json_response({"abc": abc, "notes": notes})
 
     @routes.post("/hz3/studio/warp")
     async def warp(request):

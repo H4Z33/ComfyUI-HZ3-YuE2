@@ -64,6 +64,12 @@ for a song editor on top of these nodes.
   Speech runs at about 3.5–4 syllables per second and does not wait for the section's end:
   size a spoken section to its text, or YuE2 moves on to the next section's words early and
   repeats lines at the end. `Restaurar melodía escrita` brings the written melody back.
+- YuE2 lays the song's syllables on its notes in order, so a section with fewer notes than syllables sings the rest
+  on the next section's melody, and spare notes get invented words. Each section shows its notes and syllables and
+  is marked `faltan N notas` / `sobran N notas` when they do not fit (free sections have no limit).
+- `🎤 Grabar melodía` records the selected section's melody from the microphone: one bar of clicks counts in, the
+  song plays from the section (use headphones; with no take yet the clicks continue), and the pitch-tracked notes,
+  snapped to sixteenths, replace the section's vocal line with its chords kept. The previous ABC goes to the ABC versions.
 - Every track (lead, instrumental, harmonies, extra voices) is switched on or off per
   section by clicking it, e.g. for a duet;
   each track has mute, solo and volume. `Armonías con agente` asks the local

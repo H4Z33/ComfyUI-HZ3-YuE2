@@ -42,7 +42,7 @@ button.icon { font-size: 16px; line-height: 1; padding: 3px 8px; }
 .lane { display: flex; height: 64px; border-bottom: 1px solid var(--line); }
 .lane.ruler { height: 24px; position: sticky; top: 0; z-index: 3; background: var(--bg); cursor: pointer; }
 .lane.sections { height: 40px; }
-.lane-head { position: sticky; left: 0; z-index: 2; flex: 0 0 170px; background: var(--panel); border-right: 1px solid var(--line); padding: 4px 8px; display: flex; flex-direction: column; gap: 3px; }
+.lane-head { position: sticky; left: 0; z-index: 2; flex: 0 0 170px; min-width: 0; overflow: hidden; background: var(--panel); border-right: 1px solid var(--line); padding: 4px 8px; display: flex; flex-direction: column; gap: 3px; }
 .lane-head .name { font-weight: 600; }
 .lane-head .controls { display: flex; gap: 4px; align-items: center; }
 .lane-head .controls button { padding: 0 6px; font-size: 11px; }
@@ -118,7 +118,7 @@ details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap:
 .lane.lyrics { height: 96px; min-height: 48px; resize: vertical; overflow: hidden; }
 .lyric-block { position: absolute; top: 2px; bottom: 2px; resize: none; font: 11px/1.3 system-ui, sans-serif; background: #1b1d22; border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 2px 4px; }
 .lyric-block.empty { border-left-color: var(--off); }
-.lane-head .who { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lane-head .who { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .catalog td.lora { white-space: nowrap; }
 .catalog td.lora select { width: 170px; }
 .catalog td.lora input { width: 64px; }

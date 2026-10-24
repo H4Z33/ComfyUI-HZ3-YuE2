@@ -2,6 +2,26 @@
 
 Esta guía documenta la arquitectura interna, el procedimiento de entrenamiento, la gestión de prompts y la configuración de nodos en ComfyUI para capturar y reproducir voces, artistas y estilos musicales usando **YuE2** y el ecosistema **HZ3**.
 
+## 0. Receta en uso: LoRA de artista a partir de un take de HZ3 Studio
+
+Para fijar la voz y el sonido de una canción ya aprobada (los LoRAs de Luna Pop, Cali Moshi, El Estratega Maestro y
+Nadie te pregunto):
+
+| Parámetro | Valor |
+|---|---|
+| `mode` | `style (composition / genre)` |
+| `music_tokens` | los tokens reales del take: las listas de `output/HZ3-YuE2/section_tokens/<id>.json` en el orden de su `tokenStream` (25 por segundo) |
+| `style_caption` / `lyrics` | el estilo del take y la letra del proyecto |
+| `steps` / `rank` / `alpha` / `learning_rate` | 150 / 32 / 64 / 5e-4 (unos 30 s) |
+
+Con `music_tokens` el audio conectado no se usa en modo style. El disparador queda en los metadatos del LoRA. En HZ3 Studio
+el LoRA se asigna al cantante del álbum (o a la canción) con su fuerza. El Studio carga `LoraLoader` con la misma fuerza
+para modelo y clip y **antepone el disparador** al estilo global y a cada estilo de sección, así que no hace falta
+escribirlo. La fuerza en uso es **0.6**. Un render lleva un solo LoRA.
+
+El botón `Congelar voz` del Studio es otro camino: modo joint o voice sobre los audios elegidos, tokenizados con el
+tokenizador de audio real, a fuerza 1. Las secciones 3 a 5 describen ese enfoque anterior.
+
 ---
 
 ## 1. Arquitectura de YuE2: ¿Por qué un LoRA de voz necesita dos modelos?

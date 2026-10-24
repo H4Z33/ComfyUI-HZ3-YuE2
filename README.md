@@ -129,16 +129,21 @@ when missing), and opening a song that sings with a voice LoRA adds that voice t
 ## Nodes
 
 - HZ3 YuE2 · Audio to Style (Discogs-EffNet)
-- HZ3 YuE2 · Procedural Prosody
 - HZ3 YuE2 · Lyrics Prosody (Ollama)
 - HZ3 YuE2 · MixMash Style (Ollama)
-- HZ3 YuE2 · Vocal Harmony
-- HZ3 YuE2 · Vocal Harmonizer
-- HZ3 YuE2 · ABC Piano Roll
+- HZ3 YuE2 · Add Training Track
+- HZ3 YuE2 · Audit Training Dataset
+- HZ3 YuE2 · Tokenizer/LoRA Runtime
+- HZ3 YuE2 · Audio to LoRA (Style / Voice)
 - HZ3 YuE2 · Save Audio
 - HZ3 YuE2 · Load Generation
+- HZ3 YuE2 · ABC Piano Roll + Section Lyrics
+- ABC Separator
+- HZ3 YuE2 · Procedural Prosody
 - HZ3 YuE2 · Generate Token Stream
 - HZ3 YuE2 · Music From Token Stream
+- HZ3 YuE2 · Generate Music Sections
+- HZ3 YuE2 · Continue ABC
 - HZ3 YuE2 · Conditioning Cut
 - HZ3 YuE2 · Conditioning Paste
 - HZ3 YuE2 · Save Conditioning
@@ -146,11 +151,24 @@ when missing), and opening a song that sings with a voice LoRA adds that voice t
 - HZ3 YuE2 · Conditioning Timeline
 - HZ3 YuE2 · Section Plan
 - HZ3 YuE2 · Assemble Sections
-- HZ3 YuE2 · Whisper
+- HZ3 YuE2 · Concat Conditionings (list)
+- HZ3 YuE2 · Conditioning Overlap
+- HZ3 YuE2 · Transcribe
 - HZ3 YuE2 · MixMash Genius (Ollama)
-- HZ3 YuE2 · Section Plan
-- HZ3 YuE2 · Assemble Sections
+- HZ3 YuE2 · Split Audio by Segments
+- HZ3 YuE2 · Concat Audio Segments
+- HZ3 YuE2 · List to Batch
+- HZ3 YuE2 · Batch to List
+- HZ3 YuE2 · Create Batch
+- HZ3 YuE2 · Get Batch Item
+- HZ3 YuE2 · SheetSage2 Audio to ABC + Sections
+- HZ3 YuE2 · Crossfade Audio Conditioning
+- HZ3 YuE2 · Audio Folder
 - HZ3 YuE2 · Karaoke & Audio Visualizer
+- HZ3 YuE2 · Vocal Harmony
+- HZ3 YuE2 · Vocal Harmonizer
+- HZ3 YuE2 · Vocal Tune
+- HZ3 YuE2 · Fetch Lyrics from Audio
 
 The audio classifier expects `discogs-effnet-bsdynamic-1.onnx` and its matching
 JSON metadata under `models/audio_classifiers/discogs_effnet`. The Ollama nodes

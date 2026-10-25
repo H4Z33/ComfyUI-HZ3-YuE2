@@ -21,6 +21,7 @@ import comfy.model_prefetch
 import comfy.ops
 import comfy.sd
 
+from .section_generation import _parse_section_styles, _parse_section_tokens, _stored_tokens_path
 from .token_stream import _prefixes, _prepare_model, _tokenize
 
 
@@ -450,8 +451,11 @@ def _train_voice_lora(audio_latents, windows, diffusion_model, steps=100, rank=3
         return lora_dict, losses, duration
 
 
-def _train_style_lora(music_tokens, clip_model, trigger="hz3_artist", style_caption="", lyrics="", steps=80, rank=32, alpha=None, lr=3e-4, device="cuda"):
-    """Train a LoRA adapter on YuE2's autoregressive text & semantic music model (AR branch)."""
+def _train_style_lora(segments, clip_model, trigger="hz3_artist", lyrics="", steps=80, rank=32, alpha=None, lr=3e-4, device="cuda"):
+    """Train a LoRA adapter on YuE2's autoregressive text & semantic music model (AR branch).
+
+    `segments` is the song in order as (style caption, tokens): each step learns one segment's tokens under its own
+    caption, after the tokens that come before it, the way a sectioned render samples them."""
     with torch.inference_mode(False), torch.enable_grad():
         torch_device = torch.device(device if torch.cuda.is_available() else "cpu")
         clip_te = clip_model.cond_stage_model
@@ -496,18 +500,22 @@ def _train_style_lora(music_tokens, clip_model, trigger="hz3_artist", style_capt
 
         opt = torch.optim.AdamW(lora_params, lr=lr, weight_decay=1e-4, betas=(0.9, 0.95))
         
-        style_text = f"{trigger}, in the style of {trigger}. {(style_caption or '').strip()}".strip()
         lyrics_text = (lyrics or "[instrumental]").strip()
-        
-        token_dict = clip_model.tokenize(style_text, lyrics=lyrics_text, cot="off")
-        prefix_ids = token_dict.get("prefix", [151643])
-        
+        prefixes = {}
+        for caption, _ in segments:
+            if caption not in prefixes:
+                style_text = f"{trigger}, in the style of {trigger}. {(caption or '').strip()}".strip()
+                prefixes[caption] = clip_model.tokenize(style_text, lyrics=lyrics_text, cot="off").get("prefix", [151643])
+        music_tokens = [token for _, tokens in segments for token in tokens]
+        starts = [0]
+        for _, tokens in segments:
+            starts.append(starts[-1] + len(tokens))
+
         use_cuda = (torch_device.type == "cuda")
         dtype = torch.bfloat16 if (use_cuda and torch.cuda.is_bf16_supported()) else torch.float32
 
-        prefix_len = len(prefix_ids)
         # A long take is learned in windows: each step a random stretch of its tokens after the prompt.
-        window = max(64, TRAIN_LENGTH - prefix_len - 2)
+        window = max(64, TRAIN_LENGTH - max(map(len, prefixes.values())) - 2)
         generator = torch.Generator().manual_seed(0)
 
         losses = []
@@ -519,10 +527,21 @@ def _train_style_lora(music_tokens, clip_model, trigger="hz3_artist", style_capt
                 comfy.model_management.throw_exception_if_processing_interrupted()
                 opt.zero_grad(set_to_none=True)
                 
-                offset = int(torch.randint(0, max(1, len(music_tokens) - window + 1), (1,), generator=generator))
-                input_ids = torch.tensor([prefix_ids + [151851] + music_tokens[offset:offset + window]], device=torch_device, dtype=torch.long)
+                if len(segments) == 1:
+                    offset = int(torch.randint(0, max(1, len(music_tokens) - window + 1), (1,), generator=generator))
+                    end = min(len(music_tokens), offset + window)
+                else:
+                    end = int(torch.randint(1, len(music_tokens) + 1, (1,), generator=generator))
+                    offset = max(0, end - window)
+                # The window ends in this segment; the tokens before the segment are context, not learned under its caption.
+                segment = next(index for index in range(len(segments)) if starts[index] < end <= starts[index + 1])
+                prefix_ids = prefixes[segments[segment][0]]
+                prefix_len = len(prefix_ids)
+                input_ids = torch.tensor([prefix_ids + [151851] + music_tokens[offset:end]], device=torch_device, dtype=torch.long)
                 targets = input_ids[:, 1:].clone()
-                
+                if starts[segment] > offset:
+                    targets[:, :prefix_len + starts[segment] - offset] = -100
+
                 with torch.amp.autocast("cuda", enabled=use_cuda, dtype=dtype):
                     hidden, _ = ar_model(input_ids)
                     logits = ar_model.lm_head(hidden[:, :-1])
@@ -698,11 +717,14 @@ class HZ3_YuE2_AudioToLoRA:
                 "vae": ("VAE",),
                 "custom_output_dir": ("STRING", {"default": ""}),
                 "music_tokens": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional JSON list of the reference's real YuE2 codec tokens (e.g. a take's section tokens in order). Without them the reference audio is tokenized with the real-audio tokenizer (MERT-v2-FullSong + tokenizer_head_joint_v4)."}),
+                "section_tokens": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional 'Section = <token id>' lines, in song order (a take's stored section tokens). Style mode then learns each section under its own caption from section_styles, so who sings it can be told apart; music_tokens is not read."}),
+                "section_styles": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional 'Section: style' lines for section_tokens; a section without one uses style_caption."}),
             }
         }
 
     def generate_lora(self, audio, mode, lora_name, trigger, steps, rank, learning_rate, save_to_loras_folder,
-                      alpha=64.0, style_caption="", lyrics="", model=None, clip=None, vae=None, custom_output_dir="", music_tokens="", **kwargs):
+                      alpha=64.0, style_caption="", lyrics="", model=None, clip=None, vae=None, custom_output_dir="", music_tokens="",
+                      section_tokens="", section_styles="", **kwargs):
         audio_in = _defensive_scalar(audio)
         selected_mode = _defensive_scalar(mode, "joint (voice + style) [Recommended]")
         target_lora_name = _safe_name(_defensive_scalar(lora_name, "yue2_artist_lora"))
@@ -737,7 +759,13 @@ class HZ3_YuE2_AudioToLoRA:
 
         all_lora_weights = {}
         reports = []
-        if music_tokens.strip():
+        if section_tokens.strip():
+            styles = _parse_section_styles(section_styles)
+            segments = [(styles.get(name, caption_text), json.loads(_stored_tokens_path(digest).read_text(encoding="utf-8")))
+                        for name, digest in _parse_section_tokens(section_tokens).items()]
+            tokens = [token for _, section in segments for token in section]
+            reports.append(f"{len(segments)} sections, {len(set(caption for caption, _ in segments))} captions")
+        elif music_tokens.strip():
             tokens = [int(token) for token in json.loads(music_tokens)]
         else:
             tokens = _real_audio_tokens(audio_in, target_device)
@@ -774,7 +802,7 @@ class HZ3_YuE2_AudioToLoRA:
         # 2. Style LoRA (AR musical model)
         if selected_mode.startswith("style") or selected_mode.startswith("joint"):
             style_lora, style_losses, style_sec = _train_style_lora(
-                tokens, loaded_clip, trigger=target_trigger, style_caption=caption_text, lyrics=lyrics_text,
+                segments if section_tokens.strip() else [(caption_text, tokens)], loaded_clip, trigger=target_trigger, lyrics=lyrics_text,
                 steps=num_steps, rank=target_rank, alpha=target_alpha, lr=lr, device=target_device
             )
             all_lora_weights.update(style_lora)

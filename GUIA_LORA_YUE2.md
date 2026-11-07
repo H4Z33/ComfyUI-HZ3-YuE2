@@ -38,8 +38,8 @@ esos mismos estilos por sección, sin cantantes asignados (agregan las dos descr
 la canción.
 
 El reparto debe confirmarlo quien conoce la canción: un análisis automático (MFCC) puso a la voz equivocada como
-principal, y ese LoRA dejó de cantar con la otra voz en una melodía nueva. Con el reparto correcto, en «Nadie te
-pregunto» (v3, fuerza 0.6) el resultado quedó aceptable, no resuelto: ver «Known limitations» en el README.
+principal, y ese LoRA dejó de cantar con la otra voz en una melodía nueva. Con el reparto ajustado (v3, fuerza 0.6),
+en una melodía nueva tampoco salió ninguna voz masculina: esta receta no resuelve quién canta cada sección.
 
 ---
 

@@ -135,7 +135,7 @@ Measured on one two-singer song (2026-10-24); expect them on any song with a set
 - What works: no repeated lyric blocks, take the cleanest compose from the ABC versions (notes close to syllables), and split its long verse at phrase boundaries where the notes reach each block's syllables.
 - Composing takes key and tempo from the current ABC header only (`keep`), never from the style text, and does not load the LoRA.
 - Assigning two singers puts both descriptions in every section's style, so a section cannot name only its own singer. To isolate them, leave the sections unassigned, write the singer in each section's style and set the LoRA on the song.
-- The style text does not reliably choose the voice: it follows the tokens and the ABC register. Moving a melody an octave to get a singer changes that singer's timbre. A section-captioned LoRA helps, see `GUIA_LORA_YUE2.md` §0.
+- The style text does not reliably choose the voice: it follows the tokens and the ABC register. Moving a melody an octave to get a singer changes that singer's timbre. A section-captioned LoRA does not fix it: on a new melody every voice came out female.
 - One render carries one LoRA.
 
 ## Nodes

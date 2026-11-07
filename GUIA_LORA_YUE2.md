@@ -22,6 +22,25 @@ escribirlo. La fuerza en uso es **0.6**. Un render lleva un solo LoRA.
 El botón `Congelar voz` del Studio es otro camino: modo joint o voice sobre los audios elegidos, tokenizados con el
 tokenizador de audio real, a fuerza 1. Las secciones 3 a 5 describen ese enfoque anterior.
 
+### Canción con varias voces: LoRA por sección
+
+Con un solo `style_caption` el LoRA aprende toda la canción bajo una descripción y no distingue quién canta cada parte.
+Para eso, en lugar de `music_tokens`:
+
+| Parámetro | Valor |
+|---|---|
+| `section_tokens` | `Sección = <id>` por línea, en orden de la canción (`sectionTokens` y `tokenStream` del take) |
+| `section_styles` | `Sección: estilo` por línea, con el cantante real de esa sección; la que falte usa `style_caption` |
+| `steps` | 300 (unos 60 s) |
+
+Cada paso aprende una sección bajo su estilo; lo anterior a ella es contexto y no entra en la pérdida. Para cantar, usa
+esos mismos estilos por sección, sin cantantes asignados (agregan las dos descripciones a cada sección) y con el LoRA en
+la canción.
+
+El reparto debe confirmarlo quien conoce la canción: un análisis automático (MFCC) puso a la voz equivocada como
+principal, y ese LoRA dejó de cantar con la otra voz en una melodía nueva. Con el reparto correcto, en «Nadie te
+pregunto» (v3, fuerza 0.6) el resultado quedó aceptable, no resuelto: ver «Known limitations» en el README.
+
 ---
 
 ## 1. Arquitectura de YuE2: ¿Por qué un LoRA de voz necesita dos modelos?

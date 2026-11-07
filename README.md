@@ -126,6 +126,18 @@ the local tokens of the same section key, since another GPU samples other tokens
 so another machine replays them instead of sampling the song again. It also carries the LoRAs of the song and of its singers (installed on open
 when missing), and opening a song that sings with a voice LoRA adds that voice to the album's singers when the catalog lacks it.
 
+### Known limitations (stable v0.1b)
+
+Measured on one two-singer song (2026-10-24); expect them on any song with a set structure or more than one voice.
+
+- `Generar ABC (YuE2)` does not follow the lyric's structure. It merges repeated blocks (Intro = Verse 1, Bridge = Bridge 2) and adjacent verses into one long verse, and renames or drops sections: 22 seeds never matched a 10-section lyric, and 12 more gave one name match on an 8-section lyric, whose Interlude had one note for 26 syllables. Check `notas / sílabas` per section, not only the names.
+- Recomposing from the first wrong section, over and over, derails: sections of 96 to 160 bars with no notes.
+- What works: no repeated lyric blocks, take the cleanest compose from the ABC versions (notes close to syllables), and split its long verse at phrase boundaries where the notes reach each block's syllables.
+- Composing takes key and tempo from the current ABC header only (`keep`), never from the style text, and does not load the LoRA.
+- Assigning two singers puts both descriptions in every section's style, so a section cannot name only its own singer. To isolate them, leave the sections unassigned, write the singer in each section's style and set the LoRA on the song.
+- The style text does not reliably choose the voice: it follows the tokens and the ABC register. Moving a melody an octave to get a singer changes that singer's timbre. A section-captioned LoRA helps, see `GUIA_LORA_YUE2.md` §0.
+- One render carries one LoRA.
+
 ## Nodes
 
 - HZ3 YuE2 · Audio to Style (Discogs-EffNet)

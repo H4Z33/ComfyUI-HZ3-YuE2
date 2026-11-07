@@ -535,22 +535,26 @@ function oneLine(text) {
   return text.split("\n").map((line) => line.trim().replace(/[,;.]+$/, "")).filter(Boolean).join(", ");
 }
 
-// The lead's singers are declared up front, as YuE2's own duets do; who sings each section is in its lyric tag.
-function singersStyle() {
-  const singers = [...new Set(sections.map((section) => project.sectionSingers[section.name]).filter(Boolean))].map(catalogStyle).filter(Boolean);
-  if (singers.length < 2) return singers[0]?.text ?? "";
-  return `${singers.length === 2 ? "duet" : "several lead singers"}, ${singers.map((singer) => singer.text).join(" and ")}`;
-}
-
 function globalStyle() {
-  return [catalogStyle(project.baseStyle)?.text, project.style, singersStyle()].filter((text) => text?.trim()).join("\n");
+  return [catalogStyle(project.baseStyle)?.text, project.style].filter((text) => text?.trim()).join("\n");
 }
 
-// A section with its own style text sings the base style, that text and the singers; "" means the global style.
+// A section with its own style or its own singer sings the base style, its text (or the song's) and only its singer's
+// description; "" means the global style. The inspector shows the result as sent.
 function sectionStyle(section) {
   const own = project.sectionStyles[section.name];
-  if (!own) return "";
-  return [catalogStyle(project.baseStyle)?.text, own, singersStyle()].filter((text) => text?.trim()).join("\n");
+  const singer = catalogStyle(project.sectionSingers[section.name])?.text;
+  if (!own && !singer) return "";
+  return [catalogStyle(project.baseStyle)?.text, own || project.style, singer].filter((text) => text?.trim()).join("\n");
+}
+
+// What YuE2 receives for a section: its tokens are sampled under the first text, the audio of the whole song under the
+// second; `withLora` puts the LoRA trigger in front of both the same way.
+function sentPrompt(section) {
+  const trigger = loraUses().find((use) => use.lora?.name)?.lora.trigger;
+  const withTrigger = (text) => trigger ? `${trigger}, ${text}` : text;
+  const own = sectionStyle(section);
+  return `Tokens de esta sección:\n${withTrigger(own ? oneLine(own) : globalStyle())}\n\nAudio de toda la canción:\n${withTrigger(globalStyle())}`;
 }
 
 // The current song's singer as a catalog singer: the vocal descriptors of its global style, its voice LoRA, and the
@@ -1780,11 +1784,15 @@ function buildPrompt(prefix, kept) {
     11: { class_type: "SaveAudio", inputs: { audio: ["10", 0], filename_prefix: `${prefix}/instrumental` } },
   };
   const saves = { 6: "mix", 8: "vocals", 11: "instrumental" };
-  withLora(prompt, sections.map((section) => {
+  withLora(prompt, loraUses());
+  return { prompt, saves };
+}
+
+function loraUses() {
+  return sections.map((section) => {
     const singer = catalogStyle(project.sectionSingers[section.name]);
     return singer ? { lora: singer.lora, owner: singer.name } : { lora: project.lora, owner: "el cantante de la canción" };
-  }));
-  return { prompt, saves };
+  });
 }
 
 function hasChords(abc) {
@@ -2993,6 +3001,7 @@ function drawInspector() {
   $("section-style-original").disabled = !ownStyle && !styleDraft;
   $("section-classical").value = project.classicalPlan[section.name] ?? "";
   $("section-singer").innerHTML = styleOptions(["singer"], songSingerLabel(), project.sectionSingers[section.name]);
+  $("section-prompt").textContent = sentPrompt(section);
   if (document.activeElement !== $("section-seed")) $("section-seed").value = sectionSeed(section, index);
   $("section-merge").disabled = index === sections.length - 1;
   const original = sectionOriginal(section.name);

@@ -57,6 +57,15 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
   las dos direcciones (dueño, prueba a ciegas). Lo demás queda igual a la toma 24 (0.97-1.00), sin cortes. La banda de
   los tramos cambiados se acerca a la del donante (0.01-0.08 más lejos de la toma 24 que solo con la capa 10). Las
   capas 0-9, 11-12, 14-15, 17-18 y 20-27 no aportan.
+- **Positivo sin ninguna descripción de género y un negativo por sección con la voz contraria**
+  (`section_negative_styles`, campo "Estilo negativo de la sección"): casi la toma 24, con el feeling correcto y la
+  instrumentación ligeramente distinta. Fallos: desde 1:50 la voz queda rara, y el chorus 2 (1:51-2:01), que debe
+  cantar El, salió femenino porque su negativo pedía a Ella.
+- Lo mismo con el LoRA de la toma 24 a 0.6: la canción sale prácticamente idéntica a la toma 24, pero todo lo canta
+  Ella y los negativos no tienen efecto. Ese LoRA aprendió los tokens de la toma 24 sin ABC ni texto y pesa más que
+  el estilo y el negativo.
+- La receta de capas con donantes generados con negativo da voces más claras, pero las divergencias de generación se
+  notan demasiado: no sirve.
 - Cambiar el encabezado de la letra (`[Verse 2]` frente a `[Verse 2 – Her]`) cambia los tokens tanto como volver a
   generar sin cambiar nada.
 

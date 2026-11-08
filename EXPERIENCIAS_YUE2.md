@@ -33,6 +33,23 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
 - Error de diseño a no repetir (2026-11-07): una prueba con una línea inventada, otra semilla y otro orden en cada
   condición no puede decir qué cambió la voz. Usa la canción de prueba y congela todo menos la voz.
 
+### Toma 24 de "El amor no es lo tuyo" sin LoRA, una variable por prueba (2026-11-08, oído del dueño)
+- La toma 24 se hizo sin LoRA. Con los mismos valores y sin caché, los tokens divergen a los 2.3 s, pero suena muy
+  parecida: el resultado es casi determinista aunque los tokens no.
+- Con los tokens congelados, cambiar el texto de la etapa 2 (solo El, solo Ella) no cambia la voz.
+- Desde cero, sin `duet` y con todo el estilo nombrando solo a El: sale solo El. Con solo Ella: sale Ella, salvo
+  1:01-1:10 (estribillo), que salió masculino.
+- CFG 1.0: voz masculina clara y banda más rockera y sucia. CFG 3.0: voz e instrumental más claros, pero "muy metódico".
+- **Negativo del CFG con el mismo estilo y la voz opuesta** (`negative_style`, campo "Estilo negativo" del Studio):
+  la voz más clara obtenida hasta ahora. Con negativo distinto, la melodía no sale idéntica entre las versiones de El y
+  de Ella.
+- Conditioning de la etapa 2 por capa: con el mismo prefijo, llevar las filas de los tokens de otro render a la toma 24
+  cambia el audio **solo en la capa 10, parte V, head 1** (128 valores por cuadro). Banda y voz se mueven juntas ahí:
+  ningún corte de capa, K/V o head las separó. Las capas 0-9 y 11-27 casi no cambian el audio. Al oído, las capas
+  0-13 de El sobre la toma 24 dieron voz masculina con "feeling" femenino donde antes cantaba Ella.
+- Cambiar el encabezado de la letra (`[Verse 2]` frente a `[Verse 2 – Her]`) cambia los tokens tanto como volver a
+  generar sin cambiar nada.
+
 ## LoRA de estilo
 
 - Receta en uso: `HZ3_YuE2_AudioToLoRA` en modo style sobre los tokens de una toma aprobada, 150 pasos, rank 32,

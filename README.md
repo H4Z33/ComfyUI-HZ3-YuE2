@@ -2,6 +2,8 @@
 
 Independent ComfyUI node pack for YuE2 workflow preparation.
 
+Agents: start with `AGENTS.md` (owner expectations, how to drive HZ3 Studio); measured YuE2 behavior is in `EXPERIENCIAS_YUE2.md`.
+
 ## Installation
 
 1. Use a ComfyUI with the native YuE2 nodes (`YuE2 Generate Music`, `YuE2 Generate ABC`).

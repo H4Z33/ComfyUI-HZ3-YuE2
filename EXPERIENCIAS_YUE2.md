@@ -47,6 +47,16 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
   cambia el audio **solo en la capa 10, parte V, head 1** (128 valores por cuadro). Banda y voz se mueven juntas ahí:
   ningún corte de capa, K/V o head las separó. Las capas 0-9 y 11-27 casi no cambian el audio. Al oído, las capas
   0-13 de El sobre la toma 24 dieron voz masculina con "feeling" femenino donde antes cantaba Ella.
+- Ese canal (capa 10, V, head 1) decide quién canta y la banda: Ella + ese canal de la toma 24 suena idéntica a la
+  toma 24, dueto incluido. El "feeling" vive repartido en las otras capas (la 16 lo cambia junto con la melodía).
+- Toma 24 intacta y solo ese canal cambiado en las secciones de la otra voz (`scratch/exp_voz/kvswap.py`, `spans`):
+  sale solo Ella o solo El, **sin cortes**, con la instrumentación apenas cambiada. Pero suena a "ella intentando
+  cantar como él" y al revés: el feeling sigue siendo el de la voz original de esa sección.
+- El feeling del cantante está sobre todo en la **capa 16**, y algo en la 19 y la 13 (K y V, los 8 heads). Sumar las
+  capas 13, 16 y 19 del donante en esos mismos tramos se oye ligeramente mejor y el feeling del cantante es notorio en
+  las dos direcciones (dueño, prueba a ciegas). Lo demás queda igual a la toma 24 (0.97-1.00), sin cortes. La banda de
+  los tramos cambiados se acerca a la del donante (0.01-0.08 más lejos de la toma 24 que solo con la capa 10). Las
+  capas 0-9, 11-12, 14-15, 17-18 y 20-27 no aportan.
 - Cambiar el encabezado de la letra (`[Verse 2]` frente a `[Verse 2 – Her]`) cambia los tokens tanto como volver a
   generar sin cambiar nada.
 

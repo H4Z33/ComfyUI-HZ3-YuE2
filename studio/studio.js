@@ -126,7 +126,7 @@ function newProject() {
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
-    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], deletedSongVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, trackSpans: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
+    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], deletedSongVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionNegatives: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, trackSpans: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
     arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {}, classicalPlan: {}, classicalReport: [],
   };
 }
@@ -254,7 +254,7 @@ function editableSections() {
 function dropStaleSections() {
   if (!sections.length) return;
   const names = new Set(sections.map((section) => section.name));
-  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
+  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionNegatives, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
   for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
   for (const entry of Object.values(project.mixer)) if (entry.offsets) maps.push(entry.offsets);
   for (const map of maps) for (const name of Object.keys(map ?? {})) if (!names.has(name)) delete map[name];
@@ -263,7 +263,7 @@ function dropStaleSections() {
 // Renames are [from, to] pairs; several sections may share an old name (YuE2 repeats "% chorus"), so each new name
 // gets a copy of what the old name held.
 function renameKeys(renames) {
-  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
+  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionNegatives, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
   for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds, take.sectionStyles ?? {}, take.sectionAbc ?? {}, take.sectionTokens ?? {});
   for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
   for (const entry of Object.values(project.mixer)) if (entry.offsets) maps.push(entry.offsets);
@@ -552,11 +552,16 @@ function sectionStyle(section) {
 
 // What YuE2 receives for a section: its tokens are sampled under the first text, the audio of the whole song under the
 // second; `withLora` puts the LoRA trigger in front of both the same way.
+function sectionNegative(section) {
+  return (project.sectionNegatives[section.name] || project.negativeStyle).trim();
+}
+
 function sentPrompt(section) {
   const trigger = loraUses().find((use) => use.lora?.name)?.lora.trigger;
   const withTrigger = (text) => trigger ? `${trigger}, ${text}` : text;
   const own = sectionStyle(section);
-  const negative = project.negativeStyle.trim() ? `\n\nNegativo del CFG (con la misma letra y ABC):\n${withTrigger(project.negativeStyle.trim())}` : "";
+  const negativeText = sectionNegative(section);
+  const negative = negativeText ? `\n\nNegativo del CFG (con la misma letra y ABC):\n${withTrigger(oneLine(negativeText))}` : "";
   return `Tokens de esta sección:\n${withTrigger(own ? oneLine(own) : globalStyle())}${negative}\n\nAudio de toda la canción:\n${withTrigger(globalStyle())}`;
 }
 
@@ -846,6 +851,9 @@ function withLora(prompt, uses) {
   if (trigger) {
     prompt[2].inputs.style = `${trigger}, ${prompt[2].inputs.style}`;
     if (prompt[2].inputs.negative_style) prompt[2].inputs.negative_style = `${trigger}, ${prompt[2].inputs.negative_style}`;
+    if (prompt[2].inputs.section_negative_styles) {
+      prompt[2].inputs.section_negative_styles = prompt[2].inputs.section_negative_styles.split("\n").map((line) => line.replace(/^([^:]+:\s*)/, `$1${trigger}, `)).join("\n");
+    }
     prompt[2].inputs.section_styles = prompt[2].inputs.section_styles.split("\n").map((line) => line.replace(/^([^:]+:\s*)/, `$1${trigger}, `)).join("\n");
   }
   return prompt;
@@ -1770,6 +1778,8 @@ function buildPrompt(prefix, kept) {
           .map(([name, text]) => `${name}: ${oneLine(text)}`).join("\n"),
         section_tokens: Object.entries(kept).map(([name, tokens]) => `${name} = ${tokens}`).join("\n"),
         negative_style: project.negativeStyle.trim(),
+        section_negative_styles: sections.filter((section) => project.sectionNegatives[section.name]?.trim())
+          .map((section) => `${section.name}: ${oneLine(project.sectionNegatives[section.name])}`).join("\n"),
       },
     },
     3: { class_type: "EmptyYuE2LatentAudio", inputs: { seconds: ["2", 1], batch_size: 1 } },
@@ -3004,6 +3014,8 @@ function drawInspector() {
   $("section-style-label").textContent = ownStyle ? "Estilo de la sección (propio)" : "Estilo de la sección (el general; se actualiza solo)";
   $("section-style-save").disabled = $("section-style-undo").disabled = !styleDraft;
   $("section-style-original").disabled = !ownStyle && !styleDraft;
+  $("section-negative").value = project.sectionNegatives[section.name] ?? "";
+  $("section-negative").placeholder = project.negativeStyle.trim() || "sin negativo";
   $("section-classical").value = project.classicalPlan[section.name] ?? "";
   $("section-singer").innerHTML = styleOptions(["singer"], songSingerLabel(), project.sectionSingers[section.name]);
   $("section-prompt").textContent = sentPrompt(section);
@@ -3897,6 +3909,12 @@ async function init() {
     setSectionLyrics(sections.findIndex((section) => section.name === selected), event.target.value);
     scheduleSections();
   }));
+  $("section-negative").addEventListener("change", (event) => {
+    const text = event.target.value.trim();
+    if (text) project.sectionNegatives[selected] = text;
+    else delete project.sectionNegatives[selected];
+    draw();
+  });
   $("section-style").addEventListener("input", (event) => {
     styleDraft = { section: selected, text: event.target.value };
     $("section-style-save").disabled = $("section-style-undo").disabled = $("section-style-original").disabled = false;

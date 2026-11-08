@@ -395,6 +395,12 @@ class HZ3_YuE2_GenerateMusicSections:
                     "tooltip": "Optional style the CFG negative is built from, with the same lyrics and ABC, e.g. the "
                                "song's style naming the voice to avoid. Empty keeps the negative at instructions + ABC.",
                 }),
+                "section_negative_styles": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": "Optional per-section negative styles, one 'Verse 2: ...' per line, used for that section "
+                               "instead of negative_style.",
+                }),
                 "window_start": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 900.0, "step": 0.04,
                     "tooltip": "With window_seconds, the acoustic conditioning covers only this stretch of the song "
@@ -424,6 +430,7 @@ class HZ3_YuE2_GenerateMusicSections:
         section_styles="",
         section_tokens="",
         negative_style="",
+        section_negative_styles="",
         window_start=0.0,
         window_seconds=0.0,
     ):
@@ -441,9 +448,10 @@ class HZ3_YuE2_GenerateMusicSections:
         seed_overrides = _parse_section_seeds(section_seeds)
         style_overrides = _parse_section_styles(section_styles)
         token_overrides = _parse_section_tokens(section_tokens)
+        negative_overrides = _parse_section_styles(section_negative_styles)
         names = {section["name"].casefold() for section in specs}
         for label, overrides in (("section_seeds", seed_overrides), ("section_styles", style_overrides),
-                                 ("section_tokens", token_overrides)):
+                                 ("section_tokens", token_overrides), ("section_negative_styles", negative_overrides)):
             unknown = set(overrides) - names
             if unknown:
                 raise ValueError(f"{label} names unknown section(s): {', '.join(sorted(unknown))}.")
@@ -461,11 +469,12 @@ class HZ3_YuE2_GenerateMusicSections:
         )
         abc_ids = tokens["abc_ids"]
         positive = tokens["prefix"] + abc_ids + [ABC_END, MUSIC_START]
-        negative = tokens["negative"] + [ABC_START] + abc_ids + [ABC_END, MUSIC_START]
-        if negative_style:
-            # The full prompt under the style to steer away from, so CFG pushes only along the difference of the styles.
-            negative = clip.tokenize(negative_style, lyrics=lyrics, cot=mode, seed=seed, abc=abc, max_tokens=total_frames,
-                                     cfg_scale=cfg_scale, **sampling)["prefix"] + abc_ids + [ABC_END, MUSIC_START]
+        # A negative style is the full prompt under the style to steer away from, so CFG pushes only along the
+        # difference of the styles; without one the negative is instructions + ABC.
+        negatives = {"": tokens["negative"] + [ABC_START] + abc_ids + [ABC_END, MUSIC_START]}
+        for negative_text in {negative_style, *negative_overrides.values()} - {""}:
+            negatives[negative_text] = clip.tokenize(negative_text, lyrics=lyrics, cot=mode, seed=seed, abc=abc, max_tokens=total_frames,
+                                                     cfg_scale=cfg_scale, **sampling)["prefix"] + abc_ids + [ABC_END, MUSIC_START]
         # Same lyrics and ABC under another style: only the [Tags] part of the prefix changes.
         positives = {style: positive}
         for section_style in set(style_overrides.values()) - {style}:
@@ -474,7 +483,7 @@ class HZ3_YuE2_GenerateMusicSections:
             positives[section_style] = prefix + abc_ids + [ABC_END, MUSIC_START]
         model, device, dtype = _prepare_model(clip, tokens)
         context = model.config.max_position_embeddings
-        longest = max(len(negative), *map(len, positives.values()))
+        longest = max(*map(len, negatives.values()), *map(len, positives.values()))
         if longest + total_frames > context:
             raise ValueError(
                 f"The song needs {longest + total_frames} YuE2 context tokens, "
@@ -487,6 +496,7 @@ class HZ3_YuE2_GenerateMusicSections:
         for index, section in enumerate(specs):
             section_seed = seed_overrides.get(section["name"].casefold(), (seed + index) & 0xFFFFFFFFFFFFFFFF)
             section_style = style_overrides.get(section["name"].casefold(), style)
+            section_negative = negative_overrides.get(section["name"].casefold(), negative_style)
             # A section is sampled after everything before it, so its key chains the previous section's key.
             fields = {
                 "style": section_style,
@@ -500,26 +510,26 @@ class HZ3_YuE2_GenerateMusicSections:
                 "after": previous,
             }
             # Only set when used, so the keys of every token stored without a negative style stay the same.
-            if negative_style:
-                fields["negative"] = negative_style
+            if section_negative:
+                fields["negative"] = section_negative
             path = _section_token_path(fields)
             # Tokens from a chosen take win; a removed or now mismatched file falls back to the keyed ones.
             kept = token_overrides.get(section["name"].casefold())
             if kept and _load_section_tokens(_stored_tokens_path(kept), section["frames"]) is not None:
                 path = _stored_tokens_path(kept)
             previous = path.stem
-            plan.append((section, section_seed, section_style, path, _load_section_tokens(path, section["frames"])))
+            plan.append((section, section_seed, section_style, path, _load_section_tokens(path, section["frames"]), section_negative))
 
         progress = comfy.utils.ProgressBar(total_frames)
         history = []
         section_layout = []
         try:
             with comfy.model_management.cuda_device_context(device), comfy.ops.use_quantized_matmul(model, device):
-                for index, (section, section_seed, section_style, path, stored) in enumerate(plan):
+                for index, (section, section_seed, section_style, path, stored, section_negative) in enumerate(plan):
                     start = len(history)
                     following = plan[index + 1][4] if index + 1 < len(plan) else None
                     if stored is None:
-                        bases = [positives[section_style]] if cfg_scale == 1.0 else [positives[section_style], negative]
+                        bases = [positives[section_style]] if cfg_scale == 1.0 else [positives[section_style], negatives[section_negative]]
                         # A kept next section was sampled after the old ending: the last bar is
                         # sampled several times and the ending that best leads into it is kept.
                         tail = section["frames"] // section["bars"] if following and section["bars"] > 1 else 0

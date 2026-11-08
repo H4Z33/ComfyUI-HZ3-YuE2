@@ -64,6 +64,14 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
 - Lo mismo con el LoRA de la toma 24 a 0.6: la canción sale prácticamente idéntica a la toma 24, pero todo lo canta
   Ella y los negativos no tienen efecto. Ese LoRA aprendió los tokens de la toma 24 sin ABC ni texto y pesa más que
   el estilo y el negativo.
+- El LoRA de estilo entrenado sobre la instrumental separada de la toma 24 metió una reverb muy notoria y tampoco deja
+  actuar a los negativos.
+- Quitar del LoRA las capas 10, 13, 16 y 19 (archivo filtrado, misma fuerza 0.6): lo más parecido a la toma 24, pero
+  otra vez solo Ella.
+- LoRA solo en las secciones de Ella (las de El regeneradas sin LoRA y con su negativo): la instrumentación cambió
+  demasiado y siguió solo Ella; la historia hecha con LoRA amarra la voz.
+- El LoRA solo en el conditioning de la etapa 2 (tokens sin LoRA) casi no cambia el audio (0.997): lo que aporta el
+  LoRA entra por los tokens. «Con la cortina entreabierta» (1:40) sigue femenina en el 0-shot sin género con negativos.
 - La receta de capas con donantes generados con negativo da voces más claras, pero las divergencias de generación se
   notan demasiado: no sirve.
 - Cambiar el encabezado de la letra (`[Verse 2]` frente a `[Verse 2 – Her]`) cambia los tokens tanto como volver a

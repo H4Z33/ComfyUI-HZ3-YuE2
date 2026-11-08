@@ -59,8 +59,8 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
   capas 0-9, 11-12, 14-15, 17-18 y 20-27 no aportan.
 - **Positivo sin ninguna descripción de género y un negativo por sección con la voz contraria**
   (`section_negative_styles`, campo "Estilo negativo de la sección"): casi la toma 24, con el feeling correcto y la
-  instrumentación ligeramente distinta. Fallos: desde 1:50 la voz queda rara, y la mitad cantada del Bridge 2
-  (1:40-1:51), que canta El, salió femenina aunque su negativo pedía a Ella (también con el Interlude 2 pidiendo a El).
+  instrumentación ligeramente distinta. Fallos: desde 1:50 la voz queda rara, y el Bridge 2 cantado
+  (1:40-1:51, «Con la cortina entreabierta»; 1:31-1:40 es instrumental), que canta El, salió femenina aunque su negativo pedía a Ella (también con el Interlude 2 pidiendo a El).
 - Lo mismo con el LoRA de la toma 24 a 0.6: la canción sale prácticamente idéntica a la toma 24, pero todo lo canta
   Ella y los negativos no tienen efecto. Ese LoRA aprendió los tokens de la toma 24 sin ABC ni texto y pesa más que
   el estilo y el negativo.

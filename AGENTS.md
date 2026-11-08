@@ -19,6 +19,8 @@ está en este repositorio. Manual del usuario y de los nodos: `README.md`. LoRAs
 5. **El juez es el oído del dueño.** Ningún detector automático distingue hombre solo, mujer sola o dueto (ver
    `EXPERIENCIAS_YUE2.md`). Da posiciones de audio como m:ss.
 6. **Nunca escribas en los proyectos del dueño** para experimentar: trabaja en una copia (`Duplicar` en el Studio).
+   En las copias de prueba apaga `Armonías` antes de renderizar. Los encabezados de la letra llevan solo el nombre de
+   la sección (`[Bridge 2]`), nunca voz ni estilo.
 7. Responde en el idioma del dueño (español).
 8. **Commits** pequeños, uno por cambio coherente, y push a `origin/master`. Sin líneas de atribución. Nunca subas
    `scratch/` ni `.claude/`. Si git no tiene identidad: `git -c user.name=H4Z33 -c user.email=76185651+H4Z33@users.noreply.github.com`.

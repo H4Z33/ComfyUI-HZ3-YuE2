@@ -49,6 +49,7 @@
       <label class="narrow">Fuerza<input id="song-lora-strength" type="number" min="0" max="2" step="0.05" value="1"></label>
     </div>
     <label>Estilo<textarea id="style" rows="6"></textarea></label>
+    <label title="Con CFG mayor que 1, YuE2 se aleja de este estilo: escribe el de la canción con la voz que no quieres. Vacío: el negativo es solo instrucción y ABC">Estilo negativo (CFG)<textarea id="negative-style" rows="3"></textarea></label>
     <button id="section-styles-from-cues" title="Convierte cada línea «[Sección] …» del estilo en el estilo propio de esa sección">Estilos por sección desde [Sección]</button>
     <h4>Letra</h4>
     <label>Letra (si está vacía al analizar, se transcribe con Whisper)<textarea id="lyrics" rows="12"></textarea></label>

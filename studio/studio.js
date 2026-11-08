@@ -122,7 +122,7 @@ let pausedAt = 0;
 function newProject() {
   return {
     name: "", kind: "song", album: DEFAULT_ALBUM, notes: "", archived: false, license: null, source: null, sourceName: null, styleInstructions: "", analysis: null,
-    style: "", baseStyle: null, lora: null, lyrics: "", abc: "", abcVersions: [], seed: 60,
+    style: "", negativeStyle: "", baseStyle: null, lora: null, lyrics: "", abc: "", abcVersions: [], seed: 60,
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
@@ -166,6 +166,7 @@ const SAMPLING = ["temperature", "top_p", "top_k", "repetition_penalty", "cfg_sc
 function readForm() {
   for (const key of ["style", "lyrics", "abc", "ckpt"]) project[key] = $(key).value;
   project.styleInstructions = $("style-instructions").value;
+  project.negativeStyle = $("negative-style").value;
   project.baseStyle = $("base-style").value || null;
   const lora = loras.find((item) => item.name === $("song-lora").value);
   project.lora = lora ? { name: lora.name, trigger: lora.trigger, strength: Number($("song-lora-strength").value) || 1 } : null;
@@ -179,6 +180,7 @@ function readForm() {
 function writeForm() {
   for (const key of ["style", "lyrics", "abc"]) $(key).value = project[key];
   $("style-instructions").value = project.styleInstructions;
+  $("negative-style").value = project.negativeStyle;
   $("base-style").innerHTML = styleOptions(["group", "genre"], "— ninguno", project.baseStyle);
   $("song-lora").innerHTML = `<option value="">— sin LoRA (solo el estilo)</option>`
     + loras.map((lora) => `<option value="${escapeHtml(lora.name)}"${lora.name === project.lora?.name ? " selected" : ""}>${escapeHtml(loraFile(lora.name))}</option>`).join("");
@@ -554,7 +556,8 @@ function sentPrompt(section) {
   const trigger = loraUses().find((use) => use.lora?.name)?.lora.trigger;
   const withTrigger = (text) => trigger ? `${trigger}, ${text}` : text;
   const own = sectionStyle(section);
-  return `Tokens de esta sección:\n${withTrigger(own ? oneLine(own) : globalStyle())}\n\nAudio de toda la canción:\n${withTrigger(globalStyle())}`;
+  const negative = project.negativeStyle.trim() ? `\n\nNegativo del CFG (con la misma letra y ABC):\n${withTrigger(project.negativeStyle.trim())}` : "";
+  return `Tokens de esta sección:\n${withTrigger(own ? oneLine(own) : globalStyle())}${negative}\n\nAudio de toda la canción:\n${withTrigger(globalStyle())}`;
 }
 
 // The current song's singer as a catalog singer: the vocal descriptors of its global style, its voice LoRA, and the
@@ -842,6 +845,7 @@ function withLora(prompt, uses) {
   prompt[4].inputs.model = ["21", 0];
   if (trigger) {
     prompt[2].inputs.style = `${trigger}, ${prompt[2].inputs.style}`;
+    if (prompt[2].inputs.negative_style) prompt[2].inputs.negative_style = `${trigger}, ${prompt[2].inputs.negative_style}`;
     prompt[2].inputs.section_styles = prompt[2].inputs.section_styles.split("\n").map((line) => line.replace(/^([^:]+:\s*)/, `$1${trigger}, `)).join("\n");
   }
   return prompt;
@@ -1765,6 +1769,7 @@ function buildPrompt(prefix, kept) {
         section_styles: sections.map((section) => [section.name, sectionStyle(section)]).filter(([, text]) => text.trim())
           .map(([name, text]) => `${name}: ${oneLine(text)}`).join("\n"),
         section_tokens: Object.entries(kept).map(([name, tokens]) => `${name} = ${tokens}`).join("\n"),
+        negative_style: project.negativeStyle.trim(),
       },
     },
     3: { class_type: "EmptyYuE2LatentAudio", inputs: { seconds: ["2", 1], batch_size: 1 } },

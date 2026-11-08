@@ -389,6 +389,12 @@ class HZ3_YuE2_GenerateMusicSections:
                                "this node reports for an earlier render. Keeps a section exactly as in that take "
                                "and makes a resampled previous section end into it.",
                 }),
+                "negative_style": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": "Optional style the CFG negative is built from, with the same lyrics and ABC, e.g. the "
+                               "song's style naming the voice to avoid. Empty keeps the negative at instructions + ABC.",
+                }),
                 "window_start": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 900.0, "step": 0.04,
                     "tooltip": "With window_seconds, the acoustic conditioning covers only this stretch of the song "
@@ -417,10 +423,12 @@ class HZ3_YuE2_GenerateMusicSections:
         section_seeds="",
         section_styles="",
         section_tokens="",
+        negative_style="",
         window_start=0.0,
         window_seconds=0.0,
     ):
         specs = _build_section_specs(abc, lyrics)
+        negative_style = str(negative_style or "").strip()
         style = str(style or "").strip()
         seed = int(seed) & 0xFFFFFFFFFFFFFFFF
         cfg_scale = float(cfg_scale)
@@ -454,6 +462,10 @@ class HZ3_YuE2_GenerateMusicSections:
         abc_ids = tokens["abc_ids"]
         positive = tokens["prefix"] + abc_ids + [ABC_END, MUSIC_START]
         negative = tokens["negative"] + [ABC_START] + abc_ids + [ABC_END, MUSIC_START]
+        if negative_style:
+            # The full prompt under the style to steer away from, so CFG pushes only along the difference of the styles.
+            negative = clip.tokenize(negative_style, lyrics=lyrics, cot=mode, seed=seed, abc=abc, max_tokens=total_frames,
+                                     cfg_scale=cfg_scale, **sampling)["prefix"] + abc_ids + [ABC_END, MUSIC_START]
         # Same lyrics and ABC under another style: only the [Tags] part of the prefix changes.
         positives = {style: positive}
         for section_style in set(style_overrides.values()) - {style}:
@@ -476,19 +488,21 @@ class HZ3_YuE2_GenerateMusicSections:
             section_seed = seed_overrides.get(section["name"].casefold(), (seed + index) & 0xFFFFFFFFFFFFFFFF)
             section_style = style_overrides.get(section["name"].casefold(), style)
             # A section is sampled after everything before it, so its key chains the previous section's key.
-            path = _section_token_path(
-                {
-                    "style": section_style,
-                    "mode": mode,
-                    "lyrics": section["lyrics"],
-                    "abc": section["abc"],
-                    "frames": section["frames"],
-                    "seed": section_seed,
-                    "sampling": [*sampling.values(), cfg_scale],
-                    "patches": patches,
-                    "after": previous,
-                }
-            )
+            fields = {
+                "style": section_style,
+                "mode": mode,
+                "lyrics": section["lyrics"],
+                "abc": section["abc"],
+                "frames": section["frames"],
+                "seed": section_seed,
+                "sampling": [*sampling.values(), cfg_scale],
+                "patches": patches,
+                "after": previous,
+            }
+            # Only set when used, so the keys of every token stored without a negative style stay the same.
+            if negative_style:
+                fields["negative"] = negative_style
+            path = _section_token_path(fields)
             # Tokens from a chosen take win; a removed or now mismatched file falls back to the keyed ones.
             kept = token_overrides.get(section["name"].casefold())
             if kept and _load_section_tokens(_stored_tokens_path(kept), section["frames"]) is not None:

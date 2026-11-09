@@ -169,7 +169,7 @@ function readForm() {
   project.negativeStyle = $("negative-style").value;
   project.baseStyle = $("base-style").value || null;
   const lora = loras.find((item) => item.name === $("song-lora").value);
-  project.lora = lora ? { name: lora.name, trigger: lora.trigger, strength: Number($("song-lora-strength").value) || 1 } : null;
+  project.lora = lora ? { name: lora.name, trigger: lora.trigger, strength: Number.isFinite(parseFloat($("song-lora-strength").value)) ? Number($("song-lora-strength").value) : 1 } : null;
   project.compose = { seed: Number($("compose-seed").value) || 0, temperature: Number($("compose-temperature").value), keep: $("compose-keep").checked };
   project.seed = Number($("seed").value) || 0;
   project.harmonize = $("harmonize").checked;
@@ -179,6 +179,8 @@ function readForm() {
 
 function writeForm() {
   queueMicrotask(refreshAdvanced);
+  // A LoRA installed after the page loaded (an imported song brings its own) is still the song's LoRA.
+  if (project.lora?.name && !loras.some((lora) => lora.name === project.lora.name)) loras.push({ name: project.lora.name, trigger: project.lora.trigger });
   for (const key of ["style", "lyrics", "abc"]) $(key).value = project[key];
   $("style-instructions").value = project.styleInstructions;
   $("negative-style").value = project.negativeStyle;
@@ -1000,7 +1002,7 @@ async function saveAlbum() {
 async function listAlbums() {
   const { albums } = await api("/hz3/studio/albums");
   if (!albums.includes(browseAlbum)) albums.push(browseAlbum);
-  $("album-list").innerHTML = albums.map((name) => `<option${name === browseAlbum ? " selected" : ""}>${escapeHtml(name)}</option>`).join("")
+  $("album-list").innerHTML = albums.map((name) => `<option value="${escapeHtml(name)}"${name === browseAlbum ? " selected" : ""}>${escapeHtml(name)}</option>`).join("")
     + `<option value="${NEW_ALBUM}">+ Nuevo álbum…</option>`;
 }
 
@@ -3532,10 +3534,10 @@ async function listProjects() {
   // Only the browsed album's songs; archived ones stay out of the quick list (unless open), the catalog shows them.
   const songs = projects.filter((entry) => entry.album === browseAlbum).filter((entry) => entry.kind !== "source" && (!entry.archived || entry.name === project.name));
   $("project-list").innerHTML = `<option value="">— ${songs.length} canciones —</option><option value="${NEW_SONG}">+ Canción nueva</option>`
-    + songs.map((entry) => `<option${entry.name === project.name ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("");
+    + songs.map((entry) => `<option value="${escapeHtml(entry.name)}"${entry.name === project.name ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("");
   const sources = projects.filter((entry) => entry.kind === "source");
   $("source-pick").innerHTML = `<option value="">— sin audio de la biblioteca —</option>`
-    + sources.map((entry) => `<option${entry.name === project.sourceName ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("");
+    + sources.map((entry) => `<option value="${escapeHtml(entry.name)}"${entry.name === project.sourceName ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("");
   if ($("catalog").open) await drawCatalog();
   if ($("catalog").open && !$("tab-sources").classList.contains("hidden")) await drawSources();
 }
@@ -3752,6 +3754,7 @@ async function renameAlbum(to) {
   await postJson("/hz3/studio/album/rename", { from, to });
   if (project.album === from) project.album = to;
   if (album.name === from) await loadAlbum(to);
+  if (browseAlbum === from) browseAlbum = to;
   managedAlbum = to;
   await listAlbums();
   await listProjects();
@@ -3768,6 +3771,7 @@ async function deleteAlbum() {
     await loadAlbum(DEFAULT_ALBUM);
     await addStylesToAlbum(DEFAULT_ALBUM, used);
   }
+  if (browseAlbum === name) browseAlbum = DEFAULT_ALBUM;
   managedAlbum = DEFAULT_ALBUM;
   await listAlbums();
   await listProjects();

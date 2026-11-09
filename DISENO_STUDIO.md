@@ -13,6 +13,17 @@ Ya construido antes de este documento: modo simple / Avanzado (un campo oculto c
 con ramas (cada guardado, render o cambio grande es una versión; abrir una vieja crea rama; nada se borra); arreglos del
 catálogo (nombres que pisaban canciones, renombres, mayúsculas, álbum fantasma, LoRA al abrir, dobles espacios).
 
+## Veredicto del dueño sobre el primer prototipo (2026-11-08)
+
+- **La interfaz va en inglés.** Este documento usa los nombres en español; en pantalla se traducen (tabla de §1).
+- **El timeline se queda como está**: secciones, letra, partitura (ABC) y las pistas le gustaban más que la versión
+  simplificada del prototipo. No se toca.
+- Lo que no le gustaba y sí se rediseña: el **inspector de sección**, el **panel de control izquierdo** y los
+  **paneles del catálogo** y demás diálogos.
+- Consecuencia en las vistas: la Canción conserva su timeline completo; el panel izquierdo se vuelve un cajón
+  «Song settings» que se abre solo cuando hace falta; el inspector se vuelve una tarjeta compacta junto a la sección
+  (Lyrics · Style · Takes); el catálogo y los diálogos pasan a páginas tipo biblioteca.
+
 ## 0. Reglas que el diseño obedece
 
 Las de h3vn (inventario §A): la app abre en lo que necesita al dueño; nunca ocultar estado; la GPU solo con un toque;
@@ -24,6 +35,9 @@ lo que el modelo no hace.
 
 | Interno | En pantalla | Nota |
 |---|---|---|
+En pantalla, en inglés (veredicto del dueño): Song, Album, Artist, Section, Take, Chosen take, Kept, Version, Branch,
+Artist voice, Score, Interpretation, Sing, Job. La tabla da el concepto.
+
 | project | **Canción** | |
 | album | **Álbum** | su ficha de **Artista** guarda voz, estilo madre y voz del artista |
 | section | **Sección** | se reconoce por su primera línea de letra |

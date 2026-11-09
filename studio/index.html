@@ -32,7 +32,13 @@
 
 <main>
   <aside class="song">
-    <h4>Source</h4>
+    <nav class="inspector-tabs song-tabs" role="tablist">
+      <button role="tab" data-song-tab="song">Song</button>
+      <button role="tab" data-song-tab="score">Score</button>
+      <button role="tab" data-song-tab="source">Source</button>
+      <button role="tab" data-song-tab="engine" data-advanced>Engine</button>
+    </nav>
+    <div class="song-pane" data-song-pane="source">
     <div class="row">
       <label>Source audio (library)<select id="source-pick"></select></label>
       <label class="file" title="Upload an audio file to the library and use it as this song's source audio">Upload<input id="source-audio" type="file" accept="audio/*"></label>
@@ -42,7 +48,8 @@
       <button id="analyze" title="SheetSage2 (ABC) + Whisper (lyrics) + MixMash (style)">Analyze audio</button>
       <label class="file" title="JSON with style, lyrics and abc">Import JSON<input id="import-json" type="file" accept=".json"></label>
     </div>
-    <h4>Style</h4>
+    </div>
+    <div class="song-pane" data-song-pane="song">
     <label>Style directions (MixMash and assistant)<textarea id="style-instructions" rows="3" placeholder="e.g. piano intro, romantic, big band after the solo"></textarea></label>
     <button id="apply-style-instructions" title="The assistant rewrites the global style and the section styles following the directions">Apply directions with the assistant</button>
     <label>Base style (band or genre from the catalog)<select id="base-style"></select></label>
@@ -53,9 +60,9 @@
     <label>Style<textarea id="style" rows="6"></textarea></label>
     <label title="With CFG above 1, YuE2 moves away from this style: write the song's style with the voice you do not want. Empty: the negative is only the instruction and the ABC">Negative style (CFG)<textarea id="negative-style" rows="3"></textarea></label>
     <button id="section-styles-from-cues" title="Turns each «[Section] …» line of the style into that section's own style">Section styles from [Section]</button>
-    <h4>Lyrics</h4>
     <label>Lyrics (if empty when analyzing, Whisper transcribes them)<textarea id="lyrics" rows="12"></textarea></label>
-    <h4>ABC</h4>
+    </div>
+    <div class="song-pane" data-song-pane="score">
     <label>ABC<textarea id="abc" rows="8" spellcheck="false"></textarea></label>
     <div class="row">
       <label>Compose seed<input id="compose-seed" type="number" min="0"></label>
@@ -66,12 +73,11 @@
     <button id="compose" title="YuE2 composes the ABC (melody and chords) from the style and the lyrics">Generate ABC (YuE2)</button>
     <button id="apply-classical" title="Writes phrases from public-domain works (references/ folder) into the instrumental line, in the sections marked in the inspector">Apply classical lines</button>
     <button id="abc-reimagine" title="New chords with the same melody, a new instrumental with the same vocal, light melody variations or a newly composed section (with a section chosen). The previous ABC stays in the versions.">Reimagine ABC…</button>
-    <h4 data-advanced>Render</h4>
+    </div>
+    <div class="song-pane" data-song-pane="engine">
     <div class="row">
       <label>Song seed<input id="seed" type="number" min="0" value="60"></label>
     </div>
-    <details data-advanced>
-      <summary>Engine</summary>
       <label>Checkpoint<select id="ckpt"></select></label>
       <div class="row">
         <label>Temperature<input id="temperature" type="number" step="0.05" value="0.9"></label>
@@ -84,7 +90,7 @@
       </div>
       <label>Agent model (Ollama)<input id="arranger-model" value="deepseek-v4.1-flash:cloud"></label>
       <label>Directions for the agent<textarea id="arranger-instructions" rows="3" placeholder="e.g. a cappella backing vocals in the last chorus"></textarea></label>
-    </details>
+    </div>
   </aside>
 
   <section class="editor">

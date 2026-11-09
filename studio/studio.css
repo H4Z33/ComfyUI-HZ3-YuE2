@@ -226,3 +226,8 @@ button.danger { color: var(--danger); }
   .editor { display: flex; flex-direction: column; }
   .editor > .inspector { width: auto; border-left: 0; border-top: 1px solid var(--line); max-height: 50%; }
 }
+
+/* Side panel tabs: Song, Score, Source, Engine. */
+.song-tabs { margin: -4px 0 4px; }
+.song-pane { display: none; flex-direction: column; gap: 10px; }
+.song-pane.active { display: flex; }

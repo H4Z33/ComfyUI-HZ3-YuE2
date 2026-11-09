@@ -2667,6 +2667,7 @@ function markAdvanced() {
   document.body.classList.toggle("advanced", advanced);
   $("advanced-mode").addEventListener("change", (event) => {
     document.body.classList.toggle("advanced", event.target.checked);
+    if (!event.target.checked && document.querySelector('[data-song-tab="engine"].active')) showSongTab("song");
     try { localStorage.setItem("hz3.advanced", event.target.checked ? "1" : "0"); } catch { /* not remembered */ }
   });
   for (const id of SHOWN_WHEN_SET) $(id).addEventListener("input", refreshAdvanced);
@@ -2692,6 +2693,19 @@ function setupInspectorTabs() {
   let last = "lyrics";
   try { last = localStorage.getItem("hz3.inspectorTab") || last; } catch { /* first tab */ }
   showInspectorTab(document.querySelector(`[data-insp-tab="${last}"]`) ? last : "lyrics");
+  for (const tab of document.querySelectorAll("[data-song-tab]")) tab.onclick = () => showSongTab(tab.dataset.songTab);
+  let song = "song";
+  try { song = localStorage.getItem("hz3.songTab") || song; } catch { /* first tab */ }
+  showSongTab(song);
+}
+
+// The side panel's tabs (Song, Score, Source, Engine); Engine only exists in Advanced.
+function showSongTab(name) {
+  if (name === "engine" && !document.body.classList.contains("advanced")) name = "song";
+  if (!document.querySelector(`[data-song-tab="${name}"]`)) name = "song";
+  for (const tab of document.querySelectorAll("[data-song-tab]")) tab.classList.toggle("active", tab.dataset.songTab === name);
+  for (const pane of document.querySelectorAll("[data-song-pane]")) pane.classList.toggle("active", pane.dataset.songPane === name);
+  try { localStorage.setItem("hz3.songTab", name); } catch { /* not remembered */ }
 }
 
 function draw() {

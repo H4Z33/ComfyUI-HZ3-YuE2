@@ -583,7 +583,8 @@ def register(routes):
         source, target = _package_path(str(body.get("from", ""))), _package_path(str(body.get("to", "")))
         if not source.is_file():
             raise web.HTTPNotFound(text="Project not found.")
-        if target.exists():
+        # On Windows "chamarra" and "Chamarra" are the same file: changing only the case is a rename, not a clash.
+        if target.exists() and not target.samefile(source):
             raise web.HTTPConflict(text=f"A project named {target.stem!r} already exists.")
         source.replace(target)
         # The manifest carries the name too; a stale one would write the song back under its old name.
@@ -624,13 +625,18 @@ def register(routes):
     async def rename_album(request):
         body = await request.json()
         source, target = _album_path(str(body.get("from", ""))), _album_path(str(body.get("to", "")))
-        if target.exists():
+        same_file = target.exists() and source.is_file() and target.samefile(source)
+        if target.exists() and not same_file:
             raise web.HTTPConflict(text=f"An album named {target.stem!r} already exists.")
         await asyncio.to_thread(_move_album_songs, source.stem, target.stem)
         album = json.loads(source.read_text(encoding="utf-8")) if source.is_file() else {"styles": [], "chat": [], "log": []}
         target.parent.mkdir(parents=True, exist_ok=True)
+        if same_file:
+            # Only the case changes: renaming the file keeps its new spelling on disk.
+            source.replace(target)
         target.write_text(json.dumps({**album, "name": target.stem}, ensure_ascii=False, indent=1), encoding="utf-8")
-        source.unlink(missing_ok=True)
+        if not same_file:
+            source.unlink(missing_ok=True)
         return web.json_response({"name": target.stem})
 
     @routes.post("/hz3/studio/album/delete")

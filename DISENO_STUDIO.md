@@ -13,6 +13,15 @@ Ya construido antes de este documento: modo simple / Avanzado (un campo oculto c
 con ramas (cada guardado, render o cambio grande es una versión; abrir una vieja crea rama; nada se borra); arreglos del
 catálogo (nombres que pisaban canciones, renombres, mayúsculas, álbum fantasma, LoRA al abrir, dobles espacios).
 
+## Segundo veredicto (2026-11-08): es una app para profesionales
+
+"Dije humanizarla, no enshitificarla, es una app para profesionales." El prototipo simplificado queda rechazado: las
+ondas redibujadas, la partitura sin color, las secciones sin sus mecánicas (asas, ◀ ▶, `T3`, «sobran/faltan N»,
+flechas de la letra, selector de cantante) y los carriles desalineados. Humanizar es quitar confusión, errores y jerga
+donde estorban, **no** quitar densidad ni capacidades. Las vistas de §2 que vienen de apps de consumo (Inicio tipo
+bandeja, tarjetas grandes, lista de secciones en el teléfono) quedan en duda hasta que el dueño las pida. Todo cambio
+se muestra como captura de la app real modificada, con su mismo lenguaje visual.
+
 ## Veredicto del dueño sobre el primer prototipo (2026-11-08)
 
 - **La interfaz va en inglés.** Este documento usa los nombres en español; en pantalla se traducen (tabla de §1).

@@ -70,3 +70,5 @@ de voz.
 - Componer ABC no respeta la estructura de la letra ni la tonalidad o BPM del estilo: revisa `K:` y `Q:` y notas
   contra sílabas por sección antes de renderizar.
 - Un render lleva un solo LoRA.
+- `Pasar a instrumental` (`sectionToInstrumental`) mueve la melodía de la voz a la línea `Ins`: la voz se vuelve
+  instrumento. Para una instrumental de verdad, deja la línea `Vocal` en silencio y la `Ins` como estaba.

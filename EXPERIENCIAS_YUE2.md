@@ -79,6 +79,9 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
   demasiado y siguió solo Ella; la historia hecha con LoRA amarra la voz.
 - El LoRA solo en el conditioning de la etapa 2 (tokens sin LoRA) casi no cambia el audio (0.997): lo que aporta el
   LoRA entra por los tokens. «Con la cortina entreabierta» (1:40) sigue femenina en el 0-shot sin género con negativos.
+- **Ojo, las dos pruebas siguientes no son instrumentales reales** (dueño, 2026-11-08): `sectionToInstrumental` pasa la
+  melodía de la voz a la línea `Ins`, o sea convierte la voz en instrumento. Una instrumental real deja la línea `Vocal`
+  en silencio y la línea `Ins` como estaba.
 - Instrumental desde el ABC (todas las secciones con `sectionToInstrumental`, letra `(instrumental)`, mismo LoRA
   filtrado y mismas condiciones que la anterior): sale otra canción, con un estilo completamente diferente. Sin letra ni
   melodía en la voz, los tokens se generan de nuevo y el LoRA ya no arrastra al sonido de la toma 24.

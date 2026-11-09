@@ -246,11 +246,30 @@
       </div>
       <label>Album notes<textarea id="album-notes" rows="2"></textarea></label>
       <div><span class="note">Album styles and singers</span><div id="album-styles" class="chips"></div></div>
-      <label class="switch"><input id="show-archived" type="checkbox"> Show archived songs</label>
-      <table>
-        <thead><tr><th>Song</th><th>Notes</th><th>Styles and singers</th><th>Modified · source</th><th>Content</th><th>Album</th><th></th></tr></thead>
-        <tbody id="catalog-rows"></tbody>
-      </table>
+      <div class="row catalog-tools">
+        <label>Search<input id="catalog-search" type="search" placeholder="name or a line of the lyrics"></label>
+        <label class="narrow-select">Show<select id="catalog-filter">
+          <option value="active">Active songs</option>
+          <option value="takes">With takes</option>
+          <option value="empty">Without takes</option>
+          <option value="archived">Archived</option>
+          <option value="all">All</option>
+        </select></label>
+        <label class="narrow-select">Sort<select id="catalog-sort">
+          <option value="recent">Most recent</option>
+          <option value="name">Name</option>
+          <option value="takes">Most takes</option>
+        </select></label>
+      </div>
+      <div id="catalog-bulk" class="row catalog-bulk hidden">
+        <span id="catalog-selected" class="note"></span>
+        <label class="narrow-select">Move to<select id="catalog-bulk-album"></select></label>
+        <button id="catalog-bulk-move">Move</button>
+        <button id="catalog-bulk-archive">Archive</button>
+        <button id="catalog-bulk-unarchive">Unarchive</button>
+        <button id="catalog-bulk-clear">Clear selection</button>
+      </div>
+      <div id="catalog-cards" class="catalog-cards"></div>
     </section>
   </div>
   <section id="tab-sources" class="album-detail hidden">

@@ -180,3 +180,27 @@ body:not(.advanced) .adv.in-use::after { content: "advanced, in use"; color: var
 .history-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .history-date { color: var(--muted); font-variant-numeric: tabular-nums; }
 .history-label { flex: 1; min-width: 160px; }
+
+/* Catalog: songs as cards. */
+#catalog { width: min(1400px, 96vw); }
+.catalog-tools label { flex: 1; }
+.catalog-tools .narrow-select, .catalog-bulk .narrow-select { flex: 0 0 170px; }
+.catalog-bulk { align-items: center; padding: 6px 8px; border: 1px solid var(--accent); border-radius: 6px; }
+.catalog-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.song-card { border: 1px solid var(--line); border-radius: 8px; background: #22252c; padding: 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.song-card.open { border-color: var(--accent); }
+.song-card.archived { opacity: .65; }
+.song-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.song-card-head .play { width: 32px; height: 32px; border-radius: 50%; padding: 0; flex: none; }
+.song-card-name { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3; }
+.song-card p { margin: 0; }
+.song-card-line { color: var(--text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.song-card-meta { color: var(--muted); font-size: 11px; }
+.song-card-notes { color: var(--muted); font-size: 12px; font-style: italic; }
+.song-card footer { margin-top: auto; align-items: center; }
+.song-card-menu { position: relative; margin-left: auto; }
+.song-card-menu summary { list-style: none; cursor: pointer; border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px; }
+.song-card-menu summary::-webkit-details-marker { display: none; }
+.song-card-menu .menu { position: absolute; right: 0; bottom: 110%; z-index: 5; width: 240px; display: flex; flex-direction: column; gap: 6px; padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
+.song-card-menu .menu button { text-align: left; }
+button.danger { color: var(--danger); }

@@ -534,6 +534,12 @@ def register(routes):
         for path in files:
             project = _project_of(path)
             style = next((line.strip() for line in str(project.get("style", "")).splitlines() if line.strip()), "")
+            lyrics = str(project.get("lyrics", ""))
+            sung = [line.strip() for line in lyrics.splitlines()
+                    if line.strip() and not re.fullmatch(r"\[[^\]]+\]|\(.*\)", line.strip())]
+            # The newest take's mix, for the catalog's play button.
+            preview = next(((take.get("files") or {}).get("mix") for take in reversed(project.get("takes", []))
+                            if (take.get("files") or {}).get("mix")), None)
             catalog.append({
                 "name": path.stem,
                 "updated": path.stat().st_mtime,
@@ -551,6 +557,11 @@ def register(routes):
                 "archived": bool(project.get("archived")),
                 "styles": [{"id": style.get("id"), "name": style.get("name"), "kind": style.get("kind")}
                            for style in project.get("styles") or [] if isinstance(style, dict)],
+                "first_line": sung[0][:120] if sung else "",
+                # Searched by the catalog together with the name.
+                "lyrics_text": " ".join(sung)[:4000],
+                "preview": {"filename": preview.get("filename"), "subfolder": preview.get("subfolder")} if preview else None,
+                "branches": len(((project.get("history") or {}).get("branches")) or {}) or 1,
             })
         return web.json_response({"projects": catalog})
 
@@ -624,9 +635,9 @@ def register(routes):
         source = _package_path(str((await request.json()).get("name", "")))
         if not source.is_file():
             raise web.HTTPNotFound(text="Project not found.")
-        # "<name> (copia)", then "(copia 2)"...: the original package is only read.
+        # "<name> (copy)", then "(copy 2)"...: the original package is only read.
         for number in range(1, 100):
-            suffix = " (copia)" if number == 1 else f" (copia {number})"
+            suffix = " (copy)" if number == 1 else f" (copy {number})"
             target = _package_path(source.stem[:64 - len(suffix)] + suffix)
             if not target.exists():
                 break

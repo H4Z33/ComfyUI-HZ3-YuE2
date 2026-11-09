@@ -3929,46 +3929,110 @@ async function drawCatalog() {
     const users = songs.filter((entry) => entry.styles.some((used) => used.id === style.id)).map((entry) => escapeHtml(entry.name));
     return `<span class="chip" title="${escapeHtml(style.text)}"><b>${escapeHtml(style.name)}</b> · ${STYLE_KINDS[style.kind]} · ${users.length ? users.join(", ") : "unused"}</span>`;
   }).join("") || `<span class="note">No styles: create them in «Styles» with a song of this album open, or ask the assistant for them.</span>`;
-  const albumOptions = albums.map((name) => `<option${name === managedAlbum ? " selected" : ""}>${escapeHtml(name)}</option>`).join("");
-  const rows = $("catalog-rows");
-  rows.innerHTML = songs.length ? "" : `<tr><td colspan="7" class="style">This album has no songs.</td></tr>`;
-  for (const entry of songs.filter((item) => $("show-archived").checked || !item.archived)) {
-    const row = document.createElement("tr");
-    row.className = entry.archived ? "archived" : "";
-    row.innerHTML = `<td><input maxlength="64" title="Change the name and press Enter"><button data-action="open">Open</button>${entry.archived ? " <small>archived</small>" : ""}</td>
-      <td><textarea rows="2" placeholder="Song notes"></textarea></td>
-      <td class="style">${entry.styles.map((style) => `${escapeHtml(style.name)} <small>(${STYLE_KINDS[style.kind] ?? style.kind})</small>`).join(", ") || "—"}
-        <br><small>${escapeHtml(entry.style)}</small></td>
-      <td>${new Date(entry.updated * 1000).toLocaleString()}<br><small>${entry.kind === "reference" ? "Reference" : "Song"} ·
-        ${entry.source ? `audio: ${escapeHtml(entry.source)}` : "composed"}${entry.license ? ` · ${escapeHtml(entry.license.name)}` : ""}</small></td>
-      <td>${entry.sections} sections<br>${entry.takes} takes · ${entry.voices} voices</td>
-      <td><select title="Move to another album">${albumOptions}</select></td>
-      <td class="actions"><button data-action="duplicate" title="Creates «${escapeHtml(entry.name)} (copia)» in the same album and opens it; the original does not change">Duplicate</button>
-        <button data-action="download" title="Downloads its .mixmash: audio, lyrics, ABC, tokens, LoRAs and app state">Download</button>
-        <button data-action="archive">${entry.archived ? "Unarchive" : "Archive"}</button>
-        <button data-action="delete" title="The package moves to the deleted folder">Delete</button></td>`;
-    const [name, notes, target] = [row.querySelector("input"), row.querySelector("textarea"), row.querySelector("select")];
-    name.value = entry.name;
-    notes.value = entry.notes;
-    row.querySelector('[data-action="open"]').onclick = guard(async () => {
+  const albumOptions = (selectedName) => albums.map((name) => `<option value="${escapeHtml(name)}"${name === selectedName ? " selected" : ""}>${escapeHtml(name)}</option>`).join("");
+  $("catalog-bulk-album").innerHTML = albumOptions(managedAlbum);
+  drawCatalogCards(songs, albumOptions);
+}
+
+// The songs of the managed album as cards: search (name and lyrics), a filter, an order, a play button with the newest
+// take, and every action of a song in its «⋯» menu. Several cards can be selected to move or archive them together.
+const catalogSelection = new Set();
+const catalogPreview = new Audio();
+
+function drawCatalogCards(songs, albumOptions) {
+  const query = $("catalog-search").value.trim().toLowerCase();
+  const filter = $("catalog-filter").value;
+  const shown = songs
+    .filter((entry) => ({ active: !entry.archived, takes: !entry.archived && entry.takes > 0, empty: !entry.archived && !entry.takes,
+      archived: entry.archived, all: true })[filter])
+    .filter((entry) => !query || `${entry.name} ${entry.first_line} ${entry.lyrics_text ?? ""} ${entry.notes}`.toLowerCase().includes(query))
+    .sort({ recent: (a, b) => b.updated - a.updated, name: (a, b) => a.name.localeCompare(b.name), takes: (a, b) => b.takes - a.takes }[$("catalog-sort").value]);
+  for (const name of [...catalogSelection]) if (!songs.some((entry) => entry.name === name)) catalogSelection.delete(name);
+  $("catalog-bulk").classList.toggle("hidden", !catalogSelection.size);
+  $("catalog-selected").textContent = `${catalogSelection.size} selected`;
+  const cards = $("catalog-cards");
+  cards.replaceChildren();
+  if (!shown.length) {
+    cards.innerHTML = `<p class="note">${songs.length ? "No song matches the search or the filter." : "This album has no songs yet."}</p>`;
+    return;
+  }
+  for (const entry of shown) {
+    const card = document.createElement("article");
+    card.className = "song-card" + (entry.archived ? " archived" : "") + (entry.name === project.name ? " open" : "");
+    const tags = [entry.name === project.name ? "open now" : "", entry.archived ? "archived" : "", entry.kind === "reference" ? "reference" : "",
+      entry.source ? "from audio" : ""].filter(Boolean);
+    card.innerHTML = `<header class="song-card-head">
+        <input type="checkbox" aria-label="Select ${escapeHtml(entry.name)}"${catalogSelection.has(entry.name) ? " checked" : ""}>
+        <button class="play" aria-label="Play the newest take of ${escapeHtml(entry.name)}" ${entry.preview ? "" : "disabled"}>▶</button>
+        <strong class="song-card-name" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</strong>
+      </header>
+      <p class="song-card-line">${escapeHtml(entry.first_line || entry.style || "—")}</p>
+      <p class="song-card-meta">${entry.takes} takes · ${entry.sections} sections · ${entry.voices} voices${entry.branches > 1 ? ` · ${entry.branches} branches` : ""}</p>
+      <p class="song-card-meta">${new Date(entry.updated * 1000).toLocaleString()}${tags.length ? ` · ${tags.join(" · ")}` : ""}</p>
+      ${entry.notes ? `<p class="song-card-notes">${escapeHtml(entry.notes)}</p>` : ""}
+      <footer class="row">
+        <button data-action="open" class="primary">Open</button>
+        <details class="song-card-menu"><summary aria-label="More actions for ${escapeHtml(entry.name)}">⋯</summary>
+          <div class="menu">
+            <button data-action="rename">Rename…</button>
+            <label>Notes<textarea rows="3"></textarea></label>
+            <button data-action="duplicate" title="Creates «${escapeHtml(entry.name)} (copy)» in the same album and opens it; the original does not change">Copy as new song</button>
+            <label>Album<select title="Move to another album">${albumOptions(entry.album)}</select></label>
+            <button data-action="download" title="Downloads its .mixmash: audio, lyrics, ABC, tokens, LoRAs, history and app state">Download .mixmash</button>
+            <button data-action="archive">${entry.archived ? "Unarchive" : "Archive"}</button>
+            <button data-action="delete" class="danger" title="The package moves to the deleted folder">Delete…</button>
+          </div></details>
+      </footer>`;
+    const act = (name) => card.querySelector(`[data-action="${name}"]`);
+    card.querySelector('input[type="checkbox"]').onchange = (event) => {
+      if (event.target.checked) catalogSelection.add(entry.name); else catalogSelection.delete(entry.name);
+      $("catalog-bulk").classList.toggle("hidden", !catalogSelection.size);
+      $("catalog-selected").textContent = `${catalogSelection.size} selected`;
+    };
+    card.querySelector(".play").onclick = () => {
+      const url = `/view?filename=${encodeURIComponent(entry.preview.filename)}&subfolder=${encodeURIComponent(entry.preview.subfolder)}&type=output`;
+      const playing = !catalogPreview.paused && catalogPreview.dataset.song === entry.name;
+      catalogPreview.pause();
+      cards.querySelectorAll(".play").forEach((button) => { button.textContent = "▶"; });
+      if (playing) return;
+      catalogPreview.src = url;
+      catalogPreview.dataset.song = entry.name;
+      catalogPreview.play();
+      card.querySelector(".play").textContent = "■";
+    };
+    act("open").onclick = guard(async () => {
+      catalogPreview.pause();
       $("catalog").close();
       await openProject(entry.name);
     });
-    name.onchange = guard(() => renameSong(entry.name, name.value));
+    act("rename").onclick = guard(async () => {
+      const name = await askText("Rename song", `New name for «${entry.name}»:`, entry.name);
+      if (name !== null) await renameSong(entry.name, name);
+    });
+    const notes = card.querySelector("textarea");
+    notes.value = entry.notes;
     notes.onchange = guard(() => updateProject(entry.name, (stored) => { stored.notes = notes.value; }));
-    target.onchange = guard(() => moveSong(entry.name, target.value));
-    row.querySelector('[data-action="duplicate"]').onclick = guard(async () => {
+    card.querySelector(".menu select").onchange = guard((event) => moveSong(entry.name, event.target.value));
+    act("duplicate").onclick = guard(async () => {
       $("catalog").close();
       await duplicateSong(entry.name);
     });
-    row.querySelector('[data-action="download"]').onclick = guard(async () => {
+    act("download").onclick = guard(async () => {
       if (entry.name === project.name) await saveProject();
       location.href = `/hz3/studio/package?name=${encodeURIComponent(entry.name)}`;
     });
-    row.querySelector('[data-action="archive"]').onclick = guard(() => updateProject(entry.name, (stored) => { stored.archived = !entry.archived; }));
-    row.querySelector('[data-action="delete"]').onclick = guard(() => deleteSong(entry.name));
-    rows.append(row);
+    act("archive").onclick = guard(() => updateProject(entry.name, (stored) => { stored.archived = !entry.archived; }));
+    act("delete").onclick = guard(() => deleteSong(entry.name));
+    cards.append(card);
   }
+}
+
+async function catalogBulk(change, done) {
+  const names = [...catalogSelection];
+  for (const name of names) await change(name);
+  catalogSelection.clear();
+  await listProjects();
+  status(done(names.length), 1);
 }
 
 // A copy of a song beside it ("<name> (copia)"): the original is only read, the copy opens.
@@ -4154,7 +4218,15 @@ async function init() {
       if (button.dataset.tab === "sources") guard(drawSources)();
     };
   });
-  $("show-archived").onchange = guard(drawCatalog);
+  for (const id of ["catalog-search", "catalog-filter", "catalog-sort"]) $(id).addEventListener(id === "catalog-search" ? "input" : "change", guard(drawCatalog));
+  $("catalog-bulk-clear").onclick = guard(async () => { catalogSelection.clear(); await drawCatalog(); });
+  $("catalog-bulk-move").onclick = guard(() => catalogBulk((name) => moveSong(name, $("catalog-bulk-album").value),
+    (count) => `${count} songs moved to «${$("catalog-bulk-album").value}».`));
+  $("catalog-bulk-archive").onclick = guard(() => catalogBulk((name) => updateProject(name, (stored) => { stored.archived = true; }),
+    (count) => `${count} songs archived (Show › Archived lists them).`));
+  $("catalog-bulk-unarchive").onclick = guard(() => catalogBulk((name) => updateProject(name, (stored) => { stored.archived = false; }),
+    (count) => `${count} songs unarchived.`));
+  $("catalog").addEventListener("close", () => catalogPreview.pause());
   $("import-sources").onclick = guard(async () => {
     const files = [...$("source-files").files];
     if (!files.length) throw new Error("Choose one or more audio files.");

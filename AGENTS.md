@@ -12,14 +12,14 @@ está en este repositorio. Manual del usuario y de los nodos: `README.md`. Dise�
    fuerza, semilla, checkpoint, muestreo. Antes de correr, compara las condiciones línea por línea; si difieren en algo
    más que la variable, el diseño está mal.
 3. **Prompts transparentes.** Nada se agrega al prompt por detrás del usuario. Todo texto que el Studio envía se ve en
-   el inspector de sección (`Lo que recibe YuE2`). Las voces se describen en el estilo global y luego cada sección
+   el inspector de sección (`What YuE2 receives`). Las voces se describen en el estilo global y luego cada sección
    nombra a su cantante; nunca se inyecta "duet".
 4. **Piloto primero.** Una sola toma, se envía al dueño y se espera su veredicto antes de cualquier lote o de aplicar
    una receta nueva a varias canciones.
 5. **El juez es el oído del dueño.** Ningún detector automático distingue hombre solo, mujer sola o dueto (ver
    `EXPERIENCIAS_YUE2.md`). Da posiciones de audio como m:ss.
-6. **Nunca escribas en los proyectos del dueño** para experimentar: trabaja en una copia (`Copiar como canción nueva` en el Studio).
-   En las copias de prueba apaga `Armonías` antes de renderizar. Los encabezados de la letra llevan solo el nombre de
+6. **Nunca escribas en los proyectos del dueño** para experimentar: trabaja en una copia (`Copy as new song` en el Studio).
+   En las copias de prueba apaga `Harmonies` antes de renderizar. Los encabezados de la letra llevan solo el nombre de
    la sección (`[Bridge 2]`), nunca voz ni estilo.
 7. Responde en el idioma del dueño (español).
 8. **Commits** pequeños, uno por cambio coherente, y push a `origin/master`. Sin líneas de atribución. Nunca subas
@@ -36,7 +36,7 @@ de voz.
 
 - El Studio corre dentro de ComfyUI: `http://127.0.0.1:8188/hz3/studio` (menú HZ3 → Abrir HZ3 Studio). Comfy Desktop
   usa 8189 si 8188 está ocupado.
-- **Tomas y congelado:** cada render es una toma de la canción completa. `Regenerar sección` muestrea solo las
+- **Tomas y congelado:** cada render es una toma de la canción completa. `Regenerate section` muestrea solo las
   secciones elegidas o editadas; las demás reproducen los tokens exactos de su toma elegida. Esa es la forma de
   conservar una canción y cambiar una parte. El nodo detrás es `HZ3_YuE2_GenerateMusicSections` (`section_tokens`).
 - **Reusar tokens sin volver a muestrear:** `Generate Token Stream` → `Music From Token Stream` (README, "Reusing
@@ -61,7 +61,7 @@ de voz.
 - Proyectos: `HZ3-YuE2/studio/<nombre>.mixmash` (zip; `manifest.json` → `project` con tomas, estilo, letra, ABC, LoRA).
 - Tokens por sección: `HZ3-YuE2/section_tokens/<digest>.json`; cada toma guarda sus digests en `sectionTokens`.
 - Audio de tomas: `HZ3-Studio/<nombre>/take-N/{mix,vocals,instrumental}_00001.flac`. El `mix` es el decode crudo; para
-  entregar usa `Exportar FLAC` del Studio.
+  entregar usa `Export FLAC` del Studio.
 - Álbumes y cantantes: `HZ3-YuE2/studio/albums/<álbum>.json` (`/hz3/studio/album`). Perfiles de artista:
   `HZ3-YuE2/artists/<artista>.json`.
 
@@ -72,13 +72,16 @@ de voz.
 
 - Al elegir cantante de sección, el Studio etiqueta la letra de esa sección con el cantante y suma su descripción al
   estilo de esa sección. **También mueve la melodía de esa sección por octavas al registro del cantante** (columna
-  `Registro` del catálogo). Mover el registro cambia el timbre de la voz; el dueño aún no decide si se queda.
+  `Range` del catálogo). Mover el registro cambia el timbre de la voz; el dueño aún no decide si se queda.
 - Componer ABC no respeta la estructura de la letra ni la tonalidad o BPM del estilo: revisa `K:` y `Q:` y notas
   contra sílabas por sección antes de renderizar.
 - Un render lleva un solo LoRA.
-- `Contexto de la sección (otra canción)`, formato `Proyecto · toma N · Sección`, o `setSectionContext(sección,
+- `Section context (another song)`, formato `Proyecto · toma N · Sección`, o `setSectionContext(sección,
   proyecto, toma, sección de origen)` desde un driver: YuE2 ve los tokens de esa sección de otra canción justo antes
   de muestrear esta, como si acabaran de sonar; no quedan en la canción ni en su audio (nodo: `section_contexts`).
-  Sirve para llevar la voz y la banda de una canción concepto a otra. Aparece en `Lo que recibe YuE2`.
-- `Pasar a instrumental` (`sectionToInstrumental`) mueve la melodía de la voz a la línea `Ins`: la voz se vuelve
+  Sirve para llevar la voz y la banda de una canción concepto a otra. Aparece en `What YuE2 receives`.
+- La interfaz del Studio está en inglés (2026-11-08): los nombres de botón de este archivo son los que se ven.
+  El panel lateral va en pestañas (Song, Score, Source y Engine con Advanced), el inspector de sección a la derecha en
+  pestañas (Lyrics, Style, Takes, Melody, What YuE2 receives) y el catálogo en tarjetas.
+- `Instrumental (no vocal)` (`sectionToInstrumental`) mueve la melodía de la voz a la línea `Ins`: la voz se vuelve
   instrumento. Para una instrumental de verdad, deja la línea `Vocal` en silencio y la `Ins` como estaba.

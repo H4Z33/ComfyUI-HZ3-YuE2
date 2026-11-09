@@ -44,9 +44,9 @@ for a song editor on top of these nodes.
   take still covers it) and the song fades out over its last second.
 - `Generar canción` queues Generate Music Sections, KSampler (`dpmpp_2m`, 40 steps: as good as `dpm_2` in 79
   by ear and log-mel, 4x faster) and separation into lead and instrumental; the take is playable then. With
-  `Armonías` on, its Vocal Harmonizer voices follow as a job of their own, shown as in progress on their lanes.
+  `Harmonies` on, its Vocal Harmonizer voices follow as a job of their own, shown as in progress on their lanes.
   Every render is a take of the whole song. Edit a section's lyrics or seed and
-  `Regenerar sección`: only that section (and any other edited one) switches to
+  `Regenerate section`: only that section (and any other edited one) switches to
   the new take, with short crossfades at the boundaries.
   Unless the edited sections span most of the song, the KSampler renders only their stretch plus 4 s on each
   side (`window_start` / `window_seconds` of Generate Music Sections, built from the window's own tokens),
@@ -88,12 +88,12 @@ for a song editor on top of these nodes.
   gives a shift per section, refined by rhythm where pitch is unreliable (rap),
   editable in ms. A role (equal, second voice −4 dB, choir −9 dB) sets its level against
   the lead section by section (against the lead's typical level where the lead is off). A
-  limiter on the sum keeps playback and `Exportar FLAC` from clipping (output ceiling -1 dBFS). Each voice track is switched per section like the harmonies.
+  limiter on the sum keeps playback and `Export FLAC` from clipping (output ceiling -1 dBFS). Each voice track is switched per section like the harmonies.
   A harmony track also takes free on/off spans: drag on its lane to switch it from any point to any
   other regardless of sections (a click on a span removes it; a plain click still switches the section).
 - The transport shows a peak meter per channel in dBFS, how much the master limiter is reducing, and a CLIP light
   that stays on until clicked. A take's own `mix` file is YuE2's raw decode at full scale: export the song with
-  `Exportar FLAC` rather than using that file.
+  `Export FLAC` rather than using that file.
 - Classical instrumental lines: put public-domain MusicXML or MIDI scores (`.mxl`/`.musicxml`/`.mid`,
   e.g. CC0 [OpenScore String Quartets](https://github.com/OpenScore/StringQuartets) or
   [Mutopia](https://www.mutopiaproject.org) chorales and guitar studies) in
@@ -110,11 +110,11 @@ for a song editor on top of these nodes.
   files at once with their recording license (CC0, public domain, CC-BY, CC-BY-SA), work
   and source URL, and analyzes each with SheetSage2. Their melodies become `Tema` phrases
   for the classical line, with the reference and license in the report.
-- `Exportar FLAC` renders the current timeline.
+- `Export FLAC` renders the current timeline.
 
 The top bar's album menu only chooses which songs the song menu lists (a new song goes into that album);
 moving a song to another album is done in `Catálogo`. `☰` folds the side panel.
-`Copiar como canción nueva` (top bar for the open song, or `Duplicar` on any song in `Catálogo`) writes
+`Copy as new song` (top bar for the open song, or `Duplicar` on any song in `Catálogo`) writes
 `<name> (copia)` in the same album and opens it; the original package is only read.
 Each song has a git-like history with branches (`Rama` menu and `Historial`): every save, render and big change
 (compose, reimagine, analyse, end here) is a commit of the whole song state on the current branch. Opening an old
@@ -139,8 +139,8 @@ Measured on one two-singer song (2026-10-24); expect them on any song with a set
 - Recomposing from the first wrong section, over and over, derails: sections of 96 to 160 bars with no notes.
 - What works: no repeated lyric blocks, take the cleanest compose from the ABC versions (notes close to syllables), and split its long verse at phrase boundaries where the notes reach each block's syllables.
 - Composing takes key and tempo from the current ABC header only (`keep`), never from the style text, and does not load the LoRA.
-- A section's singer adds only that singer's description to that section's style; nothing else is added behind the user. The section inspector shows `Lo que recibe YuE2`: the exact text its tokens are sampled under and the one the audio of the whole song is rendered under, LoRA trigger included.
-- `Estilo negativo (CFG)`: with CFG above 1, the tokens are steered away from this style, built with the same lyrics and ABC (`negative_style` of Generate Music Sections); `Estilo negativo de la sección` overrides it per section (`section_negative_styles`). Writing the song's style with the voice to avoid gave the clearest single voice so far; the inspector shows it too.
+- A section's singer adds only that singer's description to that section's style; nothing else is added behind the user. The section inspector shows `What YuE2 receives`: the exact text its tokens are sampled under and the one the audio of the whole song is rendered under, LoRA trigger included.
+- `Negative style (CFG)`: with CFG above 1, the tokens are steered away from this style, built with the same lyrics and ABC (`negative_style` of Generate Music Sections); `Section negative style` overrides it per section (`section_negative_styles`). Writing the song's style with the voice to avoid gave the clearest single voice so far; the inspector shows it too.
 - The style text does not reliably choose the voice: it follows the tokens and the ABC register. Moving a melody an octave to get a singer changes that singer's timbre. A section-captioned LoRA does not fix it: on a new melody every voice came out female.
 - One render carries one LoRA.
 

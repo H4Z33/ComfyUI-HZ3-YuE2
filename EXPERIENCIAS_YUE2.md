@@ -56,7 +56,7 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
 - Desde cero, sin `duet` y con todo el estilo nombrando solo a El: sale solo El. Con solo Ella: sale Ella, salvo
   1:01-1:10 (estribillo), que salió masculino.
 - CFG 1.0: voz masculina clara y banda más rockera y sucia. CFG 3.0: voz e instrumental más claros, pero "muy metódico".
-- **Negativo del CFG con el mismo estilo y la voz opuesta** (`negative_style`, campo "Estilo negativo" del Studio):
+- **Negativo del CFG con el mismo estilo y la voz opuesta** (`negative_style`, campo "Negative style (CFG)" del Studio):
   la voz más clara obtenida hasta ahora. Con negativo distinto, la melodía no sale idéntica entre las versiones de El y
   de Ella.
 - Conditioning de la etapa 2 por capa: con el mismo prefijo, llevar las filas de los tokens de otro render a la toma 24
@@ -74,7 +74,7 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
   los tramos cambiados se acerca a la del donante (0.01-0.08 más lejos de la toma 24 que solo con la capa 10). Las
   capas 0-9, 11-12, 14-15, 17-18 y 20-27 no aportan.
 - **Positivo sin ninguna descripción de género y un negativo por sección con la voz contraria**
-  (`section_negative_styles`, campo "Estilo negativo de la sección"): casi la toma 24, con el feeling correcto y la
+  (`section_negative_styles`, campo "Section negative style"): casi la toma 24, con el feeling correcto y la
   instrumentación ligeramente distinta. Fallos: desde 1:50 la voz queda rara, y el Bridge 2 cantado
   (1:40-1:51, «Con la cortina entreabierta»; 1:31-1:40 es instrumental), que canta El, salió femenina aunque su negativo pedía a Ella (también con el Interlude 2 pidiendo a El).
 - Lo mismo con el LoRA de la toma 24 a 0.6: la canción sale prácticamente idéntica a la toma 24, pero todo lo canta
@@ -120,7 +120,7 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
 ## LoRA de estilo
 
 - Receta en uso: `HZ3_YuE2_AudioToLoRA` en modo style sobre los tokens de una toma aprobada, 150 pasos, rank 32,
-  alpha 64, lr 5e-4, fuerza 0.6 al usarlo (`GUIA_LORA_YUE2.md` §0). El botón `Congelar voz` del Studio aún usa la
+  alpha 64, lr 5e-4, fuerza 0.6 al usarlo (`GUIA_LORA_YUE2.md` §0). El botón `Freeze voice` del Studio aún usa la
   receta vieja (joint/voice, fuerza 1).
 - El Studio antepone el disparador del LoRA al estilo; no escribas "in the style of".
 - En Luna Pop el LoRA solo no bastaba; se reusaban los tokens de las tomas (dueño, 2026-11-07).

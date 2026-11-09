@@ -1450,6 +1450,7 @@ async function arrange() {
 
 // A job can finish after another project was opened: it must write into the project that queued it.
 async function updateProject(owner, change) {
+  owner = currentName(owner);
   if (project.name === owner) {
     // Keep what is being typed, then apply the result; saving reads the form back.
     readForm();
@@ -3480,6 +3481,9 @@ async function importReferences(files, license) {
 // ---------- projects (.mixmash packages)
 
 let savedName = null;
+// Songs renamed since the page loaded, old name -> new name: a job queued under the old name still finds its song.
+const renamedTo = {};
+const currentName = (name) => { while (renamedTo[name] && renamedTo[name] !== name) name = renamedTo[name]; return name; };
 
 // Songs are renamed in the catalog; a song without a name yet asks for one when you save or render it.
 function ensureName() {
@@ -3492,8 +3496,28 @@ function ensureName() {
 async function saveProject() {
   readForm();
   if (!project.name) throw new Error("Ponle nombre al proyecto.");
+  if (!savedName) {
+    // A song never saved must not take the name of another one: saving would overwrite it.
+    const { projects } = await api("/hz3/studio/projects");
+    const taken = projects.find(({ name }) => name.toLowerCase() === project.name.toLowerCase());
+    if (taken) {
+      const name = project.name;
+      project.name = "";
+      throw new Error(`Ya existe una canción llamada «${taken.name}». Elige otro nombre para «${name}».`);
+    }
+  }
   // A new name on an opened project renames its package instead of copying it.
-  if (savedName && savedName !== project.name) await postJson("/hz3/studio/rename", { from: savedName, to: project.name });
+  if (savedName && savedName !== project.name) {
+    try {
+      await postJson("/hz3/studio/rename", { from: savedName, to: project.name });
+    } catch (error) {
+      // The song keeps the name it has on disk, so later saves and finished jobs still find it.
+      project.name = savedName;
+      writeForm();
+      throw error;
+    }
+    renamedTo[savedName] = project.name;
+  }
   project.styles = referencedStyles();
   dropStaleSections();
   await postJson("/hz3/studio/project", project);
@@ -3696,6 +3720,7 @@ async function renameSong(from, to) {
     await saveProject();
   } else {
     await postJson("/hz3/studio/rename", { from, to });
+    renamedTo[from] = to;
     await listProjects();
   }
   status(`«${from}» ahora se llama «${to}».`, 1);

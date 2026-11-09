@@ -53,6 +53,8 @@ AUDIO_TYPES = (".mp3", ".wav", ".flac", ".ogg", ".opus", ".m4a", ".aac")
 SOURCE_FILE = re.compile(r"hz3studio_[\w \-()]{1,64}_[\w \-]{1,80}(" + "|".join(re.escape(ext) for ext in AUDIO_TYPES) + ")")
 PACKAGE_FORMAT = "hz3-mixmash/1"
 TOKEN_DIGEST = re.compile(r"[0-9a-f]{64}")
+# A song state in its history is stored once under the hash of its content (history/<hash>.json).
+SNAPSHOT_ID = re.compile(r"[0-9a-f]{26}")
 DEFAULT_ALBUM = "General"
 
 
@@ -81,6 +83,16 @@ def _source_path(filename):
 
 def _write_package(project):
     path = _package_path(str(project.get("name", "")))
+    # New history snapshots come with the save; the ones already in the package are carried over, never dropped.
+    snapshots = {}
+    for snapshot_id, state in (project.pop("_snapshots", None) or {}).items():
+        if SNAPSHOT_ID.fullmatch(str(snapshot_id)):
+            snapshots[f"history/{snapshot_id}.json"] = json.dumps(state, ensure_ascii=False).encode("utf-8")
+    if path.is_file():
+        with zipfile.ZipFile(path) as old:
+            for entry in old.namelist():
+                if entry.startswith("history/") and entry not in snapshots:
+                    snapshots[entry] = old.read(entry)
     filename = (project.get("source") or {}).get("filename")
     audio = None
     if filename:
@@ -127,6 +139,8 @@ def _write_package(project):
             package.writestr(f"tokens/{digest}.json", data)
         for entry, data in sorted(loras.items()):
             package.writestr(entry, data, compress_type=zipfile.ZIP_STORED)
+        for entry, data in sorted(snapshots.items()):
+            package.writestr(entry, data)
     temporary.replace(path)
     # A song's copy also sits beside its takes (output/HZ3-Studio/<song>), so that folder holds the whole song.
     if project.get("kind", "song") == "song":
@@ -570,6 +584,18 @@ def register(routes):
             raise web.HTTPNotFound(text="Project not found.")
         with zipfile.ZipFile(path) as package:
             return web.json_response(_read_package(package))
+
+    @routes.get("/hz3/studio/snapshot")
+    async def load_snapshot(request):
+        """One saved state of a song's history."""
+        path = _package_path(request.rel_url.query.get("name", ""))
+        snapshot_id = request.rel_url.query.get("id", "")
+        if not SNAPSHOT_ID.fullmatch(snapshot_id) or not path.is_file():
+            raise web.HTTPNotFound(text="Snapshot not found.")
+        with zipfile.ZipFile(path) as package:
+            if f"history/{snapshot_id}.json" not in package.namelist():
+                raise web.HTTPNotFound(text="Snapshot not found.")
+            return web.json_response(json.loads(package.read(f"history/{snapshot_id}.json")))
 
     @routes.post("/hz3/studio/project")
     async def save_project(request):

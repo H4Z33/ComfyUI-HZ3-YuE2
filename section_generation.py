@@ -219,6 +219,20 @@ def _parse_section_contexts(text: str) -> dict[str, list[str]]:
     return contexts
 
 
+def _load_onset_tokens(path: Path, frames: int) -> list[int]:
+    """Stored tokens shorter than the section: its opening, after which the rest is sampled."""
+    if not path.is_file():
+        return []
+    tokens = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(tokens, list)
+        or not 0 < len(tokens) < frames
+        or any(type(token) is not int or not CODEC_OFFSET <= token < CODEC_OFFSET + CODEC_SIZE for token in tokens)
+    ):
+        return []
+    return tokens
+
+
 def _load_context_tokens(digests: list[str]) -> list[int]:
     """Stored tokens of any length, e.g. another song's section, joined in order."""
     tokens = []
@@ -413,7 +427,8 @@ class HZ3_YuE2_GenerateMusicSections:
                     "default": "",
                     "tooltip": "Optional stored tokens to replay, one 'Chorus 1 = <id>' per line, using the ids "
                                "this node reports for an earlier render. Keeps a section exactly as in that take "
-                               "and makes a resampled previous section end into it.",
+                               "and makes a resampled previous section end into it. Tokens shorter than the section "
+                               "are its opening: they are kept and the rest of the section is sampled after them.",
                 }),
                 "negative_style": ("STRING", {
                     "multiline": True,
@@ -554,33 +569,41 @@ class HZ3_YuE2_GenerateMusicSections:
             section_context = context_overrides.get(section["name"].casefold())
             if section_context:
                 fields["context"] = section_context
-            path = _section_token_path(fields)
-            # Tokens from a chosen take win; a removed or now mismatched file falls back to the keyed ones.
+            # Tokens from a chosen take win; a removed or now mismatched file falls back to the keyed ones. Fewer tokens
+            # than the section holds are its opening: they are kept and the rest of the section is sampled after them.
             kept = token_overrides.get(section["name"].casefold())
+            onset = _load_onset_tokens(_stored_tokens_path(kept), section["frames"]) if kept else []
+            if onset:
+                fields["onset"] = kept
+            path = _section_token_path(fields)
             if kept and _load_section_tokens(_stored_tokens_path(kept), section["frames"]) is not None:
                 path = _stored_tokens_path(kept)
             previous = path.stem
             plan.append((section, section_seed, section_style, path, _load_section_tokens(path, section["frames"]), section_negative,
-                         context_tokens.get(section["name"].casefold(), [])))
+                         context_tokens.get(section["name"].casefold(), []), onset))
 
         progress = comfy.utils.ProgressBar(total_frames)
         history = []
         section_layout = []
         try:
             with comfy.model_management.cuda_device_context(device), comfy.ops.use_quantized_matmul(model, device):
-                for index, (section, section_seed, section_style, path, stored, section_negative, lead_in) in enumerate(plan):
+                for index, (section, section_seed, section_style, path, stored, section_negative, lead_in, onset) in enumerate(plan):
                     start = len(history)
                     following = plan[index + 1][4] if index + 1 < len(plan) else None
                     if stored is None:
                         bases = [positives[section_style]] if cfg_scale == 1.0 else [positives[section_style], negatives[section_negative]]
+                        # Another song's tokens sit between the earlier sections and this one, only while it is sampled.
+                        prompts = lambda: [base + history[:start] + lead_in + history[start:] for base in bases]
                         # A kept next section was sampled after the old ending: the last bar is
                         # sampled several times and the ending that best leads into it is kept.
                         tail = section["frames"] // section["bars"] if following and section["bars"] > 1 else 0
+                        if section["frames"] - len(onset) - tail < 1:
+                            tail = 0
                         matched = bool(tail)
-                        # Another song's tokens sit between the history and the section, only while it is sampled.
-                        stored = _sample_section(
-                            model, [base + history + lead_in for base in bases], cfg_scale, section["frames"] - tail, section_seed, history,
-                            sampling, device, dtype, progress, start, section["name"],
+                        history.extend(onset)
+                        stored = onset + _sample_section(
+                            model, prompts(), cfg_scale, section["frames"] - len(onset) - tail, section_seed, history,
+                            sampling, device, dtype, progress, start + len(onset), section["name"],
                         )
                         if tail:
                             opening = following[:2 * FRAMES_PER_SECOND]
@@ -588,7 +611,7 @@ class HZ3_YuE2_GenerateMusicSections:
                             for candidate in range(SEAM_CANDIDATES):
                                 candidate_history = history.copy()
                                 ending = _sample_section(
-                                    model, [base + history + lead_in for base in bases], cfg_scale, tail,
+                                    model, prompts(), cfg_scale, tail,
                                     (section_seed + 1 + candidate) & 0xFFFFFFFFFFFFFFFF, candidate_history,
                                     sampling, device, dtype, progress, start + len(stored), section["name"],
                                 )
@@ -615,6 +638,7 @@ class HZ3_YuE2_GenerateMusicSections:
                             "seed": section_seed,
                             "own_style": section_style != style,
                             "context_frames": len(lead_in),
+                            "onset_frames": len(onset) if not reused else 0,
                             "reused": reused,
                             "matched_ending": matched,
                             "tokens": path.stem,
@@ -650,6 +674,7 @@ class HZ3_YuE2_GenerateMusicSections:
                 f"{start_seconds:.2f}-{end_seconds:.2f}s · seed {section['seed']}"
                 f"{' · own style' if section['own_style'] else ''}"
                 f"{' · after %d context tokens' % section['context_frames'] if section['context_frames'] else ''}"
+                f"{' · opening of %d kept tokens' % section['onset_frames'] if section['onset_frames'] else ''}"
                 f"{' · reused' if section['reused'] else ''}"
                 f"{' · ending matched to the next section' if section['matched_ending'] else ''}"
             )

@@ -126,7 +126,7 @@ function newProject() {
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
-    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], deletedSongVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionNegatives: {}, sectionContexts: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, trackSpans: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
+    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], deletedSongVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionNegatives: {}, sectionContexts: {}, sectionOnsets: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, trackSpans: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
     arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {}, classicalPlan: {}, classicalReport: [],
   };
 }
@@ -254,7 +254,7 @@ function editableSections() {
 function dropStaleSections() {
   if (!sections.length) return;
   const names = new Set(sections.map((section) => section.name));
-  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionNegatives, project.sectionContexts ?? {}, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
+  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionNegatives, project.sectionContexts ?? {}, project.sectionOnsets ?? {}, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
   for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
   for (const entry of Object.values(project.mixer)) if (entry.offsets) maps.push(entry.offsets);
   for (const map of maps) for (const name of Object.keys(map ?? {})) if (!names.has(name)) delete map[name];
@@ -263,7 +263,7 @@ function dropStaleSections() {
 // Renames are [from, to] pairs; several sections may share an old name (YuE2 repeats "% chorus"), so each new name
 // gets a copy of what the old name held.
 function renameKeys(renames) {
-  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionNegatives, project.sectionContexts ?? {}, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
+  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionNegatives, project.sectionContexts ?? {}, project.sectionOnsets ?? {}, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
   for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds, take.sectionStyles ?? {}, take.sectionAbc ?? {}, take.sectionTokens ?? {});
   for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
   for (const entry of Object.values(project.mixer)) if (entry.offsets) maps.push(entry.offsets);
@@ -564,7 +564,17 @@ function sentPrompt(section) {
   const negative = negativeText ? `\n\nNegativo del CFG (con la misma letra y ABC):\n${withTrigger(oneLine(negativeText))}` : "";
   const lead = project.sectionContexts?.[section.name];
   const context = lead ? `\n\nAntes de muestrearla, como si acabara de sonar (no queda en la canción):\n${contextLabel(lead)}` : "";
-  return `Tokens de esta sección:\n${withTrigger(own ? oneLine(own) : globalStyle())}${negative}${context}\n\nAudio de toda la canción:\n${withTrigger(globalStyle())}`;
+  const start = project.sectionOnsets?.[section.name];
+  const onset = start ? `\n\nInicio fijo (se conserva y el resto se muestrea después):\n${start.label} · ${start.seconds} s` : "";
+  return `Tokens de esta sección:\n${withTrigger(own ? oneLine(own) : globalStyle())}${negative}${context}${onset}\n\nAudio de toda la canción:\n${withTrigger(globalStyle())}`;
+}
+
+// A section's fixed opening: stored tokens shorter than the section, kept as its first frames while the rest of the
+// section is sampled after them. `tokens` is the stored id, `label` says where they came from.
+function setSectionOnset(name, tokens, label, seconds) {
+  if (!tokens) delete project.sectionOnsets[name];
+  else project.sectionOnsets[name] = { tokens, label, seconds };
+  return project.sectionOnsets[name] ?? null;
 }
 
 // A section's context: the stored tokens of a section of another song's take, which YuE2 sees right before this
@@ -1798,7 +1808,10 @@ function buildPrompt(prefix, kept) {
         mode: "full", ...project.sampling, section_seeds: overrides,
         section_styles: sections.map((section) => [section.name, sectionStyle(section)]).filter(([, text]) => text.trim())
           .map(([name, text]) => `${name}: ${oneLine(text)}`).join("\n"),
-        section_tokens: Object.entries(kept).map(([name, tokens]) => `${name} = ${tokens}`).join("\n"),
+        // A rendered section with a fixed opening sends it in place of kept tokens; the node samples the rest.
+        section_tokens: [...Object.entries(kept), ...Object.entries(project.sectionOnsets ?? {})
+          .filter(([name]) => !kept[name] && sections.some((section) => section.name === name)).map(([name, start]) => [name, start.tokens])]
+          .map(([name, tokens]) => `${name} = ${tokens}`).join("\n"),
         negative_style: project.negativeStyle.trim(),
         section_negative_styles: sections.filter((section) => project.sectionNegatives[section.name]?.trim())
           .map((section) => `${section.name}: ${oneLine(project.sectionNegatives[section.name])}`).join("\n"),
@@ -2033,6 +2046,7 @@ async function render(targets, reimagine = null) {
   take.sectionStyles = {};
   take.style = globalStyle();
   if (Object.keys(project.sectionContexts ?? {}).length) take.sectionContexts = structuredClone(project.sectionContexts);
+  if (Object.keys(project.sectionOnsets ?? {}).length) take.sectionOnsets = structuredClone(project.sectionOnsets);
   take.sectionAbc = Object.fromEntries(sections.map((section) => [section.name, section.abc]));
   sections.forEach((section, index) => {
     take.sectionLyrics[section.name] = section.lyrics;

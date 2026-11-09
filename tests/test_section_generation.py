@@ -338,6 +338,38 @@ class SectionGenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown section"):
             run_sections(FakeSectionModel(), section_contexts=f"Bridge = {donor}")
 
+    def test_shorter_section_tokens_are_kept_as_the_opening_and_the_rest_is_sampled(self):
+        first = FakeSectionModel()
+        kept = run_sections(first)["ui"]["section_tokens"][0]
+        verse = generation._load_section_tokens(generation._stored_tokens_path(kept["verse 1"]), 50)
+        opening = verse[:20]
+        digest = "a" * 64
+        generation._stored_tokens_path(digest).write_text(generation.json.dumps(opening), encoding="utf-8")
+        model = FakeSectionModel()
+        result = run_sections(model, section_seeds="verse 1 = 9", section_tokens=f"Verse 1 = {digest}")["result"]
+        self.assertIn("1 sampled, 1 reused", result[2])
+        self.assertIn("opening of 20 kept tokens", result[2])
+        intro_tokens = first.acoustic_call[1][:50]
+        # The rest is sampled after the intro and the kept opening, and the song holds the opening as given.
+        self.assertEqual(model.model.prefills, [[POSITIVE + intro_tokens + opening]])
+        self.assertEqual(model.acoustic_call[1][50:70], opening)
+        self.assertEqual(len(model.acoustic_call[1]), 100)
+        # The same opening again is replayed; another opening is sampled again.
+        again = FakeSectionModel()
+        self.assertIn("0 sampled, 2 reused", run_sections(again, section_seeds="verse 1 = 9", section_tokens=f"Verse 1 = {digest}")["result"][2])
+
+    def test_context_stays_before_the_section_when_its_ending_is_matched(self):
+        abc = ABC.replace("% intro\nV: Vocal\nZ|\nV: Ins\nZ|", "% intro\nV: Vocal\nZ|Z|\nV: Ins\nZ|Z|")
+        donor = run_sections(FakeSectionModel(), style="donor style")["ui"]["section_tokens"][0]["verse 1"]
+        donor_tokens = generation._load_section_tokens(generation._stored_tokens_path(donor), 50)
+        kept = run_sections(FakeSectionModel(), abc=abc)["ui"]["section_tokens"][0]
+        model = FakeSectionModel()
+        result = run_sections(model, abc=abc, section_seeds="intro = 9", section_contexts=f"Intro = {donor}",
+                              section_tokens=f"Verse 1 = {kept['verse 1']}")["result"]
+        self.assertIn("ending matched to the next section", result[2])
+        body = model.acoustic_call[1][:50]
+        self.assertEqual(model.model.prefills, [[POSITIVE + donor_tokens]] + [[POSITIVE + donor_tokens + body]] * generation.SEAM_CANDIDATES)
+
     def test_rejects_seed_overrides_for_unknown_sections(self):
         with self.assertRaisesRegex(ValueError, "unknown section"):
             run_sections(FakeSectionModel(), section_seeds="bridge = 3")

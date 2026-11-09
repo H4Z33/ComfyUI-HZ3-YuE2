@@ -37,6 +37,15 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
   2026-11-07). Cambiar solo el texto del estilo en la etapa 2 no cambia la voz.
 - Ningún detector sirve para decidir la voz (2026-11-07): un clasificador MFCC propio marca duetos como hombre;
   Discogs-EffNet encuentra a los hombres pero da muchos falsos; Gemini Flash adivinó por el orden de los archivos.
+- Clasificadores contra las etiquetas del dueño (2026-11-08, `scratch/exp_voz/voice_cls.py`; ventanas de 3 s de la voz
+  separada; El y Ella de la toma 24, más los renders "desde cero solo El" y "solo Ella"). Probados: el codificador de
+  voz de chatterbox (`ve.safetensors`), el encoder de Whisper small, MFCC más tono, y solo el tono (F0).
+  - Dejando fuera una sección de la toma 24, separan bien a El de Ella: Whisper 0.95, chatterbox 0.90, MFCC más tono
+    0.83.
+  - Entrenados en la toma 24 no reconocen al El de otro render: solo marcan como El el 23-60 % del render solo El.
+  - Las ventanas de los renders solo El y solo Ella quedan igual de lejos de El y de Ella de la toma 24: cada render
+    forma su propio grupo, y lo que separa un render de otro pesa más que quién canta.
+  - El tono solo no sirve (0.18): el registro lo pone el ABC, no el cantante.
 - Error de diseño a no repetir (2026-11-07): una prueba con una línea inventada, otra semilla y otro orden en cada
   condición no puede decir qué cambió la voz. Usa la canción de prueba y congela todo menos la voz.
 

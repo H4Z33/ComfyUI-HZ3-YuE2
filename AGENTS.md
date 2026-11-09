@@ -1,7 +1,7 @@
 # HZ3-YuE2: guía para agentes
 
 Lee esto antes de actuar. Cualquier agente (Claude, Codex, Gemini, otro) debe poder usar la plataforma solo con lo que
-está en este repositorio. Manual del usuario y de los nodos: `README.md`. LoRAs: `GUIA_LORA_YUE2.md`. Reglas de código:
+está en este repositorio. Manual del usuario y de los nodos: `README.md`. Diseño de la interfaz y su orden: `DISENO_STUDIO.md`. LoRAs: `GUIA_LORA_YUE2.md`. Reglas de código:
 `HZ3_CODING_GUIDE.md`. Lo medido sobre YuE2: `EXPERIENCIAS_YUE2.md`.
 
 ## Expectativas del dueño

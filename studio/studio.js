@@ -2674,6 +2674,24 @@ function markAdvanced() {
 
 function refreshAdvanced() {
   for (const id of SHOWN_WHEN_SET) $(id).closest("label").classList.toggle("in-use", Boolean($(id).value.trim()));
+  // A tab that holds an advanced field in use says so, even while another tab is open.
+  for (const tab of document.querySelectorAll("[data-insp-tab]")) {
+    tab.classList.toggle("has-advanced", Boolean(document.querySelector(`[data-insp-pane="${tab.dataset.inspTab}"] .adv.in-use`)));
+  }
+}
+
+// The section inspector's tabs; the last one chosen stays chosen.
+function showInspectorTab(name) {
+  for (const tab of document.querySelectorAll("[data-insp-tab]")) tab.classList.toggle("active", tab.dataset.inspTab === name);
+  for (const pane of document.querySelectorAll("[data-insp-pane]")) pane.classList.toggle("active", pane.dataset.inspPane === name);
+  try { localStorage.setItem("hz3.inspectorTab", name); } catch { /* not remembered */ }
+}
+
+function setupInspectorTabs() {
+  for (const tab of document.querySelectorAll("[data-insp-tab]")) tab.onclick = () => showInspectorTab(tab.dataset.inspTab);
+  let last = "lyrics";
+  try { last = localStorage.getItem("hz3.inspectorTab") || last; } catch { /* first tab */ }
+  showInspectorTab(document.querySelector(`[data-insp-tab="${last}"]`) ? last : "lyrics");
 }
 
 function draw() {
@@ -4183,6 +4201,7 @@ function guard(action) {
 
 async function init() {
   markAdvanced();
+  setupInspectorTabs();
   const info = await api("/object_info/CheckpointLoaderSimple");
   const names = info.CheckpointLoaderSimple.input.required.ckpt_name[0];
   $("ckpt").innerHTML = names.map((name) => `<option>${name}</option>`).join("");

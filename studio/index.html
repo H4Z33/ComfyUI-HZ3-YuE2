@@ -105,43 +105,61 @@
       <div id="playhead" class="playhead"></div>
     </div>
     <div id="inspector" class="inspector hidden">
-      <header class="inspector-head"><h3 id="inspector-title"></h3><button id="close-inspector" title="Close the inspector">✕</button></header>
+      <header class="inspector-head"><h3 id="inspector-title"></h3>
+        <button id="render-section" class="primary">Regenerate section</button>
+        <button id="close-inspector" title="Close the inspector">✕</button></header>
       <p id="section-arrangement" class="note"></p>
-      <div class="row">
+      <div class="row inspector-tools">
         <label>Name<input id="section-name" maxlength="100"></label>
+        <button id="section-score-play" title="Play this section's score (melody, instrumental line and chords) with a simple synth">▶ Score</button>
         <button id="section-split" title="Split the section at the cursor's bar">Split at cursor</button>
-        <button id="song-end" title="The song ends at the cursor's bar: the following bars and any sections after it are removed, with their lyrics (the previous ABC stays in the versions). What is already generated keeps playing up to there, with a 1 s fade.">End the song here</button>
         <button id="section-merge">Merge with next</button>
         <button id="section-earlier" title="The section starts one bar earlier">◀ One bar earlier</button>
         <button id="section-later" title="The section starts one bar later">One bar later ▶</button>
-        <label>Classical line<select id="section-classical"><option value="">None</option><option value="high">High (violin 1)</option><option value="low">Low (viola / cello)</option><option value="theme">Theme (analyzed references)</option></select></label>
+        <button id="song-end" title="The song ends at the cursor's bar: the following bars and any sections after it are removed, with their lyrics (the previous ABC stays in the versions). What is already generated keeps playing up to there, with a 1 s fade.">End the song here</button>
       </div>
-      <label>Section lyrics<textarea id="section-lyrics" rows="6"></textarea></label>
-      <div class="section-style">
-        <label><span id="section-style-label">Section style</span><textarea id="section-style" rows="6"></textarea></label>
+      <nav class="inspector-tabs" role="tablist">
+        <button role="tab" data-insp-tab="lyrics">Lyrics</button>
+        <button role="tab" data-insp-tab="style">Style</button>
+        <button role="tab" data-insp-tab="takes">Takes</button>
+        <button role="tab" data-insp-tab="melody">Melody</button>
+        <button role="tab" data-insp-tab="prompt">What YuE2 receives</button>
+      </nav>
+      <div class="inspector-pane" data-insp-pane="lyrics">
+        <label>Section lyrics<textarea id="section-lyrics" rows="6"></textarea></label>
+      </div>
+      <div class="inspector-pane" data-insp-pane="style">
+        <div class="section-style">
+          <label><span id="section-style-label">Section style</span><textarea id="section-style" rows="6"></textarea></label>
+          <div class="row">
+            <button id="section-style-save" title="Save this text as the section's own style">Save style</button>
+            <button id="section-style-undo" title="Discard what you wrote since the last save">Undo changes</button>
+            <button id="section-style-original" title="Go back to the song's global style with this section's [Section] line; it updates itself only when you change the global style">Original</button>
+          </div>
+        </div>
+        <label title="Moves the section's melody to the singer's range, writes who sings in its lyrics tag and puts their description in this section's style">Section singer (lead vocal)<select id="section-singer"></select></label>
+        <label title="With CFG above 1, this section moves away from this style; empty uses the song's negative style">Section negative style<textarea id="section-negative" rows="3"></textarea></label>
+        <label title="Tokens of a section from another song that YuE2 hears right before sampling this one, as if they had just played; they do not stay in the song. Format: Project · take N · Section. Empty removes it.">Section context (another song)<input id="section-context" type="text" placeholder="El amor no es lo tuyo · take 24 · Verse 2"></label>
+      </div>
+      <div class="inspector-pane" data-insp-pane="takes">
+        <div id="section-takes" class="takes"></div>
         <div class="row">
-          <button id="section-style-save" title="Save this text as the section's own style">Save style</button>
-          <button id="section-style-undo" title="Discard what you wrote since the last save">Undo changes</button>
-          <button id="section-style-original" title="Go back to the song's global style with this section's [Section] line; it updates itself only when you change the global style">Original</button>
+          <label>Section seed<input id="section-seed" type="number" min="0"></label>
+          <button id="section-dice" title="New seed">🎲</button>
         </div>
       </div>
-      <label title="With CFG above 1, this section moves away from this style; empty uses the song's negative style">Section negative style<textarea id="section-negative" rows="3"></textarea></label>
-      <label title="Tokens of a section from another song that YuE2 hears right before sampling this one, as if they had just played; they do not stay in the song. Format: Project · take N · Section. Empty removes it.">Section context (another song)<input id="section-context" type="text" placeholder="El amor no es lo tuyo · take 24 · Verse 2"></label>
-      <label title="Moves the section's melody to the singer's range, writes who sings in its lyrics tag and puts their description in this section's style">Section singer (lead vocal)<select id="section-singer"></select></label>
-      <details open><summary>What YuE2 receives</summary><pre id="section-prompt" class="prompt"></pre></details>
-      <div class="row">
-        <label>Section seed<input id="section-seed" type="number" min="0"></label>
-        <button id="section-dice" title="New seed">🎲</button>
+      <div class="inspector-pane" data-insp-pane="melody">
+        <div class="row">
+          <button id="section-instrumental" title="This section without vocals: its melody moves to the instrumental line, the vocal is left silent with its chords and its lyrics become (instrumental). Undo it with the ABC versions.">Instrumental (no vocal)</button>
+          <button id="section-restore" class="hidden" title="Gives this section back the vocal melody (and the lyrics, if it was made instrumental) it had before">Restore written melody</button>
+          <button id="section-free" title="Leaves this section's vocal line as rests (keeps chords and length): YuE2 delivers the lyrics its own way, spoken or rapped, instead of singing a written melody. The previous ABC stays in the versions.">Free melody (spoken / rap)</button>
+          <button id="section-record" title="Sing this section's melody into the microphone (with headphones): one bar count-in, the song plays from here and your notes go into the score with the same chords. The previous ABC stays in the versions.">🎤 Record melody</button>
+          <button id="section-recompose"title="Keeps the ABC before this section and YuE2 composes this section and everything after it (seed and temperature of «Generate ABC»)">Recompose the ABC from here</button>
+        </div>
+        <label>Classical line<select id="section-classical"><option value="">None</option><option value="high">High (violin 1)</option><option value="low">Low (viola / cello)</option><option value="theme">Theme (analyzed references)</option></select></label>
       </div>
-      <div id="section-takes" class="takes"></div>
-      <div class="row">
-        <button id="section-score-play" title="Play this section's score (melody, instrumental line and chords) with a simple synth">▶ Score</button>
-        <button id="section-instrumental" title="This section without vocals: its melody moves to the instrumental line, the vocal is left silent with its chords and its lyrics become (instrumental). Undo it with the ABC versions.">Instrumental (no vocal)</button>
-        <button id="section-restore" class="hidden" title="Gives this section back the vocal melody (and the lyrics, if it was made instrumental) it had before">Restore written melody</button>
-        <button id="section-free" title="Leaves this section's vocal line as rests (keeps chords and length): YuE2 delivers the lyrics its own way, spoken or rapped, instead of singing a written melody. The previous ABC stays in the versions.">Free melody (spoken / rap)</button>
-        <button id="section-record" title="Sing this section's melody into the microphone (with headphones): one bar count-in, the song plays from here and your notes go into the score with the same chords. The previous ABC stays in the versions.">🎤 Record melody</button>
-        <button id="section-recompose"title="Keeps the ABC before this section and YuE2 composes this section and everything after it (seed and temperature of «Generate ABC»)">Recompose the ABC from here</button>
-        <button id="render-section" class="primary">Regenerate section</button>
+      <div class="inspector-pane" data-insp-pane="prompt">
+        <pre id="section-prompt" class="prompt"></pre>
       </div>
     </div>
     <div id="track-inspector" class="inspector hidden">

@@ -21,9 +21,9 @@ const GM_PROGRAMS = [
   "Guitar Fret Noise", "Breath Noise", "Seashore", "Bird Tweet", "Telephone Ring", "Helicopter", "Applause", "Gunshot",
 ];
 const INSTRUMENT_PATTERNS = {
-  bass: "Bajo: raíz en cada medio compás", bass_walk: "Bajo caminante (negras)", pad: "Pad: acordes largos",
-  comping: "Acordes en los tiempos 2 y 4", arpeggio: "Arpegio en corcheas", drums: "Batería básica (bombo 1-3, caja 2-4, hi-hat)",
-  melody: "Melodía de la voz (doblaje)", ins: "Línea instrumental del ABC",
+  bass: "Bass: root every half bar", bass_walk: "Walking bass (quarter notes)", pad: "Pad: long chords",
+  comping: "Chords on beats 2 and 4", arpeggio: "Eighth-note arpeggio", drums: "Basic drums (kick 1-3, snare 2-4, hi-hat)",
+  melody: "Vocal melody (doubling)", ins: "Instrumental line of the ABC",
 };
 // A default sound per pattern, so a new part sounds right without choosing one.
 const PATTERN_PROGRAMS = { bass: 33, bass_walk: 32, pad: 89, comping: 0, arpeggio: 46, drums: 0, melody: 73, ins: 48 };
@@ -39,7 +39,7 @@ let instrumentsTimer = null;
 
 function newInstrument(fields = {}) {
   const id = Math.max(0, ...project.instruments.map((item) => item.id)) + 1;
-  return { id, name: `Instrumento ${id}`, program: 0, drums: false, notes: [], grid: 128, low: null, ...fields };
+  return { id, name: `Instrument ${id}`, program: 0, drums: false, notes: [], grid: 128, low: null, ...fields };
 }
 
 function instrumentTracks() {
@@ -58,7 +58,7 @@ function secondsToTicks(seconds) {
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
-    const script = Object.assign(document.createElement("script"), { src, onload: resolve, onerror: () => reject(new Error(`No se pudo cargar ${src}`)) });
+    const script = Object.assign(document.createElement("script"), { src, onload: resolve, onerror: () => reject(new Error(`Could not load ${src}`)) });
     document.head.append(script);
   });
 }
@@ -136,12 +136,12 @@ async function renderInstruments() {
   if (!score) return;
   const stale = project.instruments.filter((instrument) => instrumentAudio.get(instrument.id)?.key !== instrumentKey(instrument));
   if (!stale.length) return;
-  status(`Renderizando ${stale.length} instrumento(s)…`, 0);
+  status(`Rendering ${stale.length} instrument(s)…`, 0);
   for (const instrument of stale) {
     const key = instrumentKey(instrument);
     instrumentAudio.set(instrument.id, { key, entry: instrument.notes.length ? await renderInstrument(instrument) : null });
   }
-  status("Instrumentos listos.", 1);
+  status("Instruments ready.", 1);
   draw();
   restartIfPlaying();
 }
@@ -257,7 +257,7 @@ function sectionBars(names) {
 
 // Writes a pattern into the given sections (all when empty), replacing what the instrument had there.
 async function writePattern(instrument, { pattern, sections: names = [], octave = 0, velocity = 96 }) {
-  if (!score) throw new Error("Hace falta un ABC con secciones.");
+  if (!score) throw new Error("An ABC with sections is needed.");
   const bars = sectionBars(names);
   const heard = Object.values(project.comp).map(takeById).find((take) => take?.heardAbc)?.heardAbc ?? "";
   const { notes, chords } = await postJson("/hz3/studio/pattern", { abc: project.abc, pattern, bars, octave, velocity, heard_abc: heard });
@@ -266,8 +266,8 @@ async function writePattern(instrument, { pattern, sections: names = [], octave 
   instrument.notes = [...instrument.notes.filter((note) => !inside(note)), ...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   if (pattern === "drums") instrument.drums = true;
   instrumentsChanged();
-  const source = { ABC: "los acordes del ABC", heard: "los acordes que se oyen en el take", guessed: "acordes deducidos de la melodía" }[chords];
-  return `${notes.length} notas de «${INSTRUMENT_PATTERNS[pattern]}» en ${names.length ? names.join(", ") : "toda la canción"} (con ${source})`;
+  const source = { ABC: "the chords of the ABC", heard: "the chords heard in the take", guessed: "chords inferred from the melody" }[chords];
+  return `${notes.length} notes of «${INSTRUMENT_PATTERNS[pattern]}» in ${names.length ? names.join(", ") : "the whole song"} (with ${source})`;
 }
 
 // ---------- effects
@@ -346,7 +346,7 @@ function dbOf(gain) {
 }
 
 function drawTrackInspector() {
-  const track = selectedTrack === "master" ? { id: "master", name: "Master (efectos)" } : allTracks().find((item) => item.id === selectedTrack);
+  const track = selectedTrack === "master" ? { id: "master", name: "Master (effects)" } : allTracks().find((item) => item.id === selectedTrack);
   $("track-inspector").classList.toggle("hidden", !track || Boolean(selected) || Boolean(selectedVoice));
   if (!track || selected || selectedVoice) return;
   $("track-title").textContent = track.name;
@@ -371,7 +371,7 @@ function drawTrackInspector() {
   const offsets = $("track-offsets");
   offsets.replaceChildren();
   if (!track.instrument && !track.source) {
-    offsets.append(Object.assign(document.createElement("span"), { textContent: "Ajuste de tiempo por sección (ms; + = más tarde)" }));
+    offsets.append(Object.assign(document.createElement("span"), { textContent: "Timing adjustment per section (ms; + = later)" }));
     for (const section of sections) {
       const label = document.createElement("label");
       label.innerHTML = `${escapeHtml(section.name)} <input type="number" step="5" value="${Math.round((fx.offsets?.[section.name] ?? 0) * 1000)}">`;
@@ -396,7 +396,7 @@ function drawTrackInspector() {
   }
   const chosen = new Set([...$("instrument-sections").querySelectorAll("input:checked")].map((input) => input.value));
   $("instrument-sections").innerHTML = sections.map((section) => `<label><input type="checkbox" value="${escapeHtml(section.name)}"${chosen.has(section.name) ? " checked" : ""}> ${escapeHtml(section.name)}</label>`).join("");
-  $("instrument-count").textContent = `${instrument.notes.length} notas`;
+  $("instrument-count").textContent = `${instrument.notes.length} notes`;
 }
 
 function mixerLevel(track) {
@@ -473,7 +473,7 @@ const NOTE_NAMES = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 function midiPitch(value) {
   if (Number.isFinite(Number(value))) return Number(value);
   const match = String(value).trim().match(/^([A-Ga-g])([#b]?)(-?\d)$/);
-  if (!match) throw new Error(`altura «${value}» no válida (usa MIDI o nombres como C4, F#3)`);
+  if (!match) throw new Error(`invalid pitch «${value}» (use MIDI or names like C4, F#3)`);
   return 12 * (Number(match[3]) + 1) + NOTE_NAMES[match[1].toUpperCase()] + (match[2] === "#" ? 1 : match[2] === "b" ? -1 : 0);
 }
 
@@ -481,7 +481,7 @@ function gmProgram(value) {
   if (Number.isFinite(Number(value))) return Math.max(0, Math.min(127, Number(value) - 1));
   const wanted = String(value).toLowerCase();
   const index = GM_PROGRAMS.findIndex((name) => name.toLowerCase().includes(wanted));
-  if (index < 0) throw new Error(`no hay sonido General MIDI «${value}»`);
+  if (index < 0) throw new Error(`there is no General MIDI sound «${value}»`);
   return index;
 }
 
@@ -539,12 +539,12 @@ function dawState() {
 async function runDawAction(action) {
   const instrumentNamed = (name) => {
     const found = project.instruments.find((item) => item.name.toLowerCase() === String(name ?? "").toLowerCase());
-    if (!found) throw new Error(`no hay instrumento «${name}»`);
+    if (!found) throw new Error(`there is no instrument «${name}»`);
     return found;
   };
   const sectionList = (list) => (Array.isArray(list) ? list : []).map((name) => {
     const found = sections.find((section) => section.name.toLowerCase() === String(name).toLowerCase());
-    if (!found) throw new Error(`no hay sección «${name}»`);
+    if (!found) throw new Error(`there is no section «${name}»`);
     return found.name;
   });
   const given = (key) => action[key] !== undefined && action[key] !== null && Number.isFinite(Number(action[key]));
@@ -556,19 +556,19 @@ async function runDawAction(action) {
       const instrument = newInstrument({ name: String(action.name).slice(0, 40), drums: Boolean(action.drums) || action.pattern === "drums" });
       instrument.program = action.sound !== undefined ? gmProgram(action.sound) : PATTERN_PROGRAMS[action.pattern] ?? 0;
       project.instruments.push(instrument);
-      const written = action.pattern ? await writePattern(instrument, patternOptions()) : "sin notas todavía";
+      const written = action.pattern ? await writePattern(instrument, patternOptions()) : "no notes yet";
       instrumentsChanged();
-      return `Instrumento «${instrument.name}» (${instrument.drums ? "batería" : GM_PROGRAMS[instrument.program]}): ${written}`;
+      return `Instrument «${instrument.name}» (${instrument.drums ? "drums" : GM_PROGRAMS[instrument.program]}): ${written}`;
     }
     case "write_pattern":
       return writePattern(instrumentNamed(action.instrument), patternOptions());
     case "write_notes": {
       const instrument = instrumentNamed(action.instrument);
-      if (!score) throw new Error("hace falta un ABC con secciones");
+      if (!score) throw new Error("an ABC with sections is needed");
       const barOf = (ticks) => score.bars.findLastIndex((bar) => bar.start <= ticks);
       const notes = (Array.isArray(action.notes) ? action.notes : []).map((note) => {
         const bar = score.bars[Number(note.bar) - 1];
-        if (!bar) throw new Error(`no hay compás ${note.bar}`);
+        if (!bar) throw new Error(`there is no bar ${note.bar}`);
         return {
           start: Math.round(bar.start + (Number(note.beat) - 1) * TICKS_PER_QUARTER), duration: Math.max(1, Math.round(Number(note.beats) * TICKS_PER_QUARTER)),
           pitch: midiPitch(note.pitch), velocity: Math.max(1, Math.min(127, Number(note.velocity) || 96)),
@@ -580,7 +580,7 @@ async function runDawAction(action) {
       }
       instrument.notes = [...instrument.notes, ...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
       instrumentsChanged();
-      return `${notes.length} notas escritas en «${instrument.name}»`;
+      return `${notes.length} notes written into «${instrument.name}»`;
     }
     case "set_instrument": {
       const instrument = instrumentNamed(action.instrument);
@@ -588,7 +588,7 @@ async function runDawAction(action) {
       if (action.sound !== undefined) instrument.program = gmProgram(action.sound);
       if (typeof action.drums === "boolean") instrument.drums = action.drums;
       instrumentsChanged();
-      return `«${instrument.name}»: ${instrument.drums ? "batería" : GM_PROGRAMS[instrument.program]}`;
+      return `«${instrument.name}»: ${instrument.drums ? "drums" : GM_PROGRAMS[instrument.program]}`;
     }
     case "remove_instrument": {
       const instrument = instrumentNamed(action.instrument);
@@ -597,12 +597,12 @@ async function runDawAction(action) {
       instrumentAudio.delete(instrument.id);
       draw();
       restartIfPlaying();
-      return `Instrumento «${instrument.name}» eliminado`;
+      return `Instrument «${instrument.name}» deleted`;
     }
     case "set_mix": {
       const wanted = String(action.track ?? "").toLowerCase();
       const track = allTracks().find((item) => item.id === wanted || item.name.toLowerCase() === wanted);
-      if (!track) throw new Error(`no hay pista «${action.track}»`);
+      if (!track) throw new Error(`there is no track «${action.track}»`);
       const changes = {};
       if (given("volume_db")) changes.gain = Math.pow(10, Number(action.volume_db) / 20);
       if (given("pan")) changes.pan = Math.max(-1, Math.min(1, Number(action.pan) / 100));
@@ -612,7 +612,7 @@ async function runDawAction(action) {
       if (given("fade_out")) changes.fadeOut = Math.max(0, Number(action.fade_out));
       setTrackFx(track.id, changes);
       draw();
-      return `Mezcla de «${track.name}» actualizada`;
+      return `Mix of «${track.name}» updated`;
     }
     case "set_master_effects": {
       const fx = { ...project.fx };
@@ -622,7 +622,7 @@ async function runDawAction(action) {
       project.fx = fx;
       restartIfPlaying();
       const now = masterFx();
-      return `Efectos master: reverb ${now.reverbSeconds} s, delay ${now.delayBeats} negras, retroalimentación ${now.feedback}`;
+      return `Master effects: reverb ${now.reverbSeconds} s, delay ${now.delayBeats} quarter notes, feedback ${now.feedback}`;
     }
     default:
       return undefined;
@@ -638,7 +638,7 @@ function compTakes() {
 // Tunes the lead of every take in use; the take keeps the voice as YuE2 sang it in files.vocalsOriginal.
 async function tuneVocals(amount) {
   const takes = compTakes();
-  if (!takes.length) throw new Error("Todavía no hay takes con voz principal.");
+  if (!takes.length) throw new Error("There are no takes with a lead vocal yet.");
   const owner = project.name;
   for (const take of takes) {
     const original = take.files.vocalsOriginal ?? take.files.vocals;
@@ -648,9 +648,9 @@ async function tuneVocals(amount) {
       2: { class_type: "HZ3_YuE2_VocalTune", inputs: { vocals: ["1", 0], score_abc: project.abc, amount } },
       3: { class_type: "SaveAudio", inputs: { audio: ["2", 0], filename_prefix: `HZ3-Studio/${owner}/take-${take.id}/vocals_tuned` } },
     };
-    await queue(prompt, { 2: `Afinando la voz del take ${take.id}` }, async (outputs) => {
+    await queue(prompt, { 2: `Tuning the vocal of take ${take.id}` }, async (outputs) => {
       const file = outputs[3]?.audio?.[0];
-      if (!file) throw new Error("La afinación terminó sin audio.");
+      if (!file) throw new Error("Tuning finished without audio.");
       const current = await updateProject(owner, (target) => {
         const stored = target.takes.find((item) => item.id === take.id);
         if (!stored) return;
@@ -665,12 +665,12 @@ async function tuneVocals(amount) {
       restartIfPlaying();
     });
   }
-  status(`Afinación en cola para ${takes.length} take(s).`, 0);
+  status(`Tuning queued for ${takes.length} take(s).`, 0);
 }
 
 function untuneVocals() {
   const takes = compTakes().filter((take) => take.files.vocalsOriginal);
-  if (!takes.length) throw new Error("La voz de los takes en uso no está afinada.");
+  if (!takes.length) throw new Error("The vocal of the takes in use is not tuned.");
   for (const take of takes) {
     take.files.vocals = take.files.vocalsOriginal;
     delete take.files.vocalsOriginal;
@@ -678,5 +678,5 @@ function untuneVocals() {
   }
   draw();
   restartIfPlaying();
-  status(`Voz original restaurada en ${takes.length} take(s).`, 1);
+  status(`Original vocal restored in ${takes.length} take(s).`, 1);
 }

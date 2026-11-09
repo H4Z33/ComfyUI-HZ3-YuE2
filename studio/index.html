@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,82 +8,82 @@
 </head>
 <body>
 <header class="bar">
-  <button id="toggle-song" class="icon" title="Mostrar u ocultar el panel lateral">☰</button>
+  <button id="toggle-song" class="icon" title="Show or hide the side panel">☰</button>
   <strong class="brand">HZ3 Studio</strong>
-  <select id="album-list" title="Álbum: muestra sus canciones en la lista de al lado (mover una canción de álbum se hace en el Catálogo)"></select>
-  <select id="project-list" title="Canciones del álbum elegido"></select>
-  <select id="branch-list" title="La rama de la canción en la que trabajas. Cambiar de rama guarda antes lo que tienes; nada se pierde."></select>
-  <button id="open-history" title="Todos los guardados de la canción, por rama: abre cualquiera sin perder lo actual">Historial</button>
-  <button id="save-project" title="Guarda la canción: queda como un punto en el historial de su rama">Guardar</button>
-  <button id="duplicate-project" title="Guarda la canción y crea otra canción igual en el mismo álbum («… (copia)»), que se abre; el original no cambia">Copiar como canción nueva</button>
-  <button id="open-catalog" title="Álbumes y canciones, audios de la biblioteca, referencias; abrir y descargar .mixmash">Catálogo</button>
-  <button id="open-styles" title="Cantantes, grupos y géneros del álbum">Estilos</button>
+  <select id="album-list" title="Album: lists its songs in the menu next to it (move a song to another album in the Catalog)"></select>
+  <select id="project-list" title="Songs in the chosen album"></select>
+  <select id="branch-list" title="The branch of the song you are working on. Switching branches saves what you have first; nothing is lost."></select>
+  <button id="open-history" title="Every save of the song, by branch: open any of them without losing the current one">History</button>
+  <button id="save-project" title="Save the song: it becomes a point in its branch history">Save</button>
+  <button id="duplicate-project" title="Saves the song and creates an identical song in the same album («… (copia)»), which opens; the original does not change">Copy as new song</button>
+  <button id="open-catalog" title="Albums and songs, library audio, references; open and download .mixmash">Catalog</button>
+  <button id="open-styles" title="Singers, bands and genres of the album">Styles</button>
   <span class="spacer"></span>
-  <label class="switch" title="Muestra los ajustes del motor, las rutas alternativas y las pruebas de laboratorio. Lo que tenga un valor se ve siempre, marcado.">
-    <input id="advanced-mode" type="checkbox"> Avanzado</label>
-  <label class="switch"><input id="harmonize" type="checkbox" checked> Armonías</label>
-  <button id="arrange" title="El agente decide en qué secciones y con qué voces van las armonías">Armonías con agente</button>
-  <button id="render-song" class="primary">Generar canción</button>
-  <button id="export-mix">Exportar FLAC</button>
-  <button id="toggle-assistant" title="Chat con el asistente del estudio">Asistente</button>
+  <label class="switch" title="Shows engine settings, alternative paths and lab experiments. Anything that has a value is always shown, marked.">
+    <input id="advanced-mode" type="checkbox"> Advanced</label>
+  <label class="switch"><input id="harmonize" type="checkbox" checked> Harmonies</label>
+  <button id="arrange" title="The agent decides which sections get harmonies and with which voices">Harmonies by agent</button>
+  <button id="render-song" class="primary">Generate song</button>
+  <button id="export-mix">Export FLAC</button>
+  <button id="toggle-assistant" title="Chat with the studio assistant">Assistant</button>
 </header>
 
-<div id="status" class="status"><span id="status-text">Listo.</span><progress id="status-progress" max="1" value="0"></progress></div>
+<div id="status" class="status"><span id="status-text">Ready.</span><progress id="status-progress" max="1" value="0"></progress></div>
 
 <main>
   <aside class="song">
-    <h4>Origen</h4>
+    <h4>Source</h4>
     <div class="row">
-      <label>Audio original (biblioteca)<select id="source-pick"></select></label>
-      <label class="file" title="Sube un audio a la biblioteca y úsalo como audio original de esta canción">Subir<input id="source-audio" type="file" accept="audio/*"></label>
+      <label>Source audio (library)<select id="source-pick"></select></label>
+      <label class="file" title="Upload an audio file to the library and use it as this song's source audio">Upload<input id="source-audio" type="file" accept="audio/*"></label>
     </div>
     <div class="row">
-      <button id="source-bring" title="Copia a esta canción el ABC, la letra y el estilo analizados de ese audio (el ABC actual queda en las versiones)">Traer análisis</button>
-      <button id="analyze" title="SheetSage2 (ABC) + Whisper (letra) + MixMash (estilo)">Analizar audio</button>
-      <label class="file" title="JSON con style, lyrics y abc">Importar JSON<input id="import-json" type="file" accept=".json"></label>
+      <button id="source-bring" title="Copy the analyzed ABC, lyrics and style of that audio into this song (the current ABC stays in the versions)">Bring analysis</button>
+      <button id="analyze" title="SheetSage2 (ABC) + Whisper (lyrics) + MixMash (style)">Analyze audio</button>
+      <label class="file" title="JSON with style, lyrics and abc">Import JSON<input id="import-json" type="file" accept=".json"></label>
     </div>
-    <h4>Estilo</h4>
-    <label>Indicaciones de estilo (MixMash y asistente)<textarea id="style-instructions" rows="3" placeholder="p. ej. intro en piano, romántico, big band después del solo"></textarea></label>
-    <button id="apply-style-instructions" title="El asistente reescribe el estilo general y los de sección según las indicaciones">Aplicar indicaciones con el asistente</button>
-    <label>Estilo base (grupo o género del catálogo)<select id="base-style"></select></label>
+    <h4>Style</h4>
+    <label>Style directions (MixMash and assistant)<textarea id="style-instructions" rows="3" placeholder="e.g. piano intro, romantic, big band after the solo"></textarea></label>
+    <button id="apply-style-instructions" title="The assistant rewrites the global style and the section styles following the directions">Apply directions with the assistant</button>
+    <label>Base style (band or genre from the catalog)<select id="base-style"></select></label>
     <div class="row">
-      <label title="LoRA de voz del cantante de la canción: se aplica en las secciones que no tienen otro cantante del catálogo">LoRA de voz de la canción<select id="song-lora"></select></label>
-      <label class="narrow">Fuerza<input id="song-lora-strength" type="number" min="0" max="2" step="0.05" value="1"></label>
+      <label title="Voice LoRA of the song's singer: applied to the sections that have no other singer from the catalog">Song artist voice<select id="song-lora"></select></label>
+      <label class="narrow">Strength<input id="song-lora-strength" type="number" min="0" max="2" step="0.05" value="1"></label>
     </div>
-    <label>Estilo<textarea id="style" rows="6"></textarea></label>
-    <label title="Con CFG mayor que 1, YuE2 se aleja de este estilo: escribe el de la canción con la voz que no quieres. Vacío: el negativo es solo instrucción y ABC">Estilo negativo (CFG)<textarea id="negative-style" rows="3"></textarea></label>
-    <button id="section-styles-from-cues" title="Convierte cada línea «[Sección] …» del estilo en el estilo propio de esa sección">Estilos por sección desde [Sección]</button>
-    <h4>Letra</h4>
-    <label>Letra (si está vacía al analizar, se transcribe con Whisper)<textarea id="lyrics" rows="12"></textarea></label>
+    <label>Style<textarea id="style" rows="6"></textarea></label>
+    <label title="With CFG above 1, YuE2 moves away from this style: write the song's style with the voice you do not want. Empty: the negative is only the instruction and the ABC">Negative style (CFG)<textarea id="negative-style" rows="3"></textarea></label>
+    <button id="section-styles-from-cues" title="Turns each «[Section] …» line of the style into that section's own style">Section styles from [Section]</button>
+    <h4>Lyrics</h4>
+    <label>Lyrics (if empty when analyzing, Whisper transcribes them)<textarea id="lyrics" rows="12"></textarea></label>
     <h4>ABC</h4>
     <label>ABC<textarea id="abc" rows="8" spellcheck="false"></textarea></label>
     <div class="row">
-      <label>Semilla para componer<input id="compose-seed" type="number" min="0"></label>
-      <button id="compose-dice" title="Semilla nueva: «Generar ABC» saldrá con otra melodía">🎲</button>
-      <label>Temperatura al componer<input id="compose-temperature" type="number" step="0.05" min="0" title="Más alta = melodías menos previsibles (0.7 por defecto)"></label>
+      <label>Compose seed<input id="compose-seed" type="number" min="0"></label>
+      <button id="compose-dice" title="New seed: «Generate ABC» will come out with another melody">🎲</button>
+      <label>Compose temperature<input id="compose-temperature" type="number" step="0.05" min="0" title="Higher = less predictable melodies (0.7 by default)"></label>
     </div>
-    <label class="switch" title="YuE2 compone a partir del encabezado del ABC actual (K:, M:, Q:): misma tonalidad, compás y tempo, melodía nueva"><input id="compose-keep" type="checkbox"> Conservar tonalidad, compás y tempo del ABC actual</label>
-    <button id="compose" title="YuE2 compone el ABC (melodía y acordes) a partir del estilo y la letra">Generar ABC (YuE2)</button>
-    <button id="apply-classical" title="Escribe en la línea instrumental frases de obras de dominio público (carpeta references/), en las secciones marcadas en el inspector">Aplicar líneas clásicas</button>
-    <button id="abc-reimagine" title="Acordes nuevos con la misma melodía, un instrumental nuevo con la misma voz, variaciones ligeras de la melodía o una sección compuesta de nuevo (con una sección elegida). El ABC anterior queda en las versiones.">Reimaginar ABC…</button>
+    <label class="switch" title="YuE2 composes from the header of the current ABC (K:, M:, Q:): same key, meter and tempo, new melody"><input id="compose-keep" type="checkbox"> Keep key, meter and tempo of the current ABC</label>
+    <button id="compose" title="YuE2 composes the ABC (melody and chords) from the style and the lyrics">Generate ABC (YuE2)</button>
+    <button id="apply-classical" title="Writes phrases from public-domain works (references/ folder) into the instrumental line, in the sections marked in the inspector">Apply classical lines</button>
+    <button id="abc-reimagine" title="New chords with the same melody, a new instrumental with the same vocal, light melody variations or a newly composed section (with a section chosen). The previous ABC stays in the versions.">Reimagine ABC…</button>
     <h4 data-advanced>Render</h4>
     <div class="row">
-      <label>Semilla de la canción<input id="seed" type="number" min="0" value="60"></label>
+      <label>Song seed<input id="seed" type="number" min="0" value="60"></label>
     </div>
     <details data-advanced>
-      <summary>Motor</summary>
+      <summary>Engine</summary>
       <label>Checkpoint<select id="ckpt"></select></label>
       <div class="row">
-        <label>Temperatura<input id="temperature" type="number" step="0.05" value="0.9"></label>
+        <label>Temperature<input id="temperature" type="number" step="0.05" value="0.9"></label>
         <label>top_p<input id="top_p" type="number" step="0.01" value="0.95"></label>
       </div>
       <div class="row">
         <label>top_k<input id="top_k" type="number" value="100"></label>
-        <label>Penalización<input id="repetition_penalty" type="number" step="0.01" value="1.2"></label>
+        <label>Repetition penalty<input id="repetition_penalty" type="number" step="0.01" value="1.2"></label>
         <label>CFG<input id="cfg_scale" type="number" step="0.1" value="2.0"></label>
       </div>
-      <label>Modelo del agente (Ollama)<input id="arranger-model" value="deepseek-v4.1-flash:cloud"></label>
-      <label>Indicaciones para el agente<textarea id="arranger-instructions" rows="3" placeholder="p. ej. coros a cappella en el último coro"></textarea></label>
+      <label>Agent model (Ollama)<input id="arranger-model" value="deepseek-v4.1-flash:cloud"></label>
+      <label>Directions for the agent<textarea id="arranger-instructions" rows="3" placeholder="e.g. a cappella backing vocals in the last chorus"></textarea></label>
     </details>
   </aside>
 
@@ -92,12 +92,12 @@
       <button id="play">▶</button>
       <button id="stop">■</button>
       <span id="clock">0:00 / 0:00</span>
-      <span class="meter" title="Nivel de salida por canal (L arriba, R abajo) en dBFS: verde, amarillo desde −12, rojo desde −3. La raya blanca es el pico reciente; el número, el pico más alto. CLIP se enciende si una muestra llega a −0.1 dBFS; clic para apagarlo. La salida tiene techo en −1 dBFS.">
-        <canvas id="meter-bars" width="160" height="16"></canvas><span id="meter-peak">−∞</span><span id="meter-limit" title="Cuánto está bajando el limitador del master: más de 6 dB significa que la mezcla sin él saturaría; baja el volumen de las pistas."></span><button id="meter-clip" class="clip">CLIP</button></span>
-      <button id="score-play" title="Escucha la partitura completa desde el cursor (melodía, línea instrumental y acordes)">♪ Partitura</button>
-      <button id="add-voice" title="Agrega un cantante generado aparte, alineado con la voz principal">+ Voz</button>
-      <button id="add-instrument" title="Agrega una pista de instrumento SoundFont: notas en piano roll o escritas desde el ABC, sin YuE2">+ Instrumento</button>
-      <button id="fx-master" title="Reverb y delay compartidos por todas las pistas">FX master</button>
+      <span class="meter" title="Output level per channel (L top, R bottom) in dBFS: green, yellow from −12, red from −3. The white line is the recent peak; the number, the highest peak. CLIP lights up if a sample reaches −0.1 dBFS; click to clear it. The output is capped at −1 dBFS.">
+        <canvas id="meter-bars" width="160" height="16"></canvas><span id="meter-peak">−∞</span><span id="meter-limit" title="How much the master limiter is pulling down: more than 6 dB means the mix would clip without it; lower the track volumes."></span><button id="meter-clip" class="clip">CLIP</button></span>
+      <button id="score-play" title="Play the whole score from the cursor (melody, instrumental line and chords)">♪ Score</button>
+      <button id="add-voice" title="Add a singer generated separately, aligned with the lead vocal">+ Voice</button>
+      <button id="add-instrument" title="Add a SoundFont instrument track: notes in a piano roll or written from the ABC, without YuE2">+ Instrument</button>
+      <button id="fx-master" title="Reverb and delay shared by all tracks">Master FX</button>
       <label class="zoom">Zoom<input id="zoom" type="range" min="2" max="40" value="6"></label>
     </div>
     <div id="timeline" class="timeline">
@@ -105,197 +105,197 @@
       <div id="playhead" class="playhead"></div>
     </div>
     <div id="inspector" class="inspector hidden">
-      <header class="inspector-head"><h3 id="inspector-title"></h3><button id="close-inspector" title="Cerrar el inspector">✕</button></header>
+      <header class="inspector-head"><h3 id="inspector-title"></h3><button id="close-inspector" title="Close the inspector">✕</button></header>
       <p id="section-arrangement" class="note"></p>
       <div class="row">
-        <label>Nombre<input id="section-name" maxlength="100"></label>
-        <button id="section-split" title="Divide la sección en el compás del cursor">Dividir en el cursor</button>
-        <button id="song-end" title="La canción termina en el compás del cursor: se quitan los compases siguientes y las secciones que queden después, con su letra (el ABC anterior queda en las versiones). Lo ya generado sigue sonando hasta ahí, con un fundido de 1 s.">Terminar la canción aquí</button>
-        <button id="section-merge">Unir con la siguiente</button>
-        <button id="section-earlier" title="La sección empieza un compás antes">◀ Un compás antes</button>
-        <button id="section-later" title="La sección empieza un compás después">Un compás después ▶</button>
-        <label>Línea clásica<select id="section-classical"><option value="">Ninguna</option><option value="high">Alta (violín 1)</option><option value="low">Baja (viola / chelo)</option><option value="theme">Tema (referencias analizadas)</option></select></label>
+        <label>Name<input id="section-name" maxlength="100"></label>
+        <button id="section-split" title="Split the section at the cursor's bar">Split at cursor</button>
+        <button id="song-end" title="The song ends at the cursor's bar: the following bars and any sections after it are removed, with their lyrics (the previous ABC stays in the versions). What is already generated keeps playing up to there, with a 1 s fade.">End the song here</button>
+        <button id="section-merge">Merge with next</button>
+        <button id="section-earlier" title="The section starts one bar earlier">◀ One bar earlier</button>
+        <button id="section-later" title="The section starts one bar later">One bar later ▶</button>
+        <label>Classical line<select id="section-classical"><option value="">None</option><option value="high">High (violin 1)</option><option value="low">Low (viola / cello)</option><option value="theme">Theme (analyzed references)</option></select></label>
       </div>
-      <label>Letra de la sección<textarea id="section-lyrics" rows="6"></textarea></label>
+      <label>Section lyrics<textarea id="section-lyrics" rows="6"></textarea></label>
       <div class="section-style">
-        <label><span id="section-style-label">Estilo de la sección</span><textarea id="section-style" rows="6"></textarea></label>
+        <label><span id="section-style-label">Section style</span><textarea id="section-style" rows="6"></textarea></label>
         <div class="row">
-          <button id="section-style-save" title="Guarda este texto como estilo propio de la sección">Guardar estilo</button>
-          <button id="section-style-undo" title="Descarta lo que escribiste desde la última vez que guardaste">Deshacer cambios</button>
-          <button id="section-style-original" title="Vuelve al estilo general de la canción con la línea [Sección] de esta sección; se actualiza solo cuando cambias el general">Original</button>
+          <button id="section-style-save" title="Save this text as the section's own style">Save style</button>
+          <button id="section-style-undo" title="Discard what you wrote since the last save">Undo changes</button>
+          <button id="section-style-original" title="Go back to the song's global style with this section's [Section] line; it updates itself only when you change the global style">Original</button>
         </div>
       </div>
-      <label title="Con CFG mayor que 1, esta sección se aleja de este estilo; vacío usa el estilo negativo de la canción">Estilo negativo de la sección<textarea id="section-negative" rows="3"></textarea></label>
-      <label title="Tokens de una sección de otra canción que YuE2 oye justo antes de muestrear esta, como si acabaran de sonar; no quedan en la canción. Formato: Proyecto · toma N · Sección. Vacío lo quita.">Contexto de la sección (otra canción)<input id="section-context" type="text" placeholder="El amor no es lo tuyo · toma 24 · Verse 2"></label>
-      <label title="Lleva la melodía de la sección al registro del cantante, escribe en su etiqueta de la letra quién canta y pone su descripción en el estilo de esta sección">Cantante de la sección (voz principal)<select id="section-singer"></select></label>
-      <details open><summary>Lo que recibe YuE2</summary><pre id="section-prompt" class="prompt"></pre></details>
+      <label title="With CFG above 1, this section moves away from this style; empty uses the song's negative style">Section negative style<textarea id="section-negative" rows="3"></textarea></label>
+      <label title="Tokens of a section from another song that YuE2 hears right before sampling this one, as if they had just played; they do not stay in the song. Format: Project · take N · Section. Empty removes it.">Section context (another song)<input id="section-context" type="text" placeholder="El amor no es lo tuyo · take 24 · Verse 2"></label>
+      <label title="Moves the section's melody to the singer's range, writes who sings in its lyrics tag and puts their description in this section's style">Section singer (lead vocal)<select id="section-singer"></select></label>
+      <details open><summary>What YuE2 receives</summary><pre id="section-prompt" class="prompt"></pre></details>
       <div class="row">
-        <label>Semilla de la sección<input id="section-seed" type="number" min="0"></label>
-        <button id="section-dice" title="Semilla nueva">🎲</button>
+        <label>Section seed<input id="section-seed" type="number" min="0"></label>
+        <button id="section-dice" title="New seed">🎲</button>
       </div>
       <div id="section-takes" class="takes"></div>
       <div class="row">
-        <button id="section-score-play" title="Escucha la partitura de esta sección (melodía, línea instrumental y acordes) con un sintetizador simple">▶ Partitura</button>
-        <button id="section-instrumental" title="Esta sección sin voz: su melodía pasa a la línea instrumental, la voz queda en silencio con sus acordes y su letra se vuelve (instrumental). Se deshace con las versiones del ABC.">Instrumental (sin voz)</button>
-        <button id="section-restore" class="hidden" title="Devuelve a esta sección la melodía vocal (y la letra, si se volvió instrumental) que tenía antes">Restaurar melodía escrita</button>
-        <button id="section-free" title="Deja la línea vocal de esta sección en silencios (conserva acordes y duración): YuE2 dice la letra a su manera, hablada o rapeada, en vez de cantar una melodía escrita. El ABC anterior queda en las versiones.">Melodía libre (hablado / rap)</button>
-        <button id="section-record" title="Canta la melodía de esta sección al micrófono (con audífonos): cuenta un compás, suena la canción desde aquí y tus notas pasan a la partitura con los mismos acordes. El ABC anterior queda en las versiones.">🎤 Grabar melodía</button>
-        <button id="section-recompose"title="Conserva el ABC anterior a esta sección y YuE2 compone esta sección y todo lo que sigue (semilla y temperatura de «Componer ABC»)">Recomponer el ABC desde aquí</button>
-        <button id="render-section" class="primary">Regenerar sección</button>
+        <button id="section-score-play" title="Play this section's score (melody, instrumental line and chords) with a simple synth">▶ Score</button>
+        <button id="section-instrumental" title="This section without vocals: its melody moves to the instrumental line, the vocal is left silent with its chords and its lyrics become (instrumental). Undo it with the ABC versions.">Instrumental (no vocal)</button>
+        <button id="section-restore" class="hidden" title="Gives this section back the vocal melody (and the lyrics, if it was made instrumental) it had before">Restore written melody</button>
+        <button id="section-free" title="Leaves this section's vocal line as rests (keeps chords and length): YuE2 delivers the lyrics its own way, spoken or rapped, instead of singing a written melody. The previous ABC stays in the versions.">Free melody (spoken / rap)</button>
+        <button id="section-record" title="Sing this section's melody into the microphone (with headphones): one bar count-in, the song plays from here and your notes go into the score with the same chords. The previous ABC stays in the versions.">🎤 Record melody</button>
+        <button id="section-recompose"title="Keeps the ABC before this section and YuE2 composes this section and everything after it (seed and temperature of «Generate ABC»)">Recompose the ABC from here</button>
+        <button id="render-section" class="primary">Regenerate section</button>
       </div>
     </div>
     <div id="track-inspector" class="inspector hidden">
-      <header class="inspector-head"><h3 id="track-title"></h3><button id="close-track-inspector" title="Cerrar el inspector">✕</button></header>
+      <header class="inspector-head"><h3 id="track-title"></h3><button id="close-track-inspector" title="Close the inspector">✕</button></header>
       <div id="track-mix" class="row">
-        <label>Volumen (dB)<input id="track-volume" type="number" step="0.5" min="-60" max="12"></label>
-        <label>Paneo (−100 izq · +100 der)<input id="track-pan" type="range" min="-100" max="100" step="1"></label>
+        <label>Volume (dB)<input id="track-volume" type="number" step="0.5" min="-60" max="12"></label>
+        <label>Pan (−100 left · +100 right)<input id="track-pan" type="range" min="-100" max="100" step="1"></label>
         <label>Reverb (%)<input id="track-reverb" type="number" min="0" max="100" step="5"></label>
         <label>Delay (%)<input id="track-delay" type="number" min="0" max="100" step="5"></label>
         <label>Fade in (s)<input id="track-fade-in" type="number" min="0" step="0.5"></label>
         <label>Fade out (s)<input id="track-fade-out" type="number" min="0" step="0.5"></label>
       </div>
       <div id="track-master" class="row">
-        <label>Reverb: duración (s)<input id="fx-reverb-seconds" type="number" min="0.2" max="8" step="0.1"></label>
-        <label>Delay: tiempo (en negras; 0.75 = corchea con puntillo)<input id="fx-delay-beats" type="number" min="0.125" max="4" step="0.125"></label>
-        <label>Delay: retroalimentación<input id="fx-feedback" type="number" min="0" max="0.9" step="0.05"></label>
+        <label>Reverb: length (s)<input id="fx-reverb-seconds" type="number" min="0.2" max="8" step="0.1"></label>
+        <label>Delay: time (in quarter notes; 0.75 = dotted eighth)<input id="fx-delay-beats" type="number" min="0.125" max="4" step="0.125"></label>
+        <label>Delay: feedback<input id="fx-feedback" type="number" min="0" max="0.9" step="0.05"></label>
       </div>
       <div id="track-tune" class="row">
-        <label title="Cuánto se acerca cada nota cantada a la nota escrita en el ABC (o al semitono más cercano si el cantante eligió otra nota)">Afinación hacia el ABC (%)<input id="tune-amount" type="number" min="0" max="100" step="5" value="70"></label>
-        <button id="tune-apply" title="Afina la voz principal de los takes en uso (PSOLA, determinista). La voz original se conserva.">Afinar voz</button>
-        <button id="tune-undo" title="Vuelve a la voz tal como la cantó YuE2">Quitar afinación</button>
+        <label title="How close each sung note moves to the note written in the ABC (or to the nearest semitone if the singer chose another note)">Tuning toward the ABC (%)<input id="tune-amount" type="number" min="0" max="100" step="5" value="70"></label>
+        <button id="tune-apply" title="Tunes the lead vocal of the takes in use (PSOLA, deterministic). The original vocal is kept.">Tune vocal</button>
+        <button id="tune-undo" title="Go back to the vocal as YuE2 sang it">Remove tuning</button>
       </div>
       <div id="track-instrument" class="instrument-panel">
         <div class="row">
-          <label>Nombre<input id="instrument-name" maxlength="40"></label>
-          <label>Sonido (General MIDI)<select id="instrument-program"></select></label>
-          <label class="switch"><input id="instrument-drums" type="checkbox"> Batería</label>
-          <label>Rejilla<select id="instrument-grid"></select></label>
-          <button id="instrument-down" title="El piano roll muestra una octava más grave">▼ Oct</button>
-          <button id="instrument-up" title="El piano roll muestra una octava más aguda">▲ Oct</button>
+          <label>Name<input id="instrument-name" maxlength="40"></label>
+          <label>Sound (General MIDI)<select id="instrument-program"></select></label>
+          <label class="switch"><input id="instrument-drums" type="checkbox"> Drums</label>
+          <label>Grid<select id="instrument-grid"></select></label>
+          <button id="instrument-down" title="The piano roll shows one octave lower">▼ Oct</button>
+          <button id="instrument-up" title="The piano roll shows one octave higher">▲ Oct</button>
           <span id="instrument-count" class="count"></span>
         </div>
-        <p class="hint">Piano roll: clic en un espacio vacío agrega una nota (arrastra para alargarla) · arrastra una nota para moverla, o su borde derecho para cambiar su duración · clic derecho o doble clic la borra.</p>
+        <p class="hint">Piano roll: click an empty spot to add a note (drag to lengthen it) · drag a note to move it, or its right edge to change its length · right-click or double-click deletes it.</p>
         <div class="row">
-          <label>Escribir desde el ABC<select id="instrument-pattern"></select></label>
-          <label>Octava<input id="instrument-octave" type="number" min="-3" max="3" value="0"></label>
-          <label>Intensidad<input id="instrument-velocity" type="number" min="1" max="127" value="96"></label>
-          <button id="instrument-write" class="primary" title="Reemplaza las notas de las secciones marcadas (o de toda la canción) con el patrón">Escribir notas</button>
-          <button id="instrument-clear" title="Borra las notas de las secciones marcadas (o de toda la canción)">Borrar notas</button>
-          <button id="instrument-delete">Eliminar instrumento</button>
+          <label>Write from the ABC<select id="instrument-pattern"></select></label>
+          <label>Octave<input id="instrument-octave" type="number" min="-3" max="3" value="0"></label>
+          <label>Velocity<input id="instrument-velocity" type="number" min="1" max="127" value="96"></label>
+          <button id="instrument-write" class="primary" title="Replaces the notes of the marked sections (or the whole song) with the pattern">Write notes</button>
+          <button id="instrument-clear" title="Deletes the notes of the marked sections (or the whole song)">Clear notes</button>
+          <button id="instrument-delete">Delete instrument</button>
         </div>
-        <div class="hint">Secciones (sin marcar = toda la canción)</div>
+        <div class="hint">Sections (none marked = whole song)</div>
         <div id="instrument-sections" class="checks"></div>
       </div>
       <div id="track-offsets" class="takes"></div>
     </div>
     <div id="voice-inspector" class="inspector hidden">
-      <header class="inspector-head"><h3 id="voice-title"></h3><button id="close-voice-inspector" title="Cerrar el inspector">✕</button></header>
+      <header class="inspector-head"><h3 id="voice-title"></h3><button id="close-voice-inspector" title="Close the inspector">✕</button></header>
       <div class="row">
-        <label>Nombre<input id="voice-name" maxlength="40"></label>
-        <label>Línea que canta<select id="voice-source">
-          <option value="lead">Melodía principal</option>
-          <option value="tenor">Armonía tenor</option>
-          <option value="baritone">Armonía barítono</option>
-          <option value="bass">Armonía bajo</option>
+        <label>Name<input id="voice-name" maxlength="40"></label>
+        <label>Line it sings<select id="voice-source">
+          <option value="lead">Lead melody</option>
+          <option value="tenor">Tenor harmony</option>
+          <option value="baritone">Baritone harmony</option>
+          <option value="bass">Bass harmony</option>
         </select></label>
-        <label>Octava<select id="voice-octave">
-          <option value="-1">−1 (más grave)</option>
+        <label>Octave<select id="voice-octave">
+          <option value="-1">−1 (lower)</option>
           <option value="0">0</option>
-          <option value="1">+1 (p. ej. voz femenina)</option>
+          <option value="1">+1 (e.g. female voice)</option>
         </select></label>
-        <label>Rol (nivel automático)<select id="voice-role">
-          <option value="0">Igual que la principal</option>
-          <option value="-4">Segunda voz (−4 dB)</option>
-          <option value="-9">Coro (−9 dB)</option>
+        <label>Role (automatic level)<select id="voice-role">
+          <option value="0">Same as the lead</option>
+          <option value="-4">Second voice (−4 dB)</option>
+          <option value="-9">Backing vocals (−9 dB)</option>
         </select></label>
       </div>
-      <label>Estilo de esta voz<textarea id="voice-style" rows="5"></textarea></label>
-      <label>Cantante de esta voz (es una generación aparte, para toda la canción)<select id="voice-singer"></select></label>
+      <label>Style of this voice<textarea id="voice-style" rows="5"></textarea></label>
+      <label>Singer of this voice (a separate generation, for the whole song)<select id="voice-singer"></select></label>
       <div class="row">
-        <label>Semilla<input id="voice-seed" type="number" min="0"></label>
-        <label>Desfase global (ms)<input id="voice-offset" type="number" step="10"></label>
+        <label>Seed<input id="voice-seed" type="number" min="0"></label>
+        <label>Global offset (ms)<input id="voice-offset" type="number" step="10"></label>
       </div>
       <div id="voice-sections" class="takes"></div>
       <div class="row">
-        <button id="voice-render" class="primary">Generar voz</button>
-        <button id="voice-align" title="Estima el desfase con el audio de la voz principal">Alinear con la voz principal</button>
-        <button id="voice-delete">Eliminar voz</button>
+        <button id="voice-render" class="primary">Generate voice</button>
+        <button id="voice-align" title="Estimates the offset against the lead vocal audio">Align with the lead vocal</button>
+        <button id="voice-delete">Delete voice</button>
       </div>
     </div>
   </section>
 
   <aside id="assistant" class="assistant hidden">
-    <header><strong>Asistente</strong><span id="assistant-album" class="note"></span></header>
+    <header><strong>Assistant</strong><span id="assistant-album" class="note"></span></header>
     <div id="chat-log" class="chat-log"></div>
-    <textarea id="chat-input" rows="3" placeholder="p. ej. que el coro 2 lo cante Ana y regenera esa sección (Ctrl+Enter envía)"></textarea>
-    <button id="chat-send" class="primary">Enviar</button>
+    <textarea id="chat-input" rows="3" placeholder="e.g. have Ana sing chorus 2 and regenerate that section (Ctrl+Enter sends)"></textarea>
+    <button id="chat-send" class="primary">Send</button>
   </aside>
 </main>
 <dialog id="catalog" class="catalog">
-  <header><strong>Catálogo</strong>
-    <span class="tabs"><button data-tab="manage" class="active">Álbumes y canciones</button><button data-tab="sources">Audios</button><button data-tab="references">Referencias</button></span>
-    <label class="file" title="Abre un .mixmash desde tu disco: se agrega como canción y se abre">Abrir .mixmash<input id="import-package" type="file" accept=".mixmash"></label>
-    <button id="close-catalog">Cerrar</button></header>
+  <header><strong>Catalog</strong>
+    <span class="tabs"><button data-tab="manage" class="active">Albums and songs</button><button data-tab="sources">Audio</button><button data-tab="references">References</button></span>
+    <label class="file" title="Open a .mixmash from your disk: it is added as a song and opened">Open .mixmash<input id="import-package" type="file" accept=".mixmash"></label>
+    <button id="close-catalog">Close</button></header>
   <div id="tab-manage" class="manage">
     <nav id="album-nav" class="album-nav"></nav>
     <section class="album-detail">
       <div class="row">
-        <label>Nombre del álbum<input id="album-name" maxlength="64"></label>
-        <button id="album-rename">Renombrar álbum</button>
-        <button id="album-delete" title="Sus canciones pasan a «General»; el álbum se mueve a la carpeta deleted">Eliminar álbum</button>
+        <label>Album name<input id="album-name" maxlength="64"></label>
+        <button id="album-rename">Rename album</button>
+        <button id="album-delete" title="Its songs move to «General»; the album moves to the deleted folder">Delete album</button>
       </div>
-      <label>Notas del álbum<textarea id="album-notes" rows="2"></textarea></label>
-      <div><span class="note">Estilos y cantantes del álbum</span><div id="album-styles" class="chips"></div></div>
-      <label class="switch"><input id="show-archived" type="checkbox"> Mostrar canciones archivadas</label>
+      <label>Album notes<textarea id="album-notes" rows="2"></textarea></label>
+      <div><span class="note">Album styles and singers</span><div id="album-styles" class="chips"></div></div>
+      <label class="switch"><input id="show-archived" type="checkbox"> Show archived songs</label>
       <table>
-        <thead><tr><th>Canción</th><th>Notas</th><th>Estilos y cantantes</th><th>Modificada · origen</th><th>Contenido</th><th>Álbum</th><th></th></tr></thead>
+        <thead><tr><th>Song</th><th>Notes</th><th>Styles and singers</th><th>Modified · source</th><th>Content</th><th>Album</th><th></th></tr></thead>
         <tbody id="catalog-rows"></tbody>
       </table>
     </section>
   </div>
   <section id="tab-sources" class="album-detail hidden">
     <div class="row">
-      <label>Agregar audios a la biblioteca<input id="source-files" type="file" accept="audio/*" multiple></label>
-      <label class="switch"><input id="source-analyze" type="checkbox" checked> Analizar al importar</label>
-      <button id="import-sources" class="primary">Importar</button>
+      <label>Add audio to the library<input id="source-files" type="file" accept="audio/*" multiple></label>
+      <label class="switch"><input id="source-analyze" type="checkbox" checked> Analyze on import</label>
+      <button id="import-sources" class="primary">Import</button>
     </div>
-    <p class="note">Cada audio se analiza una vez (ABC con SheetSage2, letra con Whisper, estilo con MixMash). Su ABC, letra y estilo quedan aquí para corregirlos y llevarlos a cualquier canción sin volver a subir ni analizar.</p>
+    <p class="note">Each audio file is analyzed once (ABC with SheetSage2, lyrics with Whisper, style with MixMash). Its ABC, lyrics and style stay here so you can correct them and bring them into any song without uploading or analyzing again.</p>
     <div id="source-rows"></div>
   </section>
   <section id="tab-references" class="references hidden">
-    <strong>Agregar grabaciones de referencia (nuestro dataset)</strong>
-    <p class="note">Solo grabaciones con licencia libre explícita de la grabación. Se analizan con SheetSage2 (melodía y acordes) y sus melodías quedan disponibles como «Tema» en la línea clásica.</p>
+    <strong>Add reference recordings (our dataset)</strong>
+    <p class="note">Only recordings with an explicit free license for the recording. They are analyzed with SheetSage2 (melody and chords) and their melodies become available as «Theme» in the classical line.</p>
     <div class="row">
-      <label>Audios<input id="reference-files" type="file" accept="audio/*" multiple></label>
-      <label>Licencia<select id="reference-license"><option value="">—</option><option>CC0</option><option>Dominio público</option><option>CC-BY</option><option>CC-BY-SA</option></select></label>
-      <label>Obra / intérprete<input id="reference-work" placeholder="p. ej. Chaikovski, Lago de los cisnes · Musopen"></label>
-      <label>URL de origen<input id="reference-url" placeholder="https://…"></label>
-      <button id="import-references" class="primary">Importar y analizar</button>
+      <label>Audio<input id="reference-files" type="file" accept="audio/*" multiple></label>
+      <label>License<select id="reference-license"><option value="">—</option><option>CC0</option><option value="Dominio público">Public domain</option><option>CC-BY</option><option>CC-BY-SA</option></select></label>
+      <label>Work / performer<input id="reference-work" placeholder="e.g. Tchaikovsky, Swan Lake · Musopen"></label>
+      <label>Source URL<input id="reference-url" placeholder="https://…"></label>
+      <button id="import-references" class="primary">Import and analyze</button>
     </div>
-    <p class="note">Las referencias analizadas aparecen como canciones de tipo «Referencia» en su álbum.</p>
+    <p class="note">Analyzed references appear as songs of type «Reference» in their album.</p>
   </section>
 </dialog>
 <dialog id="styles" class="catalog">
-  <header><strong>Estilos del álbum <span id="styles-album"></span></strong>
-    <span><button id="add-song-voice" title="Crea un cantante con la voz de la canción abierta: las partes de voz de su estilo, su LoRA de voz y el registro de su melodía">+ Voz de la canción actual</button> <button id="add-style">+ Estilo</button> <button id="close-styles">Cerrar</button></span></header>
-  <p class="note">Un cantante se elige por sección en el timeline de la voz principal: su sección pasa a su registro en el ABC, su etiqueta de la letra dice quién canta y los cantantes de la canción se declaran en el estilo (así arma YuE2 los duetos). Una voz extra tiene un solo cantante. Un grupo o género se elige como estilo base de la canción. Las canciones guardan la referencia: editar un estilo aquí cambia todas las que lo usan.</p>
+  <header><strong>Album styles <span id="styles-album"></span></strong>
+    <span><button id="add-song-voice" title="Creates a singer with the voice of the open song: the vocal parts of its style, its voice LoRA and its melody range">+ Voice of the current song</button> <button id="add-style">+ Style</button> <button id="close-styles">Close</button></span></header>
+  <p class="note">A singer is chosen per section in the lead vocal timeline: their section moves to their range in the ABC, their lyrics tag says who sings and the song's singers are declared in the style (that is how YuE2 builds duets). An extra voice has a single singer. A band or genre is chosen as the song's base style. Songs keep the reference: editing a style here changes every song that uses it.</p>
   <table>
-    <thead><tr><th>Nombre</th><th>Tipo</th><th>Registro</th><th>Texto de estilo (YuE2, en inglés)</th><th>LoRA de voz · fuerza</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Type</th><th>Range</th><th>Style text (YuE2, in English)</th><th>Voice LoRA · strength</th><th></th></tr></thead>
     <tbody id="style-rows"></tbody>
   </table>
 </dialog>
 <dialog id="history" class="catalog">
-  <header><strong>Historial de <span id="history-song"></span></strong>
-    <span><button id="history-new-branch" title="Crea una rama desde el estado actual de esta rama">+ Rama</button>
-    <button id="history-rename-branch">Renombrar rama</button>
-    <button id="history-archive-branch" title="La oculta de la lista de ramas; no se borra nada">Archivar rama</button>
-    <button id="close-history">Cerrar</button></span></header>
+  <header><strong>History of <span id="history-song"></span></strong>
+    <span><button id="history-new-branch" title="Creates a branch from the current state of this branch">+ Branch</button>
+    <button id="history-rename-branch">Rename branch</button>
+    <button id="history-archive-branch" title="Hides it from the branch list; nothing is deleted">Archive branch</button>
+    <button id="close-history">Close</button></span></header>
   <section class="album-detail">
     <div class="row">
-      <label>Rama<select id="history-branch"></select></label>
-      <label class="switch"><input id="history-archived" type="checkbox"> Mostrar ramas archivadas</label>
+      <label>Branch<select id="history-branch"></select></label>
+      <label class="switch"><input id="history-archived" type="checkbox"> Show archived branches</label>
     </div>
-    <p class="note">Cada «Guardar», cada render y cada cambio grande (componer, reimaginar, analizar, terminar aquí) deja un punto. «Abrir» un punto antiguo crea una rama nueva desde él: la rama en la que estabas no cambia. Nada se borra.</p>
+    <p class="note">Every «Save», every render and every big change (compose, reimagine, analyze, end here) leaves a point. «Open» on an old point creates a new branch from it: the branch you were on does not change. Nothing is deleted.</p>
     <div id="history-rows" class="history-rows"></div>
   </section>
 </dialog>
@@ -303,7 +303,7 @@
   <header><strong id="ask-title"></strong></header>
   <section class="album-detail">
     <label><span id="ask-text"></span><input id="ask-input" maxlength="64"></label>
-    <div class="row"><button id="ask-ok" class="primary">Aceptar</button><button id="ask-cancel">Cancelar</button></div>
+    <div class="row"><button id="ask-ok" class="primary">OK</button><button id="ask-cancel">Cancel</button></div>
   </section>
 </dialog>
 <dialog id="choice" class="catalog choice">
@@ -314,17 +314,17 @@
   </section>
 </dialog>
 <dialog id="freeze" class="catalog">
-  <header><strong id="freeze-title">Congelar voz</strong><button id="close-freeze">Cerrar</button></header>
+  <header><strong id="freeze-title">Freeze voice</strong><button id="close-freeze">Close</button></header>
   <section class="album-detail">
-    <p class="note">Elige audios generados donde canta este cantante (takes o voces extra de la canción abierta; escúchalos con ▶). Se juntan en un solo audio y se entrena un LoRA con la letra y el estilo de la canción; al terminar queda asignado al cantante. El texto del estilo no decide la voz en YuE2: el LoRA sí la acerca.</p>
+    <p class="note">Choose generated audio where this singer sings (takes or extra voices of the open song; listen with ▶). They are joined into a single audio file and a LoRA is trained with the song's lyrics and style; when it finishes it is assigned to the singer. In YuE2 the style text does not decide the voice: the LoRA does bring it closer.</p>
     <div id="freeze-clips" class="takes"></div>
     <div class="row">
-      <label>Tipo<select id="freeze-mode">
-        <option value="joint (voice + style) [Recommended]">Voz + estilo (joint, recomendado)</option>
-        <option value="voice (timbre / acoustic)">Solo timbre (voice)</option>
+      <label>Type<select id="freeze-mode">
+        <option value="joint (voice + style) [Recommended]">Voice + style (joint, recommended)</option>
+        <option value="voice (timbre / acoustic)">Timbre only (voice)</option>
       </select></label>
-      <label>Pasos<input id="freeze-steps" type="number" min="5" max="2000" step="5" value="100"></label>
-      <button id="freeze-train" class="primary">Entrenar LoRA</button>
+      <label>Steps<input id="freeze-steps" type="number" min="5" max="2000" step="5" value="100"></label>
+      <button id="freeze-train" class="primary">Train LoRA</button>
     </div>
   </section>
 </dialog>

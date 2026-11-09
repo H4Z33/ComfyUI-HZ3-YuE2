@@ -171,7 +171,7 @@ details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap:
 /* Simple mode hides .adv; a hidden field that holds a value stays visible, marked. */
 body:not(.advanced) .adv:not(.in-use) { display: none !important; }
 body:not(.advanced) .adv.in-use { border-left: 2px solid var(--accent); padding-left: 6px; }
-body:not(.advanced) .adv.in-use::after { content: "avanzado, en uso"; color: var(--accent); font-size: 11px; }
+body:not(.advanced) .adv.in-use::after { content: "advanced, in use"; color: var(--accent); font-size: 11px; }
 
 /* History window: one row per saved point of the branch, newest first. */
 .history-rows { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }

@@ -11,13 +11,13 @@
 
 const TRACKS = [
   { id: "original", name: "Original", gain: 1, source: true },
-  { id: "vocals", name: "Voz principal", gain: 1 },
+  { id: "vocals", name: "Lead vocal", gain: 1 },
   { id: "instrumental", name: "Instrumental", gain: 1 },
   { id: "tenor", name: "Tenor", gain: 0.4, harmony: true },
-  { id: "baritone", name: "Barítono", gain: 0.4, harmony: true },
-  { id: "low", name: "Grave", gain: 0.3, harmony: true },
-  { id: "bass", name: "Bajo", gain: 0.35, harmony: true },
-  { id: "countertenor", name: "Contratenor", gain: 0.22, harmony: true },
+  { id: "baritone", name: "Baritone", gain: 0.4, harmony: true },
+  { id: "low", name: "Low", gain: 0.3, harmony: true },
+  { id: "bass", name: "Bass", gain: 0.35, harmony: true },
+  { id: "countertenor", name: "Countertenor", gain: 0.22, harmony: true },
 ];
 const VOICES = TRACKS.filter((track) => track.harmony).map((track) => track.id);
 const VOICE_LINES = { tenor: 1, baritone: 2, bass: 3 };
@@ -30,14 +30,14 @@ const FADE = 0.3;
 const PEAKS_PER_SECOND = 100;
 const TICKS_PER_QUARTER = 256;
 const SECTION_COLORS = ["#e0b04a", "#4aa3e0", "#7bc96f", "#d9714e", "#b07be0", "#4ec9b0", "#e07ba8", "#c9c24a"];
-const RENDER_LABELS = { 1: "Cargando modelo", 2: "Tokens YuE2", 4: "KSampler", 5: "Decodificando audio", 7: "Separando voz", 12: "Armonías" };
-const ANALYSIS_LABELS = { 3: "SheetSage2 (ABC)", 4: "Separando voz", 5: "Whisper (letra)", 6: "MixMash (Ollama)" };
-const COMPOSE_LABELS = { 1: "Cargando modelo", 2: "YuE2 compone el ABC" };
-const STYLE_KINDS = { singer: "Cantante", group: "Grupo", genre: "Género" };
+const RENDER_LABELS = { 1: "Loading model", 2: "YuE2 tokens", 4: "KSampler", 5: "Decoding audio", 7: "Separating vocals", 12: "Harmonies" };
+const ANALYSIS_LABELS = { 3: "SheetSage2 (ABC)", 4: "Separating vocals", 5: "Whisper (lyrics)", 6: "MixMash (Ollama)" };
+const COMPOSE_LABELS = { 1: "Loading model", 2: "YuE2 composes the ABC" };
+const STYLE_KINDS = { singer: "Singer", group: "Band", genre: "Genre" };
 // Median *written* Vocal note (MIDI) a singer's sections are moved to. YuE2 picks the voice from the melody's register far
 // more than from the style text, and sings about an octave below the written ABC: in our test a verse written around 74
 // was sung by a soprano near 62, and the same verse written around 62 by a baritone near 50. mid is between, untested.
-const REGISTERS = { high: { label: "Aguda (femenina)", center: 77 }, mid: { label: "Media (tenor / mezzo)", center: 70 }, low: { label: "Grave (masculina)", center: 62 } };
+const REGISTERS = { high: { label: "High (female)", center: 77 }, mid: { label: "Mid (tenor / mezzo)", center: 70 }, low: { label: "Low (male)", center: 62 } };
 const DEFAULT_ALBUM = "General";
 // Measured on a 3 min song: dpmpp_2m in 40 steps is 4x faster than dpm_2 in 79 (16 s vs 63 s) and sounds the same
 // (0.11 dB mean log-mel difference; blind listening test).
@@ -188,12 +188,12 @@ function branchOrder(history) {
 function drawBranchList() {
   const history = project.history;
   if (!history) {
-    $("branch-list").innerHTML = `<option value="">— rama: ${MAIN_BRANCH} —</option>`;
+    $("branch-list").innerHTML = `<option value="">— branch: ${MAIN_BRANCH} —</option>`;
     return;
   }
   const names = branchOrder(history).filter((name) => !history.branches[name].archived || name === history.current);
-  $("branch-list").innerHTML = names.map((name) => `<option value="${escapeHtml(name)}"${name === history.current ? " selected" : ""}>Rama: ${escapeHtml(name)}</option>`).join("")
-    + `<option value="${NEW_BRANCH}">+ Rama nueva desde aquí…</option>`;
+  $("branch-list").innerHTML = names.map((name) => `<option value="${escapeHtml(name)}"${name === history.current ? " selected" : ""}>Branch: ${escapeHtml(name)}</option>`).join("")
+    + `<option value="${NEW_BRANCH}">+ New branch from here…</option>`;
 }
 
 function writeForm() {
@@ -203,8 +203,8 @@ function writeForm() {
   for (const key of ["style", "lyrics", "abc"]) $(key).value = project[key];
   $("style-instructions").value = project.styleInstructions;
   $("negative-style").value = project.negativeStyle;
-  $("base-style").innerHTML = styleOptions(["group", "genre"], "— ninguno", project.baseStyle);
-  $("song-lora").innerHTML = `<option value="">— sin LoRA (solo el estilo)</option>`
+  $("base-style").innerHTML = styleOptions(["group", "genre"], "— none", project.baseStyle);
+  $("song-lora").innerHTML = `<option value="">— no LoRA (style only)</option>`
     + loras.map((lora) => `<option value="${escapeHtml(lora.name)}"${lora.name === project.lora?.name ? " selected" : ""}>${escapeHtml(loraFile(lora.name))}</option>`).join("");
   $("song-lora-strength").value = project.lora?.strength ?? 1;
   $("compose-seed").value = project.compose.seed;
@@ -233,7 +233,7 @@ async function refreshSections() {
   sections = (await postJson("/hz3/studio/sections", { abc: project.abc, lyrics: project.lyrics })).sections;
   score = await postJson("/hz3/yue2/abc_viewer/data", { abc: project.abc, lyrics: project.lyrics, sections: editableSections() });
   if (selected && !sections.some((section) => section.name === selected)) selected = null;
-  status(`${sections.length} secciones · ${fmt(duration())}`);
+  status(`${sections.length} sections · ${fmt(duration())}`);
   draw();
 }
 
@@ -408,7 +408,7 @@ function isEdited(section, index) {
   return editedParts(section, index).length > 0;
 }
 
-// What of a section differs from what its take sang (so a render would change it): "letra", "estilo", "semilla", "partitura".
+// What of a section differs from what its take sang (so a render would change it): "lyrics", "style", "seed", "score".
 function editedParts(section, index) {
   const take = takeById(project.comp[section.name]);
   if (!take) return [];
@@ -416,10 +416,10 @@ function editedParts(section, index) {
   // Takes since the global style was recorded: a section singing the global style changes when that style changed.
   const globalChanged = !project.sectionStyles[section.name] && take.style !== undefined && take.style !== globalStyle();
   return [
-    (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim() && "letra",
-    (globalChanged || (take.sectionStyles?.[section.name] ?? "") !== sectionStyle(section)) && "estilo",
-    take.sectionSeeds[section.name] !== sectionSeed(section, index) && "semilla",
-    Boolean(take.sectionAbc && abc !== section.abc && !trimmedFrom(abc, section.abc)) && "partitura",
+    (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim() && "lyrics",
+    (globalChanged || (take.sectionStyles?.[section.name] ?? "") !== sectionStyle(section)) && "style",
+    take.sectionSeeds[section.name] !== sectionSeed(section, index) && "seed",
+    Boolean(take.sectionAbc && abc !== section.abc && !trimmedFrom(abc, section.abc)) && "score",
   ].filter(Boolean);
 }
 
@@ -472,7 +472,7 @@ function truncateAbc(abc, keep) {
 
 async function endSongHere() {
   const bar = nearestBar(position());
-  if (bar < 1 || bar >= score.bars.length) throw new Error("Pon el cursor en el compás donde debe terminar la canción.");
+  if (bar < 1 || bar >= score.bars.length) throw new Error("Put the cursor on the bar where the song should end.");
   readForm();
   const removed = sections.filter((section) => section.start >= barSeconds(bar) - 1e-6);
   const blocks = lyricBlocks(project.lyrics);
@@ -480,13 +480,13 @@ async function endSongHere() {
   for (const index of removed.map((section) => section.lyrics_index).filter((index) => index !== null).sort((a, b) => b - a)) {
     lyrics = lyrics.slice(0, blocks[index].start) + lyrics.slice(blocks[index].end);
   }
-  keepAbcVersion(project, `antes de terminar la canción en el compás ${bar + 1}`, true);
+  keepAbcVersion(project, `before ending the song at bar ${bar + 1}`, true);
   project.abc = truncateAbc(project.abc, bar);
   project.lyrics = lyrics.trimEnd() + "\n";
   writeForm();
   await refreshSections();
   await saveProject();
-  status(`La canción termina ahora en ${fmt(duration())}${removed.length ? ` · quitadas: ${removed.map((section) => section.name).join(", ")}` : ""}. El ABC anterior quedó en las versiones.`, 1);
+  status(`The song now ends at ${fmt(duration())}${removed.length ? ` · removed: ${removed.map((section) => section.name).join(", ")}` : ""}. The previous ABC is in the versions.`, 1);
 }
 
 // A song cut inside its last section fades out over its last second instead of stopping dead.
@@ -521,7 +521,7 @@ function followStyle(before, after) {
     else delete project.sectionStyles[section.name];
     count++;
   }
-  if (count) status(`${count} estilos de sección actualizados con el estilo nuevo.`, 1);
+  if (count) status(`${count} section styles updated with the new style.`, 1);
   draw();
 }
 
@@ -534,7 +534,7 @@ function stylesFromCues() {
     project.sectionStyles[section.name] = `${global}\n${cue}`;
     count++;
   }
-  status(count ? `${count} secciones con estilo propio.` : "No hay líneas «[Sección] …» que coincidan con las secciones.", 1, !count);
+  status(count ? `${count} sections with their own style.` : "No «[Section] …» lines match the sections.", 1, !count);
   draw();
 }
 
@@ -577,12 +577,12 @@ function sentPrompt(section) {
   const withTrigger = (text) => trigger ? `${trigger}, ${text}` : text;
   const own = sectionStyle(section);
   const negativeText = sectionNegative(section);
-  const negative = negativeText ? `\n\nNegativo del CFG (con la misma letra y ABC):\n${withTrigger(oneLine(negativeText))}` : "";
+  const negative = negativeText ? `\n\nCFG negative (with the same lyrics and ABC):\n${withTrigger(oneLine(negativeText))}` : "";
   const lead = project.sectionContexts?.[section.name];
-  const context = lead ? `\n\nAntes de muestrearla, como si acabara de sonar (no queda en la canción):\n${contextLabel(lead)}` : "";
+  const context = lead ? `\n\nBefore sampling it, as if it had just played (not kept in the song):\n${contextLabel(lead)}` : "";
   const start = project.sectionOnsets?.[section.name];
-  const onset = start ? `\n\nInicio fijo (se conserva y el resto se muestrea después):\n${start.label} · ${start.seconds} s` : "";
-  return `Tokens de esta sección:\n${withTrigger(own ? oneLine(own) : globalStyle())}${negative}${context}${onset}\n\nAudio de toda la canción:\n${withTrigger(globalStyle())}`;
+  const onset = start ? `\n\nFixed opening (kept; the rest is sampled after it):\n${start.label} · ${start.seconds} s` : "";
+  return `Tokens of this section:\n${withTrigger(own ? oneLine(own) : globalStyle())}${negative}${context}${onset}\n\nAudio of the whole song:\n${withTrigger(globalStyle())}`;
 }
 
 // A section's fixed opening: stored tokens shorter than the section, kept as its first frames while the rest of the
@@ -596,7 +596,7 @@ function setSectionOnset(name, tokens, label, seconds) {
 // A section's context: the stored tokens of a section of another song's take, which YuE2 sees right before this
 // section while sampling it, so that take's voice and band carry over.
 function contextLabel(lead) {
-  return `${lead.project} · toma ${lead.take} · ${lead.section}`;
+  return `${lead.project} · take ${lead.take} · ${lead.section}`;
 }
 
 async function setSectionContext(name, sourceProject, takeId, sourceSection) {
@@ -606,9 +606,9 @@ async function setSectionContext(name, sourceProject, takeId, sourceSection) {
   }
   const source = sourceProject === project.name ? project : await api(`/hz3/studio/project?name=${encodeURIComponent(sourceProject)}`);
   const take = source.takes?.find((item) => item.id === Number(takeId));
-  if (!take) throw new Error(`«${sourceProject}» no tiene toma ${takeId}.`);
+  if (!take) throw new Error(`«${sourceProject}» has no take ${takeId}.`);
   const key = Object.keys(take.sectionTokens ?? {}).find((item) => item.toLowerCase() === String(sourceSection).trim().toLowerCase());
-  if (!key) throw new Error(`La toma ${takeId} de «${sourceProject}» no tiene tokens de «${sourceSection}».`);
+  if (!key) throw new Error(`Take ${takeId} of «${sourceProject}» has no tokens for «${sourceSection}».`);
   project.sectionContexts[name] = { project: sourceProject, take: take.id, section: key, tokens: take.sectionTokens[key] };
   return project.sectionContexts[name];
 }
@@ -625,7 +625,7 @@ function songVoice() {
   const register = median === null ? null
     : Object.entries(REGISTERS).reduce((best, entry) => Math.abs(entry[1].center - median) < Math.abs(best[1].center - median) ? entry : best)[0];
   const named = project.lora?.trigger?.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-  const style = { id: crypto.randomUUID().slice(0, 8), name: (named || `Voz de ${project.name || "la canción"}`).slice(0, 60), kind: "singer", text };
+  const style = { id: crypto.randomUUID().slice(0, 8), name: (named || `Voice of ${project.name || "the song"}`).slice(0, 60), kind: "singer", text };
   if (register) style.register = register;
   if (project.lora) style.lora = { ...project.lora };
   return style;
@@ -640,13 +640,13 @@ function knownVoice(style) {
 async function addSongVoice() {
   readForm();
   const style = songVoice();
-  if (!style) throw new Error("El estilo de la canción no describe la voz (p. ej. «Spanish female lead vocal, warm») ni tiene LoRA de voz.");
+  if (!style) throw new Error("The song's style does not describe the voice (e.g. «Spanish female lead vocal, warm») and it has no voice LoRA.");
   album.styles.push(style);
   await saveAlbum();
   remember(`Cantante «${style.name}» creado con la voz de la canción`);
   drawStyles();
   writeForm();
-  status(`«${style.name}» agregado al catálogo${project.lora ? " con el LoRA de la canción" : ""}. Revisa su texto y nombre.`, 1);
+  status(`«${style.name}» added to the catalog${project.lora ? " with the song's LoRA" : ""}. Check its text and name.`, 1);
 }
 
 function singerRegister(singer) {
@@ -746,7 +746,11 @@ function keepSectionOriginal(name, kind) {
 // Sections changed before originals were kept: the ABC version saved just before the change.
 function sectionOriginal(name) {
   if (name in project.sectionOriginals) return project.sectionOriginals[name] || null;  // null: already restored
-  const labels = { [`antes de liberar la melodía de «${name}»`]: "free", [`antes de volver instrumental «${name}»`]: "instrumental" };
+  // Older songs carry the Spanish labels these versions were saved with.
+  const labels = {
+    [`antes de liberar la melodía de «${name}»`]: "free", [`antes de volver instrumental «${name}»`]: "instrumental",
+    [`before freeing the melody of «${name}»`]: "free", [`before making «${name}» instrumental`]: "instrumental",
+  };
   const version = (project.abcVersions ?? []).findLast((item) => item.label in labels);
   if (!version) return null;
   const lines = version.abc.split("\n");
@@ -757,12 +761,12 @@ async function restoreSectionOriginal(name) {
   readForm();
   const original = sectionOriginal(name);
   const at = sectionMusicLines(project.abc, name);
-  if (at.length !== original.lines.length) throw new Error(`«${name}» cambió de compases desde entonces: recupérala con las versiones del ABC.`);
+  if (at.length !== original.lines.length) throw new Error(`«${name}» has changed bars since then: recover it from the ABC versions.`);
   const lines = project.abc.split("\n");
   at.forEach((line, index) => { lines[line] = original.lines[index]; });
   const abc = lines.join("\n");
   await postJson("/hz3/studio/sections", { abc, lyrics: project.lyrics });
-  setAbc(abc, `antes de restaurar la melodía escrita de «${name}»`);
+  setAbc(abc, `before restoring the written melody of «${name}»`);
   await refreshSections();
   const index = sections.findIndex((section) => section.name === name);
   if (original.kind === "instrumental" && original.lyrics !== null && index >= 0) {
@@ -771,7 +775,7 @@ async function restoreSectionOriginal(name) {
   }
   project.sectionOriginals[name] = null;
   remember(`«${name}» vuelve a su melodía escrita`);
-  status(`«${name}» recuperó su melodía escrita${original.kind === "instrumental" && original.lyrics !== null ? " y su letra" : ""}.`, 1);
+  status(`«${name}» got its written melody back${original.kind === "instrumental" && original.lyrics !== null ? " and its lyrics" : ""}.`, 1);
   draw();
 }
 
@@ -781,10 +785,10 @@ async function setSectionFree(name) {
   const abc = rewriteSectionVocal(project.abc, name, (line, units) => line.slice(0, -1).split("|").map((bar) => freeBar(bar, units)).join("|") + "|");
   if (abc === project.abc) {
     if (project.sectionOriginals[name]?.kind === "free") delete project.sectionOriginals[name];
-    throw new Error(`«${name}» ya no tiene melodía escrita.`);
+    throw new Error(`«${name}» no longer has a written melody.`);
   }
   await postJson("/hz3/studio/sections", { abc, lyrics: project.lyrics });
-  setAbc(abc, `antes de liberar la melodía de «${name}»`);
+  setAbc(abc, `before freeing the melody of «${name}»`);
   await refreshSections();
 }
 
@@ -831,7 +835,7 @@ async function recordSectionMelody(name) {
     for (let index = Math.max(0, -at); index < data.length && at + index < samples.length; index++) samples[at + index] = data[index];
   };
   input.connect(recorder).connect(mute).connect(audio.destination);
-  status(`Cuenta un compás y canta «${name}» (${fmt(seconds)})…`, 0);
+  status(`One bar count-in, then sing «${name}» (${fmt(seconds)})…`, 0);
   while (audio.currentTime < heard + seconds + 0.2) await new Promise((resolve) => setTimeout(resolve, 100));
   recorder.disconnect();
   input.disconnect();
@@ -846,17 +850,17 @@ async function recordSectionMelody(name) {
   const response = await fetch("/hz3/studio/sung_melody", { method: "POST", body: form });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error);
-  if (!result.notes) throw new Error("No se oyó ninguna nota cantada: revisa el micrófono y vuelve a grabar.");
-  setAbc(result.abc, `antes de grabar la melodía de «${name}»`);
+  if (!result.notes) throw new Error("No sung note was heard: check the microphone and record again.");
+  setAbc(result.abc, `before recording the melody of «${name}»`);
   await refreshSections();
   remember(`Melodía de «${name}» grabada con el micrófono (${result.notes} notas)`);
-  status(`«${name}»: ${result.notes} notas de tu voz en la partitura. Escúchalas con «▶ Partitura» y regenera la sección para que YuE2 las cante.`, 1);
+  status(`«${name}»: ${result.notes} notes from your voice in the score. Listen with «▶ Score» and regenerate the section so YuE2 sings them.`, 1);
 }
 
 // Lead singer of a section: its melody moves to the singer's register and its lyric tag says who sings.
 async function setSectionSinger(name, id) {
   const index = sections.findIndex((section) => section.name === name);
-  if (index < 0) throw new Error(`no hay sección «${name}»`);
+  if (index < 0) throw new Error(`there is no section «${name}»`);
   readForm();
   const singer = catalogStyle(id);
   let lyrics = project.lyrics;
@@ -875,7 +879,7 @@ async function setSectionSinger(name, id) {
   const abc = octaves ? rewriteSectionVocal(project.abc, name, (line) => shiftOctaves(line, octaves)) : project.abc;
   // The parser checks the result before it replaces the song's score and lyrics.
   await postJson("/hz3/studio/sections", { abc, lyrics });
-  if (octaves) keepAbcVersion(project, `antes de llevar «${name}» al registro de ${singer.name}`);
+  if (octaves) keepAbcVersion(project, `before moving «${name}» to the range of ${singer.name}`);
   setSinger(project.sectionSingers, name, id);
   project.abc = abc;
   project.lyrics = lyrics;
@@ -889,7 +893,7 @@ async function setSectionSinger(name, id) {
 function withLora(prompt, uses) {
   const distinct = [...new Map(uses.filter((use) => use.lora?.name).map((use) => [use.lora.name, use])).values()];
   if (distinct.length > 1) {
-    throw new Error(`${distinct.map((use) => use.owner).join(" y ")} usan LoRAs distintos: un render lleva un solo LoRA; canta a uno como voz extra.`);
+    throw new Error(`${distinct.map((use) => use.owner).join(" and ")} use different LoRAs: a render carries a single LoRA; sing one of them as an extra voice.`);
   }
   if (!distinct.length) return prompt;
   const { name, trigger, strength } = distinct[0].lora;
@@ -914,25 +918,25 @@ let freezing = null;
 function freezeClips() {
   const clips = [];
   for (const take of project.takes) {
-    if (take.files.mix) clips.push({ label: `Take ${take.id} · mezcla`, file: take.files.mix });
-    if (take.files.vocals) clips.push({ label: `Take ${take.id} · solo voz`, file: take.files.vocals });
+    if (take.files.mix) clips.push({ label: `Take ${take.id} · mix`, file: take.files.mix });
+    if (take.files.vocals) clips.push({ label: `Take ${take.id} · vocals only`, file: take.files.vocals });
   }
   for (const voice of project.voices) {
-    if (voice.mixFile) clips.push({ label: `${voice.name} · mezcla`, file: voice.mixFile });
-    if (voice.file) clips.push({ label: `${voice.name} · solo voz`, file: voice.file });
+    if (voice.mixFile) clips.push({ label: `${voice.name} · mix`, file: voice.mixFile });
+    if (voice.file) clips.push({ label: `${voice.name} · vocals only`, file: voice.file });
   }
   return clips;
 }
 
 function openFreeze(singer) {
   freezing = singer;
-  $("freeze-title").textContent = `Congelar la voz de ${singer.name}`;
+  $("freeze-title").textContent = `Freeze the voice of ${singer.name}`;
   const clips = freezeClips();
-  $("freeze-clips").innerHTML = clips.length ? "" : `<p class="note">Esta canción no tiene audios generados todavía: genera takes o voces con ${escapeHtml(singer.name)} y vuelve aquí.</p>`;
+  $("freeze-clips").innerHTML = clips.length ? "" : `<p class="note">This song has no generated audio yet: generate takes or voices with ${escapeHtml(singer.name)} and come back here.</p>`;
   for (const clip of clips) {
     const row = document.createElement("label");
     row.className = "switch";
-    row.innerHTML = `<input type="checkbox"> <button type="button" title="Escuchar">▶</button> ${escapeHtml(clip.label)}`;
+    row.innerHTML = `<input type="checkbox"> <button type="button" title="Listen">▶</button> ${escapeHtml(clip.label)}`;
     row.querySelector("input").clip = clip;
     row.querySelector("button").onclick = (event) => { event.preventDefault(); new Audio(fileUrl(clip.file)).play(); };
     $("freeze-clips").append(row);
@@ -943,7 +947,7 @@ function openFreeze(singer) {
 async function freezeVoice() {
   const singer = freezing;
   const files = [...$("freeze-clips").querySelectorAll("input:checked")].map((box) => box.clip.file);
-  if (!files.length) throw new Error("Elige al menos un audio con la voz que quieres congelar.");
+  if (!files.length) throw new Error("Choose at least one audio file with the voice you want to freeze.");
   readForm();
   const slug = singer.name.normalize("NFKD").replace(/[^\w]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase() || "voz";
   loras = (await api("/hz3/studio/loras")).loras;
@@ -967,17 +971,17 @@ async function freezeVoice() {
     },
   };
   $("freeze").close();
-  await queue(prompt, { 3: `Entrenando el LoRA de ${singer.name}` }, async () => {
+  await queue(prompt, { 3: `Training the LoRA of ${singer.name}` }, async () => {
     loras = (await api("/hz3/studio/loras")).loras;
     const lora = loras.find((item) => item.name.replace(/^.*[\\/]/, "") === `${name}.safetensors`);
-    if (!lora) throw new Error("El entrenamiento terminó sin LoRA.");
+    if (!lora) throw new Error("Training finished without a LoRA.");
     singer.lora = { name: lora.name, trigger: lora.trigger || trigger, strength: 1 };
     await saveAlbum();
     remember(`Voz de «${singer.name}» congelada en ${lora.name} (${files.length} audios)`);
     if ($("styles").open) drawStyles();
-    status(`LoRA ${lora.name} listo y asignado a ${singer.name} (disparador ${singer.lora.trigger}).`, 1);
+    status(`LoRA ${lora.name} ready and assigned to ${singer.name} (trigger ${singer.lora.trigger}).`, 1);
   });
-  status(`Entrenamiento del LoRA de ${singer.name} en cola (${files.length} audios).`, 0);
+  status(`Training of the LoRA of ${singer.name} queued (${files.length} audio files).`, 0);
 }
 
 function referencedStyles() {
@@ -1016,13 +1020,13 @@ async function listAlbums() {
   const { albums } = await api("/hz3/studio/albums");
   if (!albums.includes(browseAlbum)) albums.push(browseAlbum);
   $("album-list").innerHTML = albums.map((name) => `<option value="${escapeHtml(name)}"${name === browseAlbum ? " selected" : ""}>${escapeHtml(name)}</option>`).join("")
-    + `<option value="${NEW_ALBUM}">+ Nuevo álbum…</option>`;
+    + `<option value="${NEW_ALBUM}">+ New album…</option>`;
 }
 
 // The top bar's album only chooses which songs are listed next to it; moving a song between albums is done in the catalog.
 async function browseTo(name) {
   if (name === NEW_ALBUM) {
-    name = (prompt("Nombre del nuevo álbum") ?? "").trim();
+    name = (prompt("Name of the new album") ?? "").trim();
     if (!name) { $("album-list").value = browseAlbum; return; }
     const { albums } = await api("/hz3/studio/albums");
     if (!albums.includes(name)) await postJson("/hz3/studio/album", { name, notes: "", styles: [], chat: [], log: [] });
@@ -1030,7 +1034,7 @@ async function browseTo(name) {
   browseAlbum = name;
   await listAlbums();
   await listProjects();
-  status(`Álbum «${name}»: elige una canción o «+ Canción nueva».`, 1);
+  status(`Album «${name}»: choose a song or «+ New song».`, 1);
 }
 
 async function moveToAlbum(name) {
@@ -1045,7 +1049,7 @@ async function moveToAlbum(name) {
   await listAlbums();
   writeForm();
   draw();
-  status(project.name ? `«${project.name}» está ahora en el álbum «${name}».` : `Álbum «${name}».`, 1);
+  status(project.name ? `«${project.name}» is now in the album «${name}».` : `Album «${name}».`, 1);
 }
 
 function remember(text) {
@@ -1057,18 +1061,18 @@ function remember(text) {
 function drawStyles() {
   $("styles-album").textContent = `· ${album.name}`;
   const rows = $("style-rows");
-  rows.innerHTML = album.styles.length ? "" : `<tr><td colspan="6" class="style">Sin estilos todavía: agrega cantantes, grupos y géneros, o pídeselos al asistente.</td></tr>`;
+  rows.innerHTML = album.styles.length ? "" : `<tr><td colspan="6" class="style">No styles yet: add singers, bands and genres, or ask the assistant for them.</td></tr>`;
   for (const style of album.styles) {
     const row = document.createElement("tr");
     row.innerHTML = `<td><input maxlength="60"></td>
       <td><select class="kind">${Object.entries(STYLE_KINDS).map(([kind, label]) => `<option value="${kind}">${label}</option>`).join("")}</select></td>
-      <td><select class="register" title="Registro al que se lleva la melodía de las secciones que canta">${Object.entries(REGISTERS).map(([key, { label }]) => `<option value="${key}">${label}</option>`).join("")}</select></td>
-      <td><textarea rows="2" placeholder="p. ej. Spanish female soprano lead vocal, warm and breathy"></textarea></td>
-      <td class="lora"><select class="lora-name" title="LoRA de voz que se aplica al renderizar con este cantante">
-          <option value="">— sin LoRA</option>${loras.map((lora) => `<option value="${escapeHtml(lora.name)}">${escapeHtml(lora.name.replace(/^.*[\\/]/, ""))}</option>`).join("")}</select>
-        <input class="lora-strength" type="number" min="0" max="2" step="0.05" title="Fuerza del LoRA">
-        <button class="freeze" title="Entrena un LoRA con audios ya generados de este cantante">Congelar voz…</button></td>
-      <td><button class="delete">Eliminar</button></td>`;
+      <td><select class="register" title="Range the melody of the sections they sing is moved to">${Object.entries(REGISTERS).map(([key, { label }]) => `<option value="${key}">${label}</option>`).join("")}</select></td>
+      <td><textarea rows="2" placeholder="e.g. Spanish female soprano lead vocal, warm and breathy"></textarea></td>
+      <td class="lora"><select class="lora-name" title="Voice LoRA applied when rendering with this singer">
+          <option value="">— no LoRA</option>${loras.map((lora) => `<option value="${escapeHtml(lora.name)}">${escapeHtml(lora.name.replace(/^.*[\\/]/, ""))}</option>`).join("")}</select>
+        <input class="lora-strength" type="number" min="0" max="2" step="0.05" title="LoRA strength">
+        <button class="freeze" title="Trains a LoRA on audio already generated for this singer">Freeze voice…</button></td>
+      <td><button class="delete">Delete</button></td>`;
     const [name, kind, register, text] = [row.querySelector("input"), row.querySelector(".kind"), row.querySelector(".register"), row.querySelector("textarea")];
     const [loraName, loraStrength] = [row.querySelector(".lora-name"), row.querySelector(".lora-strength")];
     loraName.value = style.lora?.name ?? "";
@@ -1111,13 +1115,13 @@ function loraFile(name) {
 
 // The default singer of every section: the song's own style, and its LoRA when the song has one.
 function songSingerLabel() {
-  return project.lora ? `Cantante de la canción · ${loraFile(project.lora.name)}` : "Cantante de la canción (su estilo)";
+  return project.lora ? `Song singer · ${loraFile(project.lora.name)}` : "Song singer (its style)";
 }
 
 function singerSelect(value, empty, change) {
   const select = document.createElement("select");
   select.className = "singer";
-  select.title = "Quién canta esta sección";
+  select.title = "Who sings this section";
   select.innerHTML = styleOptions(["singer"], empty, value);
   select.onclick = (event) => event.stopPropagation();
   select.onchange = guard(async () => { await change(select.value || null); draw(); });
@@ -1132,7 +1136,7 @@ function setSinger(map, name, id) {
 // ---------- studio assistant
 
 function drawChat() {
-  $("assistant-album").textContent = `álbum «${album.name}»`;
+  $("assistant-album").textContent = `album «${album.name}»`;
   const log = $("chat-log");
   log.innerHTML = "";
   for (const message of album.chat) {
@@ -1183,63 +1187,63 @@ function assistantState() {
 async function runAction(action) {
   const sectionNamed = (name) => {
     const found = sections.find((section) => section.name.toLowerCase() === String(name ?? "").toLowerCase());
-    if (!found) throw new Error(`no hay sección «${name}»`);
+    if (!found) throw new Error(`there is no section «${name}»`);
     return found;
   };
   const voiceNamed = (name) => {
     const found = project.voices.find((voice) => voice.name.toLowerCase() === String(name ?? "").toLowerCase());
-    if (!found) throw new Error(`no hay voz «${name}»`);
+    if (!found) throw new Error(`there is no voice «${name}»`);
     return found;
   };
   const styleNamed = (name, kinds) => {
     if (!name) return null;
     const found = album.styles.find((style) => kinds.includes(style.kind) && style.name.toLowerCase() === String(name).toLowerCase());
-    if (!found) throw new Error(`no hay «${name}» en el catálogo`);
+    if (!found) throw new Error(`«${name}» is not in the catalog`);
     return found.id;
   };
   switch (action.type) {
     case "set_style":
       project.style = String(action.text ?? "");
       writeForm();
-      return "Estilo general actualizado";
+      return "Global style updated";
     case "set_section_style": {
       const section = sectionNamed(action.section);
       const text = String(action.text ?? "").trim();
       if (text) project.sectionStyles[section.name] = text;
       else delete project.sectionStyles[section.name];
       draw();
-      return `Estilo de «${section.name}» ${text ? "actualizado" : "= general"}`;
+      return `Style of «${section.name}» ${text ? "updated" : "= global"}`;
     }
     case "set_section_lyrics": {
       const section = sectionNamed(action.section);
       setSectionLyrics(sections.indexOf(section), String(action.text ?? ""));
       await refreshSections();
-      return `Letra de «${section.name}» actualizada`;
+      return `Lyrics of «${section.name}» updated`;
     }
     case "set_section_seed": {
       const section = sectionNamed(action.section);
       project.sectionSeeds[section.name] = Number(action.seed) || 0;
       draw();
-      return `Semilla de «${section.name}»: ${project.sectionSeeds[section.name]}`;
+      return `Seed of «${section.name}»: ${project.sectionSeeds[section.name]}`;
     }
     case "free_melody": {
       const section = sectionNamed(action.section);
       await setSectionFree(section.name);
-      return `«${section.name}» con melodía libre (la anterior quedó en las versiones del ABC)`;
+      return `«${section.name}» with free melody (the previous one is in the ABC versions)`;
     }
     case "set_base_style":
       project.baseStyle = styleNamed(action.style, ["group", "genre"]);
       writeForm();
       draw();
-      return `Estilo base: ${catalogStyle(project.baseStyle)?.name ?? "ninguno"}`;
+      return `Base style: ${catalogStyle(project.baseStyle)?.name ?? "none"}`;
     case "set_singer": {
       const id = styleNamed(action.style, ["singer"]);
       if (action.track && action.track !== "lead") {
         const voice = voiceNamed(action.track);
-        if (action.section) throw new Error("una voz extra es una generación aparte: tiene un solo cantante para toda la canción");
+        if (action.section) throw new Error("an extra voice is a separate generation: it has a single singer for the whole song");
         voice.singer = id;
         draw();
-        return `${catalogStyle(id)?.name ?? "Sin cantante"} → ${voice.name}`;
+        return `${catalogStyle(id)?.name ?? "No singer"} → ${voice.name}`;
       }
       const moved = [];
       for (const section of action.section ? [sectionNamed(action.section)] : [...sections]) {
@@ -1247,11 +1251,11 @@ async function runAction(action) {
         if (octaves) moved.push(`${section.name} ${octaves > 0 ? "+" : ""}${octaves} oct.`);
       }
       draw();
-      return `${catalogStyle(id)?.name ?? "Sin cantante"} → voz principal · ${action.section || "todas las secciones"}${moved.length ? ` · melodía movida: ${moved.join(", ")}` : ""}`;
+      return `${catalogStyle(id)?.name ?? "No singer"} → lead vocal · ${action.section || "all sections"}${moved.length ? ` · melody moved: ${moved.join(", ")}` : ""}`;
     }
     case "save_style": {
       const name = String(action.name ?? "").trim().slice(0, 60);
-      if (!name) throw new Error("estilo sin nombre");
+      if (!name) throw new Error("style without a name");
       const kind = STYLE_KINDS[action.kind] ? action.kind : "singer";
       let style = album.styles.find((item) => item.name.toLowerCase() === name.toLowerCase());
       if (!style) album.styles.push(style = { id: crypto.randomUUID().slice(0, 8) });
@@ -1260,7 +1264,7 @@ async function runAction(action) {
       await saveAlbum();
       writeForm();
       draw();
-      return `Estilo «${name}» (${STYLE_KINDS[kind]}) guardado en el catálogo`;
+      return `Style «${name}» (${STYLE_KINDS[kind]}) saved in the catalog`;
     }
     case "delete_style": {
       const id = styleNamed(action.name, Object.keys(STYLE_KINDS));
@@ -1268,7 +1272,7 @@ async function runAction(action) {
       await saveAlbum();
       writeForm();
       draw();
-      return `Estilo «${action.name}» eliminado del catálogo`;
+      return `Style «${action.name}» deleted from the catalog`;
     }
     case "add_voice": {
       addVoice();
@@ -1280,26 +1284,26 @@ async function runAction(action) {
       if (action.style) voice.style = String(action.style);
       voice.singer = styleNamed(action.singer, ["singer"]);
       draw();
-      return `Voz «${voice.name}» agregada (sin generar)`;
+      return `Voice «${voice.name}» added (not generated)`;
     }
     case "set_track": {
       const section = sectionNamed(action.section);
       const voice = project.voices.find((item) => item.name.toLowerCase() === String(action.track ?? "").toLowerCase());
       if (voice) voice.on[section.name] = Boolean(action.on);
       else if (TRACKS.some((track) => track.id === action.track && !track.source)) (project.trackOn[action.track] ??= {})[section.name] = Boolean(action.on);
-      else throw new Error(`no hay pista «${action.track}»`);
+      else throw new Error(`there is no track «${action.track}»`);
       draw();
       restartIfPlaying();
-      return `${action.track} ${action.on ? "encendida" : "apagada"} en «${section.name}»`;
+      return `${action.track} ${action.on ? "on" : "off"} in «${section.name}»`;
     }
     case "select_take": {
       const section = sectionNamed(action.section);
       const take = takeById(Number(action.take));
-      if (!take) throw new Error(`no hay take ${action.take}`);
+      if (!take) throw new Error(`there is no take ${action.take}`);
       project.comp[section.name] = take.id;
       draw();
       restartIfPlaying();
-      return `«${section.name}» suena desde T${take.id}`;
+      return `«${section.name}» plays from T${take.id}`;
     }
     case "arrange_harmonies":
       if (action.instructions) {
@@ -1307,56 +1311,56 @@ async function runAction(action) {
         writeForm();
       }
       await arrange();
-      return "Armonías arregladas";
+      return "Harmonies arranged";
     case "set_sampling": {
       for (const key of SAMPLING) if (Number.isFinite(Number(action[key])) && action[key] !== undefined) project.sampling[key] = Number(action[key]);
       if (Number.isFinite(Number(action.seed)) && action.seed !== undefined) project.seed = Number(action.seed);
       writeForm();
       draw();
-      return `Muestreo: ${SAMPLING.map((key) => `${key} ${project.sampling[key]}`).join(", ")} · semilla ${project.seed}`;
+      return `Sampling: ${SAMPLING.map((key) => `${key} ${project.sampling[key]}`).join(", ")} · seed ${project.seed}`;
     }
     case "get_abc":
       return action.section ? sectionNamed(action.section).abc : project.abc;
     case "set_abc":
       // The section parser rejects a broken score before it replaces the current one.
       await postJson("/hz3/studio/sections", { abc: String(action.abc ?? ""), lyrics: project.lyrics });
-      setAbc(String(action.abc ?? ""), "antes de que el asistente editara el ABC");
+      setAbc(String(action.abc ?? ""), "before the assistant edited the ABC");
       await refreshSections();
-      return `ABC reemplazado · ${sections.length} secciones`;
+      return `ABC replaced · ${sections.length} sections`;
     case "set_compose_settings":
       if (Number.isFinite(Number(action.seed)) && action.seed !== undefined) project.compose.seed = Number(action.seed);
       if (Number.isFinite(Number(action.temperature)) && action.temperature !== undefined) project.compose.temperature = Number(action.temperature);
       if (typeof action.keep_key_meter_tempo === "boolean") project.compose.keep = action.keep_key_meter_tempo;
       writeForm();
-      return `Composición: semilla ${project.compose.seed}, temperatura ${project.compose.temperature}, ${project.compose.keep ? "conserva" : "no conserva"} tonalidad, compás y tempo`;
+      return `Compose: seed ${project.compose.seed}, temperature ${project.compose.temperature}, ${project.compose.keep ? "keeps" : "does not keep"} key, meter and tempo`;
     case "compose_abc": {
       const from = action.from_section ? sectionNamed(action.from_section).name : null;
       await compose(from);
-      return `Composición del ABC${from ? ` desde «${from}»` : ""} en cola (semilla ${project.compose.seed}, temperatura ${project.compose.temperature})`;
+      return `ABC composition${from ? ` from «${from}»` : ""} queued (seed ${project.compose.seed}, temperature ${project.compose.temperature})`;
     }
     case "analyze_audio":
       await analyze();
-      return "Análisis del audio en cola";
+      return "Audio analysis queued";
     case "render_song":
       await render(null);
-      return "Take de la canción en cola";
+      return "Song take queued";
     case "render_sections": {
       const names = (Array.isArray(action.sections) ? action.sections : []).map((name) => sectionNamed(name).name);
-      if (!names.length) throw new Error("faltan secciones");
+      if (!names.length) throw new Error("sections are missing");
       await render(names);
-      return `Take en cola: ${names.join(", ")}`;
+      return `Take queued: ${names.join(", ")}`;
     }
     case "render_voice": {
       const voice = voiceNamed(action.voice);
       await renderVoice(voice);
-      return `${voice.name} en cola`;
+      return `${voice.name} queued`;
     }
     case "save_song":
       await saveProject();
-      return "Canción guardada";
+      return "Song saved";
     default: {
       const result = await runDawAction(action);
-      if (result === undefined) throw new Error("acción desconocida");
+      if (result === undefined) throw new Error("unknown action");
       return result;
     }
   }
@@ -1369,7 +1373,7 @@ async function sendChat(text) {
   album.chat.push({ role: "user", content: text, at: Date.now(), song: project.name });
   drawChat();
   $("chat-send").disabled = true;
-  status("El asistente está pensando…");
+  status("The assistant is thinking…");
   try {
     // Earlier tool results reach the model through the action log in the state, not as text it could imitate.
     const history = album.chat.filter((message) => !message.error).slice(-CHAT_MEMORY).map(({ role, content }) => ({ role, content }));
@@ -1382,7 +1386,7 @@ async function sendChat(text) {
         model: project.arranger.model, tools: ASSISTANT_TOOLS, state: assistantState(), messages: [...history, ...turn],
       });
       if (!answer.tool_calls.length) {
-        message.content = answer.content.trim() || "(sin respuesta)";
+        message.content = answer.content.trim() || "(no answer)";
         break;
       }
       turn.push({ role: "assistant", content: answer.content, tool_calls: answer.tool_calls.map((call) => ({ function: call })) });
@@ -1395,14 +1399,14 @@ async function sendChat(text) {
           result = `✗ ${call.name}: ${error.message}`;
         }
         turn.push({ role: "tool", tool_name: call.name, content: result });
-        message.done.push(call.name === "get_abc" ? `ABC leído${args.section ? ` · ${args.section}` : ""}` : result);
+        message.done.push(call.name === "get_abc" ? `ABC read${args.section ? ` · ${args.section}` : ""}` : result);
       }
       drawChat();
     }
-    message.content ||= "Me detuve tras varias acciones sin una respuesta final.";
+    message.content ||= "I stopped after several actions without a final answer.";
     if (message.done.length) remember(`Asistente: ${message.done.join("; ")}`);
     if (project.name && message.done.length) await saveProject();
-    status("Asistente listo.", 1);
+    status("Assistant ready.", 1);
   } catch (error) {
     album.chat.push({ role: "assistant", content: error.message, error: true, at: Date.now() });
     throw error;
@@ -1423,21 +1427,21 @@ function trackEnabled(track, section) {
 async function applyClassical() {
   readForm();
   const plan = Object.fromEntries(Object.entries(project.classicalPlan).filter(([name, role]) => role && sections.some((section) => section.name === name)));
-  if (!Object.keys(plan).length) throw new Error("Elige en el inspector qué secciones llevan línea clásica (alta, baja o tema).");
-  status("Buscando frases en las partituras de referencia…");
+  if (!Object.keys(plan).length) throw new Error("Choose in the inspector which sections get a classical line (high, low or theme).");
+  status("Looking for phrases in the reference scores…");
   const { abc, report } = await postJson("/hz3/studio/classical", { abc: project.abc, plan });
   project.abc = abc;
   project.classicalReport = report;
   $("abc").value = abc;
   await refreshSections();
   await saveProject();
-  status(`Líneas clásicas: ${report.join(" · ")}`, 1);
+  status(`Classical lines: ${report.join(" · ")}`, 1);
 }
 
 async function arrange() {
   readForm();
-  if (!sections.length) throw new Error("Hacen falta letra y ABC con secciones.");
-  status("El agente está arreglando las armonías…");
+  if (!sections.length) throw new Error("Lyrics and an ABC with sections are needed.");
+  status("The agent is arranging the harmonies…");
   $("arrange").disabled = true;
   try {
     const { plan } = await postJson("/hz3/studio/arrange", {
@@ -1451,9 +1455,9 @@ async function arrange() {
       project.arrangement[section.name] = entry.reason;
     }
     const summary = sections.filter((section) => plan[section.name]?.voices.length)
-      .map((section) => `${section.name}: ${plan[section.name].voices.length} voces`).join(" · ");
+      .map((section) => `${section.name}: ${plan[section.name].voices.length} voices`).join(" · ");
     remember(`Armonías del agente · ${summary || "sin armonías"}`);
-    status(`Arreglo del agente · ${summary || "sin armonías"}`, 1);
+    status(`Agent arrangement · ${summary || "no harmonies"}`, 1);
     draw();
     restartIfPlaying();
   } finally {
@@ -1479,7 +1483,7 @@ async function updateProject(owner, change) {
   await postJson("/hz3/studio/project", stored);
   for (const [id, state] of Object.entries(stored._snapshots ?? {})) snapshotCache.set(id, state);
   await listProjects();
-  status(`«${owner}» actualizado en segundo plano.`, 1);
+  status(`«${owner}» updated in the background.`, 1);
   return false;
 }
 
@@ -1510,16 +1514,16 @@ function connectSocket() {
     const job = data?.prompt_id && pending.get(data.prompt_id);
     if (!job) return;
     if (type === "progress") {
-      status(`${job.labels[data.node] ?? "Procesando"} · ${data.value}/${data.max}`, data.value / data.max);
+      status(`${job.labels[data.node] ?? "Processing"} · ${data.value}/${data.max}`, data.value / data.max);
     } else if (type === "executing" && data.node) {
-      status(`${job.labels[data.node] ?? "Procesando"}…`);
+      status(`${job.labels[data.node] ?? "Processing"}…`);
     } else if (type === "executing") {
       // Sent after the queue stores the history; execution_success comes before it.
       finishJob(data.prompt_id).catch((error) => status(error.message, null, true));
     } else if (type === "execution_error" || type === "execution_interrupted") {
       pending.delete(data.prompt_id);
       setBusy(pending.size > 0);
-      status(type === "execution_error" ? `Error en ${data.node_type}: ${data.exception_message}` : "Trabajo interrumpido.", null, true);
+      status(type === "execution_error" ? `Error in ${data.node_type}: ${data.exception_message}` : "Job interrupted.", null, true);
     }
   };
   socket.onclose = () => setTimeout(connectSocket, 2000);
@@ -1532,14 +1536,14 @@ async function uploadSource(file) {
     }
   const [name] = await addAudios([file], { kind: "source" });
   await useSource(name, { audio: true });
-  status(`Audio «${name}» agregado a la biblioteca y asignado a la canción. Pulsa «Analizar audio».`, 1);
+  status(`Audio «${name}» added to the library and assigned to the song. Press «Analyze audio».`, 1);
 }
 
 // Analyses the open song's audio, or the library audio / song named `owner` without opening it.
 async function analyze(owner = project.name) {
   readForm();
   const target = owner === project.name ? project : await api(`/hz3/studio/project?name=${encodeURIComponent(owner)}`);
-  if (!target.source) throw new Error("Abre primero el audio original.");
+  if (!target.source) throw new Error("Open the source audio first.");
   const lyrics = target.lyrics.trim();
   const prompt = {
     1: { class_type: "LoadAudio", inputs: { audio: target.source.filename } },
@@ -1566,7 +1570,7 @@ async function analyze(owner = project.name) {
   };
   await queue(prompt, ANALYSIS_LABELS, async (outputs) => {
     const text = (node) => outputs[node]?.text?.[0] ?? "";
-    if (!text(12).trim()) throw new Error("El análisis terminó sin ABC.");
+    if (!text(12).trim()) throw new Error("The analysis finished without an ABC.");
     const current = await updateProject(owner, (target) => {
       target.analysis = {
         at: Date.now(), sheetsage_abc: text(13), whisper_lyrics: text(14),
@@ -1574,7 +1578,7 @@ async function analyze(owner = project.name) {
       };
       target.style = text(10);
       target.lyrics = text(11);
-      keepAbcVersion(target, "antes del análisis");
+      keepAbcVersion(target, "before the analysis");
       target.abc = text(12);
     });
     if (!current) return;
@@ -1583,9 +1587,9 @@ async function analyze(owner = project.name) {
     await uniqueSectionNames();
     await saveProject();
     remember("Audio analizado: estilo, letra y ABC nuevos");
-    status("Análisis listo: revisa las secciones en la partitura, la letra y el ABC.", 1);
+    status("Analysis ready: check the sections in the score, the lyrics and the ABC.", 1);
   });
-  status("Análisis en cola…", 0);
+  status("Analysis queued…", 0);
 }
 
 // Before a change that rewrites the score (a composition, an analysis, a reimagining...), the song as it is is
@@ -1638,7 +1642,7 @@ async function sectionToInstrumental(name) {
     });
     group.count = voice.length - group.from;
   }
-  if (!played.some((bar) => bar.moved)) throw new Error(`«${name}» ya no tiene voz cantada.`);
+  if (!played.some((bar) => bar.moved)) throw new Error(`«${name}» no longer has a sung vocal.`);
   // A tie into a silenced voice bar, or between a moved instrument bar and a kept one, would join notes that no
   // longer follow each other: those notes are struck again.
   voice.forEach((bar, index) => {
@@ -1660,13 +1664,13 @@ async function sectionToInstrumental(name) {
   }
   await postJson("/hz3/studio/sections", { abc, lyrics });
   keepSectionOriginal(name, "instrumental");
-  keepAbcVersion(project, `antes de volver instrumental «${name}»`, true);
+  keepAbcVersion(project, `before making «${name}» instrumental`, true);
   project.abc = abc;
   project.lyrics = lyrics;
   writeForm();
   await refreshSections();
   remember(`«${name}» convertida en instrumental (melodía a la línea instrumental, voz en silencio)`);
-  status(`«${name}» es instrumental: su melodía pasó a la línea instrumental. La versión anterior (ABC y letra) quedó en las versiones.`, 1);
+  status(`«${name}» is instrumental: its melody moved to the instrumental line. The previous version (ABC and lyrics) is in the versions.`, 1);
 }
 
 // ---------- history: commits and branches, like git
@@ -1726,28 +1730,32 @@ function ensureHistory(target) {
   target.history = { current: MAIN_BRANCH, branches: {}, commits: {} };
   const now = stateOf(target);
   const imported = [
-    ["versiones guardadas", target.songVersions ?? [], (version) => ({ ...now, ...stateOf({ ...target, ...version }) })],
-    ["versiones borradas", target.deletedSongVersions ?? [], (version) => ({ ...now, ...stateOf({ ...target, ...version }) })],
-    ["ABC anteriores", target.abcVersions ?? [], (version) => ({ ...now, abc: version.abc, lyrics: version.lyrics ?? now.lyrics })],
+    ["saved versions", target.songVersions ?? [], (version) => ({ ...now, ...stateOf({ ...target, ...version }) })],
+    ["deleted versions", target.deletedSongVersions ?? [], (version) => ({ ...now, ...stateOf({ ...target, ...version }) })],
+    ["earlier ABCs", target.abcVersions ?? [], (version) => ({ ...now, abc: version.abc, lyrics: version.lyrics ?? now.lyrics })],
   ];
   for (const [branch, versions, toState] of imported) {
     for (const version of [...versions].sort((a, b) => a.at - b.at)) {
       const { at, label, ...fields } = version;
-      addCommit(target, branch, toState(fields), label || "sin nombre", false, at);
+      addCommit(target, branch, toState(fields), label || "unnamed", false, at);
     }
   }
-  // "Restaurar melodía escrita" read old melodies from the ABC versions: they move into the sections' originals.
-  const prefixes = { free: "antes de liberar la melodía de «", instrumental: "antes de volver instrumental «" };
+  // "Restore written melody" read old melodies from the ABC versions: they move into the sections' originals.
+  // Their labels are [kind, before the name, after the name]; older songs carry the Spanish ones.
+  const patterns = [
+    ["free", "antes de liberar la melodía de «", "»"], ["instrumental", "antes de volver instrumental «", "»"],
+    ["free", "before freeing the melody of «", "»"], ["instrumental", "before making «", "» instrumental"],
+  ];
   for (const version of target.abcVersions ?? []) {
-    for (const [kind, prefix] of Object.entries(prefixes)) {
-      if (!version.label?.startsWith(prefix)) continue;
-      const name = version.label.slice(prefix.length, -1);
+    for (const [kind, prefix, suffix] of patterns) {
+      if (!version.label?.startsWith(prefix) || !version.label.endsWith(suffix)) continue;
+      const name = version.label.slice(prefix.length, version.label.length - suffix.length);
       if (target.sectionOriginals?.[name] !== undefined) continue;
       const lines = version.abc.split("\n");
       target.sectionOriginals = { ...(target.sectionOriginals ?? {}), [name]: { kind, lines: sectionMusicLines(version.abc, name).map((at) => lines[at]), lyrics: null } };
     }
   }
-  addCommit(target, MAIN_BRANCH, stateOf(target), "la canción al pasar a ramas", true);
+  addCommit(target, MAIN_BRANCH, stateOf(target), "the song when it moved to branches", true);
   delete target.songVersions;
   delete target.deletedSongVersions;
   delete target.abcVersions;
@@ -1768,7 +1776,7 @@ function commitSong(target, label, auto = true) {
     if (!auto && label) Object.assign(head, { label, auto: false });
     return null;
   }
-  return addCommit(target, target.history.current, state, label || "cambios", auto);
+  return addCommit(target, target.history.current, state, label || "changes", auto);
 }
 
 function songChanged() {
@@ -1809,47 +1817,47 @@ function branchName(base) {
 // the start of a new branch (the head of a branch just opens it).
 async function openCommit(id) {
   readForm();
-  commitSong(project, "antes de abrir otra versión");
+  commitSong(project, "before opening another version");
   const history = project.history;
   const commit = history.commits[id];
   const owning = Object.entries(history.branches).find(([, branch]) => branch.head === id)?.[0];
   if (owning) {
     history.current = owning;
   } else {
-    const name = branchName(`desde «${commit.label}» ${new Date(commit.at).toLocaleDateString()}`);
+    const name = branchName(`from «${commit.label}» ${new Date(commit.at).toLocaleDateString()}`);
     history.branches[name] = { head: id, created: Date.now(), archived: false };
     history.current = name;
   }
   await loadState(commit.state);
   await saveProject();
-  status(`Abierta «${commit.label}» en la rama «${history.current}». Lo que tenías quedó en su rama.`, 1);
+  status(`Opened «${commit.label}» on the branch «${history.current}». What you had stays on its branch.`, 1);
 }
 
 async function switchBranch(name) {
   readForm();
-  commitSong(project, "antes de cambiar de rama");
+  commitSong(project, "before switching branches");
   project.history.current = name;
   const head = headCommit(project);
   if (head) await loadState(head.state);
   await saveProject();
-  status(`Rama «${name}».`, 1);
+  status(`Branch «${name}».`, 1);
 }
 
 async function newBranch(name) {
   readForm();
-  commitSong(project, "antes de crear una rama");
-  name = branchName(name.trim() || "rama nueva");
+  commitSong(project, "before creating a branch");
+  name = branchName(name.trim() || "new branch");
   project.history.branches[name] = { head: project.history.branches[project.history.current].head, created: Date.now(), archived: false };
   project.history.current = name;
   await saveProject();
-  status(`Rama «${name}» creada desde aquí: lo que cambies ahora va en ella.`, 1);
+  status(`Branch «${name}» created from here: what you change now goes into it.`, 1);
 }
 
 function renameBranch(from, to) {
   const branches = project.history.branches;
   to = to.trim();
   if (!to || to === from) return;
-  if (branches[to]) throw new Error(`Ya hay una rama «${to}».`);
+  if (branches[to]) throw new Error(`There is already a branch «${to}».`);
   branches[to] = branches[from];
   delete branches[from];
   for (const commit of Object.values(project.history.commits)) if (commit.branch === from) commit.branch = to;
@@ -1865,18 +1873,18 @@ function branchCommits(name) {
 }
 
 const STATE_NAMES = {
-  style: "estilo", negativeStyle: "estilo negativo", baseStyle: "estilo base", lora: "LoRA", lyrics: "letra", abc: "ABC",
-  seed: "semilla", sampling: "muestreo", ckpt: "checkpoint", compose: "ajustes de composición", harmonize: "armonías",
-  harmonyVoices: "voces de armonía", sectionSeeds: "semillas de sección", sectionStyles: "estilos de sección",
-  sectionNegatives: "negativos de sección", sectionContexts: "contextos", sectionOnsets: "inicios fijos",
-  sectionSingers: "cantantes", comp: "tomas elegidas", trackOn: "pistas activas", trackSpans: "tramos de armonía",
-  mixer: "mezcla", voices: "voces extra", instruments: "instrumentos", fx: "efectos", sectionOriginals: "melodías originales",
-  classicalPlan: "líneas clásicas", arrangement: "arreglo del agente", styleInstructions: "indicaciones de estilo",
-  source: "audio original", sourceName: "audio original",
+  style: "style", negativeStyle: "negative style", baseStyle: "base style", lora: "LoRA", lyrics: "lyrics", abc: "ABC",
+  seed: "seed", sampling: "sampling", ckpt: "checkpoint", compose: "compose settings", harmonize: "harmonies",
+  harmonyVoices: "harmony voices", sectionSeeds: "section seeds", sectionStyles: "section styles",
+  sectionNegatives: "section negatives", sectionContexts: "contexts", sectionOnsets: "fixed openings",
+  sectionSingers: "singers", comp: "chosen takes", trackOn: "active tracks", trackSpans: "harmony spans",
+  mixer: "mix", voices: "extra voices", instruments: "instruments", fx: "effects", sectionOriginals: "original melodies",
+  classicalPlan: "classical lines", arrangement: "agent arrangement", styleInstructions: "style directions",
+  source: "source audio", sourceName: "source audio",
 };
 
 function stateChanges(before, after) {
-  if (!before) return ["inicio"];
+  if (!before) return ["start"];
   const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
   const changed = [...keys].filter((key) => JSON.stringify(before[key] ?? null) !== JSON.stringify(after[key] ?? null));
   return [...new Set(changed.map((key) => STATE_NAMES[key] ?? key))];
@@ -1894,7 +1902,7 @@ function abcStart(fromSection) {
   const lines = project.abc.split("\n");
   if (fromSection) {
     const marker = lines.findIndex((line) => line.trim().startsWith("% ") && line.trim().slice(2).trim() === fromSection);
-    if (marker < 0) throw new Error(`El ABC no tiene la marca «% ${fromSection}».`);
+    if (marker < 0) throw new Error(`The ABC has no «% ${fromSection}» marker.`);
     return lines.slice(0, marker + 1).join("\n") + "\n";
   }
   const key = lines.findIndex((line) => line.startsWith("K:"));
@@ -1911,14 +1919,14 @@ function spliceSection(abc, composed, name) {
   };
   const old = block(abc);
   const fresh = block(composed);
-  if (fresh.start < 0) throw new Error(`YuE2 no devolvió «${name}».`);
+  if (fresh.start < 0) throw new Error(`YuE2 did not return «${name}».`);
   return [...old.lines.slice(0, old.start), ...fresh.lines.slice(fresh.start, fresh.end), ...old.lines.slice(old.end)].join("\n");
 }
 
 // only: YuE2 composes `fromSection` after the song before it, and the sections after it stay as they are.
 async function compose(fromSection = null, only = false) {
   readForm();
-  if (!project.style.trim() || !project.lyrics.trim()) throw new Error("Escribe estilo y letra con encabezados [Sección] antes de generar el ABC.");
+  if (!project.style.trim() || !project.lyrics.trim()) throw new Error("Write a style and lyrics with [Section] headers before generating the ABC.");
   const { seed, temperature } = project.compose;
   const prompt = {
     1: { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: project.ckpt } },
@@ -1934,19 +1942,19 @@ async function compose(fromSection = null, only = false) {
   const owner = project.name;
   await queue(prompt, COMPOSE_LABELS, async (outputs) => {
     const abc = outputs[3]?.text?.[0] ?? "";
-    if (!abc.trim()) throw new Error("YuE2 no devolvió ABC.");
+    if (!abc.trim()) throw new Error("YuE2 returned no ABC.");
     const replaced = (target) => {
-      keepAbcVersion(target, only ? `antes de recomponer «${fromSection}»` : fromSection ? `antes de recomponer desde «${fromSection}»` : `antes de componer con semilla ${seed}`);
+      keepAbcVersion(target, only ? `before recomposing «${fromSection}»` : fromSection ? `before recomposing from «${fromSection}»` : `before composing with seed ${seed}`);
       target.abc = only ? spliceSection(target.abc, abc, fromSection) : abc;
     };
     if (!await updateProject(owner, replaced)) return;
-    await refreshSections().catch((error) => status(`ABC generado; revisa las secciones: ${error.message}`, null, true));
+    await refreshSections().catch((error) => status(`ABC generated; check the sections: ${error.message}`, null, true));
     await uniqueSectionNames();
     await saveProject();
     remember(only ? `YuE2 recompuso «${fromSection}»` : fromSection ? `YuE2 recompuso el ABC desde «${fromSection}»` : "YuE2 compuso un ABC nuevo");
-    status("ABC generado: revisa las secciones en la partitura.", 1);
+    status("ABC generated: check the sections in the score.", 1);
   });
-  status("Composición en cola…", 0);
+  status("Composition queued…", 0);
 }
 
 const WINDOW_MARGIN = 4;  // seconds rendered around regenerated sections; the comp crossfades inside them
@@ -2021,7 +2029,7 @@ function buildPrompt(prefix, kept) {
 function loraUses() {
   return sections.map((section) => {
     const singer = catalogStyle(project.sectionSingers[section.name]);
-    return singer ? { lora: singer.lora, owner: singer.name } : { lora: project.lora, owner: "el cantante de la canción" };
+    return singer ? { lora: singer.lora, owner: singer.name } : { lora: project.lora, owner: "the song's singer" };
   });
 }
 
@@ -2147,32 +2155,32 @@ async function reimagineAbc() {
   readForm();
   await refreshSections();
   const section = sections.some((item) => item.name === selected) ? selected : null;
-  const action = await choose("Reimaginar ABC", "El ABC anterior queda en las versiones del ABC.", [
-    { value: "chords", label: "Acordes: la melodía queda igual; YuE2 reinventa armonía y arreglo (genera la canción)" },
-    { value: "instrumental", label: "Nuevo instrumental: la voz queda igual en la partitura; se reinventan la línea instrumental y los acordes (genera la canción)" },
-    ...(section ? [{ value: "vary-section", label: `Variar la melodía de «${section}»: cambia algunas notas, mismo ritmo y sílabas (al instante)` }] : []),
-    { value: "vary", label: "Variar la melodía de toda la canción: cambia algunas notas, mismo ritmo y sílabas (al instante)" },
-    ...(section ? [{ value: "section", label: `Recomponer solo «${section}»: YuE2 la compone de nuevo después de lo anterior; lo demás queda igual` }] : []),
+  const action = await choose("Reimagine ABC", "The previous ABC stays in the ABC versions.", [
+    { value: "chords", label: "Chords: the melody stays the same; YuE2 reinvents harmony and arrangement (generates the song)" },
+    { value: "instrumental", label: "New instrumental: the vocal stays the same in the score; the instrumental line and the chords are reinvented (generates the song)" },
+    ...(section ? [{ value: "vary-section", label: `Vary the melody of «${section}»: changes some notes, same rhythm and syllables (instant)` }] : []),
+    { value: "vary", label: "Vary the melody of the whole song: changes some notes, same rhythm and syllables (instant)" },
+    ...(section ? [{ value: "section", label: `Recompose only «${section}»: YuE2 composes it again after what comes before; the rest stays the same` }] : []),
   ]);
   if (!action) return;
   if (action === "chords" || action === "instrumental") return render(null, action);
   if (action === "section") return compose(section, true);
-  const answer = prompt("¿Qué porcentaje de las notas cambiar? (las que cierran cada frase no se tocan)", "20");
+  const answer = prompt("What percentage of the notes should change? (the ones closing each phrase are not touched)", "20");
   if (answer === null) return;
   const amount = Math.min(100, Math.max(0, Number(answer) || 0)) / 100;
   const names = new Set(action === "vary" ? sections.map((item) => item.name) : [section]);
   const { abc, changed } = varyMelody(project.abc, names, amount, project.compose.seed);
   if (!changed) {
-    status("No quedó ninguna nota por variar ahí.", 1);
+    status("No notes left to vary there.", 1);
     return;
   }
-  keepAbcVersion(project, `antes de variar la melodía (${Math.round(amount * 100)} %)`);
+  keepAbcVersion(project, `before varying the melody (${Math.round(amount * 100)} %)`);
   project.abc = abc;
   writeForm();
   await refreshSections();
   await saveProject();
   remember(`Melodía variada (${changed} notas, semilla ${project.compose.seed})${action === "vary" ? "" : ` en «${section}»`}`);
-  status(`${changed} notas variadas. Escúchalas con «▶ Partitura» y regenera las secciones marcadas para cantarlas; 🎲 en «Semilla para componer» da otra variación.`, 1);
+  status(`${changed} notes varied. Listen with «▶ Score» and regenerate the marked sections to sing them; 🎲 next to «Compose seed» gives another variation.`, 1);
   draw();
 }
 
@@ -2208,7 +2216,7 @@ async function render(targets, reimagine = null) {
   readForm();
   ensureName();
   await refreshSections();
-  if (!sections.length) throw new Error("Hacen falta letra y ABC con secciones.");
+  if (!sections.length) throw new Error("Lyrics and an ABC with sections are needed.");
   const id = Math.max(0, ...project.takes.map((take) => take.id)) + 1;
   const take = { id, created: Date.now(), harmonized: project.harmonize, files: {}, sectionLyrics: {}, sectionSeeds: {} };
   if (project.history) take.branch = project.history.current;
@@ -2229,9 +2237,9 @@ async function render(targets, reimagine = null) {
   const kept = reimagine ? {} : await keptTokens(comped);
   const missing = sections.filter((section) => !comped.has(section.name) && !kept[section.name]).map((section) => section.name);
   if (missing.length) {
-    const go = await choose(`También se regenerarían ${missing.length} secciones más`,
-      `No quedan tokens guardados que cubran ${missing.map((name) => `«${name}»`).join(", ")} con sus compases actuales, así que YuE2 las volvería a cantar.`,
-      [{ value: true, label: `Regenerar también esas ${missing.length}` }]);
+    const go = await choose(`${missing.length} more sections would also be regenerated`,
+      `No stored tokens cover ${missing.map((name) => `«${name}»`).join(", ")} with their current bars, so YuE2 would sing them again.`,
+      [{ value: true, label: `Regenerate those ${missing.length} too` }]);
     if (!go) return;
     for (const name of missing) comped.add(name);
   }
@@ -2250,12 +2258,12 @@ async function render(targets, reimagine = null) {
   // on their lanes meanwhile), so the song can be reviewed while they are made.
   const harmonies = project.harmonize ? [...project.harmonyVoices] : [];
   const renderedAbc = project.abc;
-  await queue(prompt, { ...RENDER_LABELS, 31: "SheetSage2 (acordes del render)" }, async (outputs) => {
+  await queue(prompt, { ...RENDER_LABELS, 31: "SheetSage2 (chords of the render)" }, async (outputs) => {
     for (const [node, track] of Object.entries(saves)) {
       const file = outputs[node]?.audio?.[0];
       if (file) take.files[track] = file;
     }
-    if (!take.files.vocals) throw new Error("La generación terminó sin audio.");
+    if (!take.files.vocals) throw new Error("The generation finished without audio.");
     take.sectionTokens = outputs[2]?.section_tokens?.[0] ?? {};
     if (outputs[32]?.text?.[0]) take.heardAbc = outputs[32].text[0];
     // The take's tokens in song order (section renames reorder the keys above).
@@ -2270,7 +2278,7 @@ async function render(targets, reimagine = null) {
     await loadTake(take);
     if (reimagine) {
       const { abc } = await postJson("/hz3/studio/freeze_chords", { abc: melody, transcription: outputs[32]?.text?.[0] ?? "" });
-      keepAbcVersion(project, reimagine === "instrumental" ? "antes de reimaginar el instrumental" : "antes de reimaginar el ABC");
+      keepAbcVersion(project, reimagine === "instrumental" ? "before reimagining the instrumental" : "before reimagining the ABC");
       project.abc = abc;
       writeForm();
       await refreshSections();
@@ -2278,15 +2286,15 @@ async function render(targets, reimagine = null) {
       take.sectionAbc = Object.fromEntries(sections.map((section) => [section.name, section.abc]));
       await saveProject();
       remember(`ABC reimaginado con el take ${take.id}: ${reimagine === "instrumental" ? "línea instrumental vacía, " : ""}acordes congelados, modo full`);
-      status(`Take ${take.id} reimaginado: sus acordes quedaron en el ABC (modo full)${reimagine === "instrumental" ? " y la línea instrumental quedó libre para YuE2" : ""}. «Regenerar» armonías para usarlos.`, 1);
+      status(`Take ${take.id} reimagined: its chords are now in the ABC (full mode)${reimagine === "instrumental" ? " and the instrumental line is left free for YuE2" : ""}. «Regenerate» harmonies to use them.`, 1);
       draw();
       return;
     }
     remember(`Take ${take.id} · ${[...comped].join(", ")}`);
-    status(`Take ${take.id} listo · ${[...comped].join(", ")}${harmonies.length ? " · armonías en proceso…" : ""}`, harmonies.length ? 0 : 1);
+    status(`Take ${take.id} ready · ${[...comped].join(", ")}${harmonies.length ? " · harmonies in progress…" : ""}`, harmonies.length ? 0 : 1);
     draw();
   });
-  status(`Take ${id} en cola…`, 0);
+  status(`Take ${id} queued…`, 0);
 }
 
 // ---------- audio
@@ -2525,7 +2533,7 @@ function drawMeter() {
   $("meter-peak").textContent = loudest > 0 ? `${dbfs(loudest).toFixed(1)} dB` : "−∞";
   // How hard the master limiter is pressing: the mix itself would clip without it.
   const reduction = playback?.limiter.reduction ?? 0;
-  $("meter-limit").textContent = reduction < -0.5 ? `limitador ${reduction.toFixed(1)} dB` : "";
+  $("meter-limit").textContent = reduction < -0.5 ? `limiter ${reduction.toFixed(1)} dB` : "";
   $("meter-limit").classList.toggle("hot", reduction < -6);
   $("meter-clip").classList.toggle("on", clipped);
 }
@@ -2582,22 +2590,22 @@ function updatePlayhead() {
 }
 
 async function exportMix() {
-  if (!duration()) throw new Error("No hay nada que exportar todavía.");
+  if (!duration()) throw new Error("There is nothing to export yet.");
   const sampleRate = 48000;
   const offline = new OfflineAudioContext(2, Math.ceil(duration() * sampleRate), sampleRate);
   buildGraph(offline, offline.destination, 0, 0);
-  status("Exportando mezcla…");
+  status("Exporting mix…");
   const rendered = await offline.startRendering();
   const peak = Math.max(...[...Array(rendered.numberOfChannels).keys()].map((channel) =>
     rendered.getChannelData(channel).reduce((max, value) => Math.max(max, Math.abs(value)), 0)));
   const response = await fetch("/hz3/studio/flac", { method: "POST", body: wav(rendered) });
-  if (!response.ok) throw new Error(`No se pudo codificar el FLAC: ${await response.text()}`);
+  if (!response.ok) throw new Error(`Could not encode the FLAC: ${await response.text()}`);
   const link = document.createElement("a");
   link.href = URL.createObjectURL(await response.blob());
   link.download = `${project.name || "hz3-studio"}.flac`;
   link.click();
   URL.revokeObjectURL(link.href);
-  status(`Mezcla exportada · pico ${dbfs(peak).toFixed(1)} dBFS.`, 1);
+  status(`Mix exported · peak ${dbfs(peak).toFixed(1)} dBFS.`, 1);
 }
 
 function wav(buffer) {
@@ -2702,10 +2710,10 @@ function drawLyrics() {
   const orphans = lyricBlocks(project.lyrics).filter((_, index) => !used.has(index)).map((block) => block.name);
   const head = document.createElement("span");
   head.className = "name";
-  head.textContent = orphans.length ? `Letra · ${orphans.length} sin sección` : "Letra";
+  head.textContent = orphans.length ? `Lyrics · ${orphans.length} without section` : "Lyrics";
   head.title = orphans.length
-    ? `Bloques de la letra sin sección del ABC (YuE2 los recibe igual, en la letra completa): ${orphans.join(", ")}`
-    : "Letra de cada sección: edítala aquí para acomodarla con las secciones del ABC";
+    ? `Lyrics blocks without an ABC section (YuE2 still receives them, in the full lyrics): ${orphans.join(", ")}`
+    : "Lyrics of each section: edit them here to fit them to the ABC sections";
   const { row, body } = lane("lyrics", head);
   // Drag the lane's corner to give the lyric boxes more room; the height is a view preference of this browser.
   try { row.style.height = `${Number(localStorage.getItem("hz3.lyricsHeight")) || 96}px`; } catch { /* default height */ }
@@ -2719,8 +2727,8 @@ function drawLyrics() {
     area.style.left = `${section.start * pxPerSecond}px`;
     area.style.width = `${(section.end - section.start) * pxPerSecond}px`;
     area.value = section.lyrics;
-    area.placeholder = "sin letra";
-    area.title = `${section.name}: ${section.lyrics_index === null ? "sin bloque en la letra (escribe aquí para crearlo)" : "letra de esta sección"}`;
+    area.placeholder = "no lyrics";
+    area.title = `${section.name}: ${section.lyrics_index === null ? "no block in the lyrics (type here to create it)" : "lyrics of this section"}`;
     area.onchange = guard(async () => {
       setSectionLyrics(index, area.value);
       await refreshSections();
@@ -2731,7 +2739,7 @@ function drawLyrics() {
       const arrows = document.createElement("div");
       arrows.className = "lyric-arrows";
       arrows.style.left = `${section.start * pxPerSecond}px`;
-      arrows.innerHTML = `<button data-way="back" title="Pasa la primera línea de «${escapeHtml(section.name)}» a la sección anterior">⇠</button><button data-way="forward" title="Trae la última línea de la sección anterior a «${escapeHtml(section.name)}»">⇢</button>`;
+      arrows.innerHTML = `<button data-way="back" title="Moves the first line of «${escapeHtml(section.name)}» to the previous section">⇠</button><button data-way="forward" title="Brings the last line of the previous section into «${escapeHtml(section.name)}»">⇢</button>`;
       arrows.querySelectorAll("button").forEach((button) => { button.onclick = guard(() => moveLyricLine(index, button.dataset.way)); });
       body.append(arrows);
     }
@@ -2744,7 +2752,7 @@ async function moveLyricLine(index, way) {
   const [earlier, later] = [sections[index - 1].lyrics.split("\n"), sections[index].lyrics.split("\n")];
   const source = way === "back" ? later : earlier;
   const at = way === "back" ? source.findIndex((line) => line.trim()) : source.findLastIndex((line) => line.trim());
-  if (at < 0) throw new Error("No hay líneas que mover en esa sección.");
+  if (at < 0) throw new Error("There are no lines to move in that section.");
   const [line] = source.splice(at, 1);
   if (way === "back") earlier.push(line);
   else later.unshift(line);
@@ -2760,8 +2768,8 @@ let harmoniesCollapsed = (() => { try { return localStorage.getItem("hz3.harmoni
 
 function drawHarmonyHeader() {
   const head = document.createElement("div");
-  head.innerHTML = `<span class="name link">${harmoniesCollapsed ? "▸" : "▾"} Armonías · ${project.harmonyVoices.length}/${VOICES.length}</span>
-    <span class="controls"><button data-action="regenerate" title="Vuelve a armonizar la voz principal de los takes que suenan, solo para las armonías marcadas, sin renderizar la canción">Regenerar</button></span>`;
+  head.innerHTML = `<span class="name link">${harmoniesCollapsed ? "▸" : "▾"} Harmonies · ${project.harmonyVoices.length}/${VOICES.length}</span>
+    <span class="controls"><button data-action="regenerate" title="Harmonizes the lead vocal of the playing takes again, only for the checked harmonies, without rendering the song">Regenerate</button></span>`;
   head.querySelector(".name").onclick = () => {
     harmoniesCollapsed = !harmoniesCollapsed;
     try { localStorage.setItem("hz3.harmoniesCollapsed", harmoniesCollapsed ? "1" : "0"); } catch { /* the fold is only a convenience */ }
@@ -2774,11 +2782,11 @@ function drawHarmonyHeader() {
 // Harmonies come from the lead vocal alone, so they are rebuilt from each playing take's vocals.
 async function regenerateHarmonies() {
   readForm();
-  if (!project.harmonyVoices.length) throw new Error("Marca primero qué armonías generar.");
+  if (!project.harmonyVoices.length) throw new Error("First check which harmonies to generate.");
   const takes = [...new Set(Object.values(project.comp))].map(takeById).filter((take) => take?.files.vocals);
-  if (!takes.length) throw new Error("Todavía no hay takes con voz principal.");
+  if (!takes.length) throw new Error("There are no takes with a lead vocal yet.");
   for (const take of takes) await harmonizeTake(take, project.name, project.harmonyVoices, project.abc);
-  status(`Armonías en cola para ${takes.length} take(s).`, 0);
+  status(`Harmonies queued for ${takes.length} take(s).`, 0);
 }
 
 // Queues the harmonies of one take from its saved lead vocal, on the score it was rendered from.
@@ -2801,7 +2809,7 @@ async function harmonizeTake(take, owner, voices, abc) {
     prompt[3 + index] = { class_type: "SaveAudio", inputs: { audio: ["2", index], filename_prefix: `HZ3-Studio/${owner}/take-${take.id}/${voice}` } };
     saves[3 + index] = voice;
   });
-  await queue(prompt, { 2: `Armonías del take ${take.id}`, 22: "SheetSage2 (acordes del take)" }, async (outputs) => {
+  await queue(prompt, { 2: `Harmonies of take ${take.id}`, 22: "SheetSage2 (chords of the take)" }, async (outputs) => {
     const files = Object.fromEntries(Object.entries(saves).map(([node, voice]) => [voice, outputs[node]?.audio?.[0]]).filter(([, file]) => file));
     const current = await updateProject(owner, (target) => {
       const stored = target.takes.find((item) => item.id === take.id);
@@ -2812,14 +2820,14 @@ async function harmonizeTake(take, owner, voices, abc) {
     if (!current) return;
     await loadTake(takeById(take.id));
     remember(`Armonías del take ${take.id}: ${Object.keys(files).join(", ")}`);
-    status(`Armonías del take ${take.id} listas.`, 1);
+    status(`Harmonies of take ${take.id} ready.`, 1);
     draw();
     restartIfPlaying();
   });
 }
 
 function drawSections() {
-  const { body } = lane("sections", "Secciones");
+  const { body } = lane("sections", "Sections");
   sections.forEach((section, index) => {
     const block = document.createElement("div");
     block.className = `section-block${section.name === selected ? " selected" : ""}`;
@@ -2831,14 +2839,14 @@ function drawSections() {
     const takeId = project.comp[section.name];
     if (takeId) block.insertAdjacentHTML("beforeend", `<span class="take">T${takeId}</span>`);
     const parts = editedParts(section, index);
-    if (parts.length) block.insertAdjacentHTML("beforeend", `<span class="edited" title="${escapeHtml(`La ${parts.join(", ")} de esta sección no es la que cantó el take ${project.comp[section.name]}: «Regenerar sección» la canta así. Si solo corregiste el texto, puedes dejarla.`)}">editado: ${parts.join(", ")}</span>`);
+    if (parts.length) block.insertAdjacentHTML("beforeend", `<span class="edited" title="${escapeHtml(`The ${parts.join(", ")} of this section is not what take ${project.comp[section.name]} sang: «Regenerate section» sings it this way. If you only corrected the text, you can leave it.`)}">edited: ${parts.join(", ")}</span>`);
     const fit = melodyFit(section);
     if (fit) block.insertAdjacentHTML("beforeend", `<span class="edited" title="${escapeHtml(fit.title)}">${fit.label}</span>`);
     block.onclick = () => { selected = section.name; selectedVoice = null; selectedTrack = null; draw(); };
     if (index > 0 && score) {
       const handle = document.createElement("div");
       handle.className = "handle";
-      handle.title = "Arrastra para mover el inicio de la sección (se ajusta al compás)";
+      handle.title = "Drag to move the start of the section (snaps to the bar)";
       handle.onmousedown = (event) => { event.preventDefault(); event.stopPropagation(); dragBoundary(index, body); };
       block.append(handle);
     }
@@ -2852,10 +2860,10 @@ function melodyFit(section) {
   const { notes, syllables } = section;
   if (!notes || !syllables) return null;
   if (syllables > notes + 2) {
-    return { label: `faltan ${syllables - notes} notas`, title: `${notes} notas para unas ${syllables} sílabas: lo que no cabe se canta sobre la melodía de la sección siguiente. Dale más compases o notas, acorta la letra o déjala en melodía libre.` };
+    return { label: `${syllables - notes} notes short`, title: `${notes} notes for about ${syllables} syllables: what does not fit is sung over the next section's melody. Give it more bars or notes, shorten the lyrics or leave it as free melody.` };
   }
   if (notes > syllables * 1.25 + 4) {
-    return { label: `sobran ${notes - syllables} notas`, title: `${notes} notas para unas ${syllables} sílabas: en las notas que sobran YuE2 alarga vocales o inventa palabras.` };
+    return { label: `${notes - syllables} notes over`, title: `${notes} notes for about ${syllables} syllables: on the spare notes YuE2 stretches vowels or invents words.` };
   }
   return null;
 }
@@ -2872,7 +2880,7 @@ function dragBoundary(index, body) {
     const seconds = (event.clientX - body.getBoundingClientRect().left) / pxPerSecond;
     bar = Math.min(high, Math.max(low, nearestBar(seconds)));
     line.style.left = `${headWidth() + barSeconds(bar) * pxPerSecond}px`;
-    status(`«${edited[index].name}» empezará en el compás ${bar + 1} · ${fmt(barSeconds(bar))}`);
+    status(`«${edited[index].name}» will start at bar ${bar + 1} · ${fmt(barSeconds(bar))}`);
   };
   const up = () => {
     window.removeEventListener("mousemove", move);
@@ -2889,9 +2897,9 @@ function dragBoundary(index, body) {
 
 function drawScore() {
   const head = document.createElement("div");
-  head.innerHTML = `<span class="name">Partitura · ${score.key} · ${score.bpm} BPM</span><span class="controls">
-    <button id="score-lane-play" title="Reproducir / pausar la partitura desde su cursor (clic en la pista para moverlo)">${scorePlayback ? "❚❚" : "▶"}</button>
-    <button id="score-lane-stop" title="Detener y volver al punto marcado">■</button></span>`;
+  head.innerHTML = `<span class="name">Score · ${score.key} · ${score.bpm} BPM</span><span class="controls">
+    <button id="score-lane-play" title="Play / pause the score from its cursor (click the lane to move it)">${scorePlayback ? "❚❚" : "▶"}</button>
+    <button id="score-lane-stop" title="Stop and go back to the marked point">■</button></span>`;
   head.querySelector("#score-lane-play").onclick = guard(async () => {
     if (scorePlayback) return pauseScore();
     await context().resume();
@@ -2947,18 +2955,18 @@ function drawScore() {
 
 function drawTrack(track) {
   const head = document.createElement("div");
-  const generate = track.harmony ? `<label class="generate" title="Generar esta armonía en los renders y al regenerar"><input type="checkbox"${project.harmonyVoices.includes(track.id) ? " checked" : ""}> generar</label>` : "";
+  const generate = track.harmony ? `<label class="generate" title="Generate this harmony in renders and when regenerating"><input type="checkbox"${project.harmonyVoices.includes(track.id) ? " checked" : ""}> generate</label>` : "";
   const singer = track.voice && catalogStyle(track.voice.singer);
   const who = track.voice ? (singer ? `${singer.name} · ${singerCue(singer)}` : track.voice.style.split("\n").filter((line) => line.trim()).at(-1) ?? "") : "";
   const inProgress = project.takes.some((take) => take.pending?.includes(track.id));
-  head.innerHTML = `<span class="name">${escapeHtml(track.name)}</span>${inProgress ? `<span class="who">en proceso…</span>` : ""}${who ? `<span class="who" title="${escapeHtml(who)}">${escapeHtml(who)}</span>` : ""}${generate}<span class="controls">
-    <button data-action="mute" class="${muted(track) ? "active" : ""}" title="Silenciar">M</button>
+  head.innerHTML = `<span class="name">${escapeHtml(track.name)}</span>${inProgress ? `<span class="who">in progress…</span>` : ""}${who ? `<span class="who" title="${escapeHtml(who)}">${escapeHtml(who)}</span>` : ""}${generate}<span class="controls">
+    <button data-action="mute" class="${muted(track) ? "active" : ""}" title="Mute">M</button>
     <button data-action="solo" class="${project.mixer[track.id]?.solo ? "active" : ""}" title="Solo">S</button>
-    <input type="range" min="0" max="1.5" step="0.01" value="${project.mixer[track.id]?.gain ?? track.gain}" title="Volumen"></span>`;
+    <input type="range" min="0" max="1.5" step="0.01" value="${project.mixer[track.id]?.gain ?? track.gain}" title="Volume"></span>`;
   if (!track.voice) {
     const name = head.querySelector(".name");
     name.classList.add("link");
-    name.title = "Volumen, paneo, efectos y ajustes de esta pista";
+    name.title = "Volume, pan, effects and settings of this track";
     name.onclick = () => { selectedTrack = track.id; selected = null; selectedVoice = null; draw(); };
   }
   head.querySelector(".generate input")?.addEventListener("change", (event) => {
@@ -3011,7 +3019,7 @@ function drawTrack(track) {
     const voice = track.voice;
     const name = head.querySelector(".name");
     name.classList.add("link");
-    name.title = "Editar, generar o alinear esta voz";
+    name.title = "Edit, generate or align this voice";
     name.onclick = () => { selectedVoice = voice.id; selected = null; selectedTrack = null; draw(); };
     const entry = voice.file && buffers.get(fileUrl(voice.file));
     for (const section of sections) {
@@ -3022,7 +3030,7 @@ function drawTrack(track) {
       toggle.className = `toggle${enabled ? "" : " off"}`;
       toggle.style.left = `${section.start * pxPerSecond}px`;
       toggle.style.width = `${(section.end - section.start) * pxPerSecond}px`;
-      toggle.title = `${voice.name} · ${section.name}: ${enabled ? "encendida" : "apagada"} (clic para cambiar)`;
+      toggle.title = `${voice.name} · ${section.name}: ${enabled ? "on" : "off"} (click to toggle)`;
       toggle.onclick = () => {
         voice.on[section.name] = !enabled;
         draw();
@@ -3041,7 +3049,7 @@ function drawTrack(track) {
     toggle.className = `toggle${enabled ? "" : " off"}`;
     toggle.style.left = `${section.start * pxPerSecond}px`;
     toggle.style.width = `${(section.end - section.start) * pxPerSecond}px`;
-    toggle.title = `${track.name} · ${section.name}: ${enabled ? "encendido" : "apagado"} (clic para cambiar)`;
+    toggle.title = `${track.name} · ${section.name}: ${enabled ? "on" : "off"} (click to toggle)`;
     toggle.onclick = () => {
       if (body.dataset.dragged) return;
       (project.trackOn[track.id] ??= {})[section.name] = !enabled;
@@ -3065,7 +3073,7 @@ function drawTrackSpans(track, body) {
     block.className = `span${span.on ? " on" : " off"}`;
     block.style.left = `${span.start * pxPerSecond}px`;
     block.style.width = `${(span.end - span.start) * pxPerSecond}px`;
-    block.title = `${track.name} ${span.on ? "encendido" : "apagado"} de ${fmt(span.start)} a ${fmt(span.end)} (clic para quitar)`;
+    block.title = `${track.name} ${span.on ? "on" : "off"} from ${fmt(span.start)} to ${fmt(span.end)} (click to remove)`;
     block.onclick = (event) => {
       event.stopPropagation();
       spans.splice(spans.indexOf(span), 1);
@@ -3163,8 +3171,8 @@ function haltScore() {
   scorePlayback.sources.forEach((source) => source.stop());
   clearTimeout(scorePlayback.timer);
   scorePlayback = null;
-  $("score-play").textContent = "♪ Partitura";
-  $("section-score-play").textContent = "▶ Partitura";
+  $("score-play").textContent = "♪ Score";
+  $("section-score-play").textContent = "▶ Score";
   if ($("score-lane-play")) $("score-lane-play").textContent = "▶";
 }
 
@@ -3192,7 +3200,7 @@ function updateScoreCursor() {
   if (scorePlayback) requestAnimationFrame(updateScoreCursor);
 }
 
-function playScore(fromTick, toTick, button, playingLabel = "■ Detener") {
+function playScore(fromTick, toTick, button, playingLabel = "■ Stop") {
   haltScore();
   const target = context();
   const begin = target.currentTime + 0.05;
@@ -3242,9 +3250,9 @@ function drawInspector() {
   $("inspector").classList.toggle("hidden", index < 0);
   if (index < 0) return;
   const section = sections[index];
-  $("inspector-title").textContent = `${section.name} · ${fmt(section.start)}–${fmt(section.end)} · ${section.bars} compases · ` +
-    (section.notes ? `${section.notes} notas, ~${section.syllables} sílabas` : "melodía libre");
-  $("section-arrangement").textContent = project.arrangement[section.name] ? `Agente: ${project.arrangement[section.name]}` : "";
+  $("inspector-title").textContent = `${section.name} · ${fmt(section.start)}–${fmt(section.end)} · ${section.bars} bars · ` +
+    (section.notes ? `${section.notes} notes, ~${section.syllables} syllables` : "free melody");
+  $("section-arrangement").textContent = project.arrangement[section.name] ? `Agent: ${project.arrangement[section.name]}` : "";
   if (document.activeElement !== $("section-name")) $("section-name").value = section.name;
   if (document.activeElement !== $("section-lyrics")) $("section-lyrics").value = section.lyrics;
   const ownStyle = project.sectionStyles[section.name];
@@ -3252,11 +3260,11 @@ function drawInspector() {
     styleDraft = null;
     $("section-style").value = ownStyle ?? defaultSectionStyle(section);
   }
-  $("section-style-label").textContent = ownStyle ? "Estilo de la sección (propio)" : "Estilo de la sección (el general; se actualiza solo)";
+  $("section-style-label").textContent = ownStyle ? "Section style (its own)" : "Section style (the global one; updates itself)";
   $("section-style-save").disabled = $("section-style-undo").disabled = !styleDraft;
   $("section-style-original").disabled = !ownStyle && !styleDraft;
   $("section-negative").value = project.sectionNegatives[section.name] ?? "";
-  $("section-negative").placeholder = project.negativeStyle.trim() || "sin negativo";
+  $("section-negative").placeholder = project.negativeStyle.trim() || "no negative";
   const lead = project.sectionContexts?.[section.name];
   if (document.activeElement !== $("section-context")) $("section-context").value = lead ? contextLabel(lead) : "";
   $("section-classical").value = project.classicalPlan[section.name] ?? "";
@@ -3266,15 +3274,15 @@ function drawInspector() {
   $("section-merge").disabled = index === sections.length - 1;
   const original = sectionOriginal(section.name);
   $("section-restore").classList.toggle("hidden", !original);
-  $("section-restore").textContent = original?.kind === "instrumental" ? "Restaurar voz y letra" : "Restaurar melodía escrita";
+  $("section-restore").textContent = original?.kind === "instrumental" ? "Restore vocal and lyrics" : "Restore written melody";
   $("section-earlier").disabled = $("section-later").disabled = index === 0;
   const takes = $("section-takes");
-  takes.innerHTML = project.takes.length ? "<span>Take de esta sección</span>" : "<span>Sin takes todavía.</span>";
+  takes.innerHTML = project.takes.length ? "<span>Take of this section</span>" : "<span>No takes yet.</span>";
   for (const take of project.takes) {
     const label = document.createElement("label");
-    const changed = (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim() ? " · otra letra" : "";
+    const changed = (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim() ? " · other lyrics" : "";
     label.innerHTML = `<input type="radio" name="take" ${project.comp[section.name] === take.id ? "checked" : ""}>
-      T${take.id} · semilla ${take.sectionSeeds[section.name]}${changed}`;
+      T${take.id} · seed ${take.sectionSeeds[section.name]}${changed}`;
     label.querySelector("input").onchange = () => {
       project.comp[section.name] = take.id;
       draw();
@@ -3288,7 +3296,7 @@ async function renameSection(name) {
   const index = sections.findIndex((section) => section.name === selected);
   name = name.replace(/[\r\n[\]]+/g, " ").trim();
   if (!name || name === selected) return;
-  if (sections.some((section) => section.name === name)) throw new Error(`Ya existe una sección «${name}».`);
+  if (sections.some((section) => section.name === name)) throw new Error(`A section «${name}» already exists.`);
   const edited = editableSections();
   edited[index].name = name;
   const from = selected;
@@ -3301,7 +3309,7 @@ async function splitSection() {
   const edited = editableSections();
   const bar = nearestBar(position());
   if (bar <= edited[index].start_bar || bar > edited[index].end_bar) {
-    throw new Error("Pon el cursor dentro de la sección, en el compás donde debe empezar la nueva.");
+    throw new Error("Put the cursor inside the section, on the bar where the new one should start.");
   }
   let name = `${edited[index].name} b`;
   while (sections.some((section) => section.name === name)) name += "b";
@@ -3318,10 +3326,10 @@ async function splitSection() {
 
 async function moveSectionStart(bars) {
   const index = sections.findIndex((section) => section.name === selected);
-  if (index < 1) throw new Error("La primera sección empieza siempre en el compás 1.");
+  if (index < 1) throw new Error("The first section always starts at bar 1.");
   const edited = editableSections();
   const start = edited[index].start_bar + bars;
-  if (start <= edited[index - 1].start_bar || start > edited[index].end_bar) throw new Error("No hay compases suficientes para mover ese límite.");
+  if (start <= edited[index - 1].start_bar || start > edited[index].end_bar) throw new Error("There are not enough bars to move that boundary.");
   edited[index].start_bar = start;
   edited[index - 1].end_bar = start - 1;
   await applySections(edited);
@@ -3333,14 +3341,14 @@ async function mergeSection() {
   const describe = (section) => {
     const style = project.sectionStyles[section.name];
     const singer = catalogStyle(project.sectionSingers[section.name]);
-    return `estilo ${style ? `propio («${style.split("\n").at(-1).slice(0, 50)}»)` : "general"} · ${singer ? `canta ${singer.name}` : songSingerLabel().toLowerCase()}`;
+    return `${style ? `own style («${style.split("\n").at(-1).slice(0, 50)}»)` : "global style"} · ${singer ? `sung by ${singer.name}` : songSingerLabel().toLowerCase()}`;
   };
   // The merged section can only sing one style and one singer.
   let keep = first;
   if ((project.sectionStyles[first.name] ?? "") !== (project.sectionStyles[second.name] ?? "")
       || (project.sectionSingers[first.name] ?? null) !== (project.sectionSingers[second.name] ?? null)) {
-    keep = await choose(`Unir «${first.name}» y «${second.name}»`,
-      "Tienen distinto estilo o cantante, y la sección unida solo puede tener uno. ¿Con cuál se queda?",
+    keep = await choose(`Merge «${first.name}» and «${second.name}»`,
+      "They have a different style or singer, and the merged section can only have one. Which one does it keep?",
       [{ value: first, label: `«${first.name}»: ${describe(first)}` }, { value: second, label: `«${second.name}»: ${describe(second)}` }]);
     if (!keep) return;
   }
@@ -3368,7 +3376,7 @@ function choose(title, text, options) {
       button.textContent = label;
       button.onclick = () => answer(value);
       return button;
-    }), Object.assign(document.createElement("button"), { textContent: "Cancelar", onclick: () => answer(null) }));
+    }), Object.assign(document.createElement("button"), { textContent: "Cancel", onclick: () => answer(null) }));
     dialog.onclose = () => resolve(null);
     dialog.showModal();
   });
@@ -3396,7 +3404,7 @@ function askText(title, text, value) {
 let historyBranch = null;
 
 async function openHistory() {
-  if (!savedName) throw new Error("Guarda primero la canción: su historial empieza con el primer guardado.");
+  if (!savedName) throw new Error("Save the song first: its history starts with the first save.");
   readForm();
   ensureHistory(project);
   historyBranch = project.history.current;
@@ -3411,10 +3419,10 @@ async function drawHistory() {
   const names = branchOrder(history).filter((name) => showArchived || !history.branches[name].archived || name === historyBranch);
   $("history-branch").innerHTML = names.map((name) => {
     const branch = history.branches[name];
-    const tags = [name === history.current ? "en uso" : "", branch.archived ? "archivada" : ""].filter(Boolean).join(", ");
+    const tags = [name === history.current ? "in use" : "", branch.archived ? "archived" : ""].filter(Boolean).join(", ");
     return `<option value="${escapeHtml(name)}"${name === historyBranch ? " selected" : ""}>${escapeHtml(name)}${tags ? ` (${tags})` : ""}</option>`;
   }).join("");
-  $("history-archive-branch").textContent = history.branches[historyBranch]?.archived ? "Desarchivar rama" : "Archivar rama";
+  $("history-archive-branch").textContent = history.branches[historyBranch]?.archived ? "Unarchive branch" : "Archive branch";
   $("history-archive-branch").disabled = historyBranch === history.current;
   const heads = {};
   for (const [name, branch] of Object.entries(history.branches)) (heads[branch.head] ??= []).push(name);
@@ -3422,25 +3430,25 @@ async function drawHistory() {
   const unsaved = historyBranch === history.current && headCommit(project)?.state !== current;
   const rows = branchCommits(historyBranch);
   $("history-rows").replaceChildren(...(unsaved ? [Object.assign(document.createElement("div"), {
-    className: "history-row current", textContent: "Ahora: cambios todavía sin guardar (se guardan solos al cambiar de rama o de canción).",
+    className: "history-row current", textContent: "Now: changes not saved yet (they save themselves when you switch branch or song).",
   })] : []), ...rows.map(([id, commit]) => {
     const row = document.createElement("div");
     row.className = "history-row" + (commit.state === current ? " current" : "");
     const branches = (heads[id] ?? []).map((name) => `<span class="chip">${escapeHtml(name)}</span>`).join(" ");
     row.innerHTML = `<div class="history-head"><span class="history-date">${new Date(commit.at).toLocaleString()}</span>
-      <input class="history-label" maxlength="80" value="${escapeHtml(commit.label)}" title="Nombre de este punto; cámbialo para encontrarlo después">
-      ${commit.auto ? '<span class="note">automático</span>' : ""} ${branches}
-      ${commit.branch !== historyBranch ? `<span class="note">de la rama «${escapeHtml(commit.branch)}»</span>` : ""}</div>
+      <input class="history-label" maxlength="80" value="${escapeHtml(commit.label)}" title="Name of this point; change it to find it later">
+      ${commit.auto ? '<span class="note">automatic</span>' : ""} ${branches}
+      ${commit.branch !== historyBranch ? `<span class="note">from the branch «${escapeHtml(commit.branch)}»</span>` : ""}</div>
       <div class="history-changes note">…</div>
-      <div class="row"><button data-action="open">${commit.state === current ? "Es lo que tienes abierto" : "Abrir"}</button>
-      <button data-action="compare">Comparar con lo actual</button></div>`;
+      <div class="row"><button data-action="open">${commit.state === current ? "This is what you have open" : "Open"}</button>
+      <button data-action="compare">Compare with current</button></div>`;
     const open = row.querySelector('[data-action="open"]');
     open.disabled = commit.state === current;
     open.onclick = guard(async () => { await openCommit(id); historyBranch = project.history.current; await drawHistory(); });
     row.querySelector('[data-action="compare"]').onclick = guard(async () => {
       const changes = stateChanges(await snapshot(commit.state), stateOf(project));
       row.querySelector(".history-changes").textContent = changes.length
-        ? `Lo actual cambia respecto a este punto en: ${changes.join(", ")}.` : "Lo actual es igual a este punto.";
+        ? `The current state differs from this point in: ${changes.join(", ")}.` : "The current state is the same as this point.";
     });
     row.querySelector(".history-label").onchange = guard(async (event) => {
       commit.label = event.target.value.trim() || commit.label;
@@ -3457,7 +3465,7 @@ async function drawHistory() {
     try {
       const parent = history.commits[commit.parent];
       const changes = stateChanges(parent ? await snapshot(parent.state) : null, await snapshot(commit.state));
-      box.textContent = changes[0] === "inicio" ? "Primer punto." : changes.length ? `Cambió: ${changes.join(", ")}.` : "Sin cambios en la canción (solo el nombre).";
+      box.textContent = changes[0] === "start" ? "First point." : changes.length ? `Changed: ${changes.join(", ")}.` : "No changes to the song (only the name).";
     } catch {
       box.textContent = "";
     }
@@ -3475,7 +3483,7 @@ function addVoice() {
   const id = Math.max(0, ...project.voices.map((voice) => voice.id)) + 1;
   const global = project.style.split("\n").find((line) => line.trim() && !line.trim().startsWith("[")) ?? "";
   project.voices.push({
-    id, name: `Voz ${id + 1}`, source: "lead", octave: 0, role: "-4", seed: project.seed + 1000 * id,
+    id, name: `Voice ${id + 1}`, source: "lead", octave: 0, role: "-4", seed: project.seed + 1000 * id,
     style: `${global.trim()}\nSpanish female soprano lead vocal, clear and bright`.trim(),
     singer: null, file: null, offset: 0, sectionOffsets: {}, on: {},
   });
@@ -3525,21 +3533,21 @@ async function renderVoice(voice) {
     };
   }
   const owner = project.name;
-  await queue(prompt, { ...RENDER_LABELS, 2: `Tokens YuE2 (${voice.name})`, 20: "Línea de armonía" }, async (outputs) => {
+  await queue(prompt, { ...RENDER_LABELS, 2: `YuE2 tokens (${voice.name})`, 20: "Harmony line" }, async (outputs) => {
     const file = outputs[8]?.audio?.[0];
-    if (!file) throw new Error("La voz terminó sin audio.");
+    if (!file) throw new Error("The voice finished without audio.");
     const current = await updateProject(owner, (target) => {
       const stored = target.voices.find((item) => item.id === voice.id);
       if (stored) Object.assign(stored, { file, mixFile: outputs[9]?.audio?.[0] ?? null });
     });
-    if (!current) return;  // aligned when that project is open again ("Alinear con la voz principal")
+    if (!current) return;  // aligned when that project is open again ("Align with the lead vocal")
     await loadUrl(fileUrl(file));
     await alignVoice(project.voices.find((item) => item.id === voice.id));
     await saveProject();
     remember(`${voice.name} generada y alineada`);
     draw();
   });
-  status(`${voice.name} en cola…`, 0);
+  status(`${voice.name} queued…`, 0);
 }
 
 function interpolate(x, xs, ys) {
@@ -3582,8 +3590,8 @@ async function lineWarp(file, line) {
 
 async function alignVoice(voice) {
   // Lead and voice are each mapped onto the score by pitch; their difference is the shift.
-  if (!voice.file) throw new Error("Genera la voz antes de alinearla.");
-  status(`Alineando ${voice.name} con la voz principal…`);
+  if (!voice.file) throw new Error("Generate the voice before aligning it.");
+  status(`Aligning ${voice.name} with the lead vocal…`);
   for (const take of new Set(Object.values(project.comp).map(takeById))) {
     if (take?.files.vocals && !take.warp) take.warp = await lineWarp(take.files.vocals, "lead");
   }
@@ -3622,7 +3630,7 @@ async function alignVoice(voice) {
   voice.offset = values.length ? values[Math.floor(values.length / 2)] : 0;
   voice.sectionOffsets = Object.fromEntries(Object.entries(shifts).map(([name, shift]) => [name, shift - voice.offset]));
   levelVoice(voice, buffers.get(fileUrl(voice.file)));
-  status(`${voice.name} alineada: ${Math.round(voice.offset * 1000)} ms global · nivel ${voice.role} dB respecto a la principal.`, 1);
+  status(`${voice.name} aligned: ${Math.round(voice.offset * 1000)} ms global · level ${voice.role} dB relative to the lead.`, 1);
   draw();
   restartIfPlaying();
 }
@@ -3665,14 +3673,14 @@ function drawVoiceInspector() {
   const voice = selectedVoiceEntry();
   $("voice-inspector").classList.toggle("hidden", !voice);
   if (!voice) return;
-  $("voice-title").textContent = `${voice.name}${voice.file ? "" : " · sin generar"}`;
+  $("voice-title").textContent = `${voice.name}${voice.file ? "" : " · not generated"}`;
   for (const [id, key] of [["voice-name", "name"], ["voice-source", "source"], ["voice-octave", "octave"], ["voice-role", "role"], ["voice-style", "style"], ["voice-seed", "seed"]]) {
     if (document.activeElement !== $(id)) $(id).value = voice[key];
   }
   if (document.activeElement !== $("voice-offset")) $("voice-offset").value = Math.round(voice.offset * 1000);
-  $("voice-singer").innerHTML = styleOptions(["singer"], "— (sin cantante del catálogo)", voice.singer);
+  $("voice-singer").innerHTML = styleOptions(["singer"], "— (no catalog singer)", voice.singer);
   const list = $("voice-sections");
-  list.innerHTML = "<span>Ajuste fino por sección (ms)</span>";
+  list.innerHTML = "<span>Fine adjustment per section (ms)</span>";
   for (const section of sections.filter((item) => voiceEnabled(voice, item))) {
     const label = document.createElement("label");
     label.innerHTML = `${section.name} <input type="number" step="10" value="${Math.round((voice.sectionOffsets[section.name] ?? 0) * 1000)}">`;
@@ -3729,10 +3737,10 @@ async function importReferences(files, license) {
       reference.analysis = { at: Date.now(), sheetsage_abc: text(13), sheetsage_report: text(14) };
       await postJson("/hz3/studio/project", reference);
       await listProjects();
-      status(`Referencia «${name}» analizada.`, 1);
+      status(`Reference «${name}» analyzed.`, 1);
     });
   }
-  status(`${files.length} referencias en cola para análisis.`, 0);
+  status(`${files.length} references queued for analysis.`, 0);
 }
 
 // ---------- projects (.mixmash packages)
@@ -3745,15 +3753,15 @@ const currentName = (name) => { while (renamedTo[name] && renamedTo[name] !== na
 // Songs are renamed in the catalog; a song without a name yet asks for one when you save or render it.
 function ensureName() {
   if (project.name) return;
-  const name = (prompt("Nombre de la canción") ?? "").trim();
-  if (!name) throw new Error("La canción necesita un nombre para guardarse.");
+  const name = (prompt("Song name") ?? "").trim();
+  if (!name) throw new Error("The song needs a name to be saved.");
   project.name = name;
 }
 
 // Every save is a commit on the song's current branch (when something changed); `label` names it.
 async function saveProject(label = null) {
   readForm();
-  if (!project.name) throw new Error("Ponle nombre al proyecto.");
+  if (!project.name) throw new Error("Give the song a name.");
   if (!savedName) {
     // A song never saved must not take the name of another one: saving would overwrite it.
     const { projects } = await api("/hz3/studio/projects");
@@ -3761,7 +3769,7 @@ async function saveProject(label = null) {
     if (taken) {
       const name = project.name;
       project.name = "";
-      throw new Error(`Ya existe una canción llamada «${taken.name}». Elige otro nombre para «${name}».`);
+      throw new Error(`A song called «${taken.name}» already exists. Choose another name for «${name}».`);
     }
   }
   // A new name on an opened project renames its package instead of copying it.
@@ -3778,12 +3786,12 @@ async function saveProject(label = null) {
   }
   project.styles = referencedStyles();
   dropStaleSections();
-  commitSong(project, label ?? "cambios guardados", !label);
+  commitSong(project, label ?? "saved changes", !label);
   await postJson("/hz3/studio/project", project);
   delete project._snapshots;
   savedName = project.name;
   await listProjects();
-  status(`Proyecto «${project.name}» guardado.`, 1);
+  status(`Song «${project.name}» saved.`, 1);
 }
 
 async function listProjects() {
@@ -3791,10 +3799,10 @@ async function listProjects() {
   catalog = projects;
   // Only the browsed album's songs; archived ones stay out of the quick list (unless open), the catalog shows them.
   const songs = projects.filter((entry) => entry.album === browseAlbum).filter((entry) => entry.kind !== "source" && (!entry.archived || entry.name === project.name));
-  $("project-list").innerHTML = `<option value="">— ${songs.length} canciones —</option><option value="${NEW_SONG}">+ Canción nueva</option>`
+  $("project-list").innerHTML = `<option value="">— ${songs.length} songs —</option><option value="${NEW_SONG}">+ New song</option>`
     + songs.map((entry) => `<option value="${escapeHtml(entry.name)}"${entry.name === project.name ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("");
   const sources = projects.filter((entry) => entry.kind === "source");
-  $("source-pick").innerHTML = `<option value="">— sin audio de la biblioteca —</option>`
+  $("source-pick").innerHTML = `<option value="">— no library audio —</option>`
     + sources.map((entry) => `<option value="${escapeHtml(entry.name)}"${entry.name === project.sourceName ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("");
   if ($("catalog").open) await drawCatalog();
   if ($("catalog").open && !$("tab-sources").classList.contains("hidden")) await drawSources();
@@ -3812,12 +3820,12 @@ async function useSource(name, parts) {
   }
   if (parts.style && source.style.trim()) project.style = source.style;
   if (parts.lyrics && source.lyrics.trim()) project.lyrics = source.lyrics;
-  if (parts.abc && source.abc.trim()) setAbc(source.abc, `antes de traer el ABC de «${name}»`);
+  if (parts.abc && source.abc.trim()) setAbc(source.abc, `before bringing the ABC of «${name}»`);
   writeForm();
-  await refreshSections().catch((error) => status(`Revisa las secciones: ${error.message}`, null, true));
+  await refreshSections().catch((error) => status(`Check the sections: ${error.message}`, null, true));
   if (parts.abc || parts.lyrics) await uniqueSectionNames();
   if (project.name) await saveProject();
-  const taken = Object.entries(parts).filter(([, on]) => on).map(([part]) => ({ audio: "audio", abc: "ABC", lyrics: "letra", style: "estilo" })[part]);
+  const taken = Object.entries(parts).filter(([, on]) => on).map(([part]) => ({ audio: "audio", abc: "ABC", lyrics: "lyrics", style: "style" })[part]);
   remember(`De la biblioteca «${name}»: ${taken.join(", ")}`);
   status(`«${name}» → ${taken.join(", ")}.`, 1);
   draw();
@@ -3834,27 +3842,27 @@ const openSources = new Set();
 async function drawSources() {
   const rows = $("source-rows");
   const sources = catalog.filter((entry) => entry.kind === "source");
-  rows.innerHTML = sources.length ? "" : `<p class="note">La biblioteca está vacía.</p>`;
+  rows.innerHTML = sources.length ? "" : `<p class="note">The library is empty.</p>`;
   for (const entry of sources) {
     const users = catalog.filter((other) => other.kind !== "source" && other.source_file === entry.source_file).map((other) => other.name);
     const item = document.createElement("details");
     item.className = "source";
     item.innerHTML = `<summary><b>${escapeHtml(entry.name)}</b> · ${escapeHtml(entry.source ?? "")} ·
-        ${entry.analyzed ? `analizado, ${entry.sections} secciones` : "sin analizar"}${users.length ? ` · usado en ${users.map(escapeHtml).join(", ")}` : ""}</summary>
+        ${entry.analyzed ? `analyzed, ${entry.sections} sections` : "not analyzed"}${users.length ? ` · used in ${users.map(escapeHtml).join(", ")}` : ""}</summary>
       <div class="row">
-        <button data-action="analyze">${entry.analyzed ? "Analizar de nuevo" : "Analizar"}</button>
-        <span class="parts">Traer a la canción abierta:
+        <button data-action="analyze">${entry.analyzed ? "Analyze again" : "Analyze"}</button>
+        <span class="parts">Bring into the open song:
           <label class="switch"><input type="checkbox" value="audio" checked> audio</label>
           <label class="switch"><input type="checkbox" value="abc" checked> ABC</label>
-          <label class="switch"><input type="checkbox" value="lyrics" checked> letra</label>
-          <label class="switch"><input type="checkbox" value="style" checked> estilo</label>
-          <button data-action="use">Traer</button></span>
-        <button data-action="song" class="primary">Nueva canción con este audio</button>
-        <button data-action="delete">Eliminar</button>
+          <label class="switch"><input type="checkbox" value="lyrics" checked> lyrics</label>
+          <label class="switch"><input type="checkbox" value="style" checked> style</label>
+          <button data-action="use">Bring</button></span>
+        <button data-action="song" class="primary">New song with this audio</button>
+        <button data-action="delete">Delete</button>
       </div>
       <div class="fields">
-        <label>Estilo<textarea data-field="style" rows="4"></textarea></label>
-        <label>Letra<textarea data-field="lyrics" rows="8"></textarea></label>
+        <label>Style<textarea data-field="style" rows="4"></textarea></label>
+        <label>Lyrics<textarea data-field="lyrics" rows="8"></textarea></label>
         <label>ABC<textarea data-field="abc" rows="8" spellcheck="false"></textarea></label>
       </div>`;
     // The texts load when the entry is opened, so the list stays light.
@@ -3872,7 +3880,7 @@ async function drawSources() {
     });
     item.querySelectorAll("textarea").forEach((area) => {
       area.onchange = guard(() => updateProject(entry.name, (stored) => {
-        if (area.dataset.field === "abc") keepAbcVersion(stored, "antes de editarlo en la biblioteca");
+        if (area.dataset.field === "abc") keepAbcVersion(stored, "before editing it in the library");
         stored[area.dataset.field] = area.value;
       }));
     });
@@ -3900,12 +3908,12 @@ async function drawCatalog() {
   const songs = catalog.filter((entry) => entry.album === managedAlbum && entry.kind !== "source");
   $("album-nav").innerHTML = albums.map((name) => `<button data-album="${escapeHtml(name)}" class="${name === managedAlbum ? "active" : ""}">${escapeHtml(name)}
     <small>${catalog.filter((entry) => entry.album === name && !entry.archived).length}</small></button>`).join("")
-    + `<button data-album="${NEW_ALBUM}">+ Nuevo álbum</button>`;
+    + `<button data-album="${NEW_ALBUM}">+ New album</button>`;
   $("album-nav").querySelectorAll("button").forEach((button) => {
     button.onclick = guard(async () => {
       let name = button.dataset.album;
       if (name === NEW_ALBUM) {
-        name = (prompt("Nombre del nuevo álbum") ?? "").trim();
+        name = (prompt("Name of the new album") ?? "").trim();
         if (!name) return;
         if (!albums.includes(name)) await postJson("/hz3/studio/album", { name, notes: "", styles: [], chat: [], log: [] });
         await listAlbums();
@@ -3919,26 +3927,26 @@ async function drawCatalog() {
   $("album-delete").disabled = managedAlbum === DEFAULT_ALBUM;
   $("album-styles").innerHTML = info.styles.map((style) => {
     const users = songs.filter((entry) => entry.styles.some((used) => used.id === style.id)).map((entry) => escapeHtml(entry.name));
-    return `<span class="chip" title="${escapeHtml(style.text)}"><b>${escapeHtml(style.name)}</b> · ${STYLE_KINDS[style.kind]} · ${users.length ? users.join(", ") : "sin usar"}</span>`;
-  }).join("") || `<span class="note">Sin estilos: créalos en «Estilos» con una canción de este álbum abierta, o pídeselos al asistente.</span>`;
+    return `<span class="chip" title="${escapeHtml(style.text)}"><b>${escapeHtml(style.name)}</b> · ${STYLE_KINDS[style.kind]} · ${users.length ? users.join(", ") : "unused"}</span>`;
+  }).join("") || `<span class="note">No styles: create them in «Styles» with a song of this album open, or ask the assistant for them.</span>`;
   const albumOptions = albums.map((name) => `<option${name === managedAlbum ? " selected" : ""}>${escapeHtml(name)}</option>`).join("");
   const rows = $("catalog-rows");
-  rows.innerHTML = songs.length ? "" : `<tr><td colspan="7" class="style">Este álbum no tiene canciones.</td></tr>`;
+  rows.innerHTML = songs.length ? "" : `<tr><td colspan="7" class="style">This album has no songs.</td></tr>`;
   for (const entry of songs.filter((item) => $("show-archived").checked || !item.archived)) {
     const row = document.createElement("tr");
     row.className = entry.archived ? "archived" : "";
-    row.innerHTML = `<td><input maxlength="64" title="Cambia el nombre y pulsa Enter"><button data-action="open">Abrir</button>${entry.archived ? " <small>archivada</small>" : ""}</td>
-      <td><textarea rows="2" placeholder="Notas de la canción"></textarea></td>
+    row.innerHTML = `<td><input maxlength="64" title="Change the name and press Enter"><button data-action="open">Open</button>${entry.archived ? " <small>archived</small>" : ""}</td>
+      <td><textarea rows="2" placeholder="Song notes"></textarea></td>
       <td class="style">${entry.styles.map((style) => `${escapeHtml(style.name)} <small>(${STYLE_KINDS[style.kind] ?? style.kind})</small>`).join(", ") || "—"}
         <br><small>${escapeHtml(entry.style)}</small></td>
-      <td>${new Date(entry.updated * 1000).toLocaleString()}<br><small>${entry.kind === "reference" ? "Referencia" : "Canción"} ·
-        ${entry.source ? `audio: ${escapeHtml(entry.source)}` : "compuesta"}${entry.license ? ` · ${escapeHtml(entry.license.name)}` : ""}</small></td>
-      <td>${entry.sections} secciones<br>${entry.takes} takes · ${entry.voices} voces</td>
-      <td><select title="Mover a otro álbum">${albumOptions}</select></td>
-      <td class="actions"><button data-action="duplicate" title="Crea «${escapeHtml(entry.name)} (copia)» en el mismo álbum y la abre; el original no cambia">Duplicar</button>
-        <button data-action="download" title="Descarga su .mixmash: audio, letra, ABC, tokens, LoRAs y estado de la app">Descargar</button>
-        <button data-action="archive">${entry.archived ? "Desarchivar" : "Archivar"}</button>
-        <button data-action="delete" title="El paquete se mueve a la carpeta deleted">Eliminar</button></td>`;
+      <td>${new Date(entry.updated * 1000).toLocaleString()}<br><small>${entry.kind === "reference" ? "Reference" : "Song"} ·
+        ${entry.source ? `audio: ${escapeHtml(entry.source)}` : "composed"}${entry.license ? ` · ${escapeHtml(entry.license.name)}` : ""}</small></td>
+      <td>${entry.sections} sections<br>${entry.takes} takes · ${entry.voices} voices</td>
+      <td><select title="Move to another album">${albumOptions}</select></td>
+      <td class="actions"><button data-action="duplicate" title="Creates «${escapeHtml(entry.name)} (copia)» in the same album and opens it; the original does not change">Duplicate</button>
+        <button data-action="download" title="Downloads its .mixmash: audio, lyrics, ABC, tokens, LoRAs and app state">Download</button>
+        <button data-action="archive">${entry.archived ? "Unarchive" : "Archive"}</button>
+        <button data-action="delete" title="The package moves to the deleted folder">Delete</button></td>`;
     const [name, notes, target] = [row.querySelector("input"), row.querySelector("textarea"), row.querySelector("select")];
     name.value = entry.name;
     notes.value = entry.notes;
@@ -3969,7 +3977,7 @@ async function duplicateSong(name) {
   const { name: copy } = await postJson("/hz3/studio/duplicate", { name });
   await listProjects();
   await openProject(copy);
-  status(`«${copy}» es una copia de «${name}»: lo que cambies aquí no toca el original.`, 1);
+  status(`«${copy}» is a copy of «${name}»: what you change here does not touch the original.`, 1);
 }
 
 async function renameSong(from, to) {
@@ -3983,7 +3991,7 @@ async function renameSong(from, to) {
     renamedTo[from] = to;
     await listProjects();
   }
-  status(`«${from}» ahora se llama «${to}».`, 1);
+  status(`«${from}» is now called «${to}».`, 1);
 }
 
 async function moveSong(name, target) {
@@ -3994,15 +4002,15 @@ async function moveSong(name, target) {
     styles = stored.styles;
   });
   await addStylesToAlbum(target, styles);
-  status(`«${name}» está ahora en el álbum «${target}».`, 1);
+  status(`«${name}» is now in the album «${target}».`, 1);
 }
 
 async function deleteSong(name) {
-  if (!confirm(`¿Eliminar «${name}»? El paquete se mueve a la carpeta deleted del estudio (output/HZ3-YuE2/studio/deleted).`)) return;
+  if (!confirm(`Delete «${name}»? The package moves to the studio's deleted folder (output/HZ3-YuE2/studio/deleted).`)) return;
   await postJson("/hz3/studio/delete", { name });
   if (name === project.name) await newSong();
   await listProjects();
-  status(`«${name}» eliminada (está en la carpeta deleted).`, 1);
+  status(`«${name}» deleted (it is in the deleted folder).`, 1);
 }
 
 async function renameAlbum(to) {
@@ -4016,12 +4024,12 @@ async function renameAlbum(to) {
   managedAlbum = to;
   await listAlbums();
   await listProjects();
-  status(`El álbum «${from}» ahora se llama «${to}».`, 1);
+  status(`The album «${from}» is now called «${to}».`, 1);
 }
 
 async function deleteAlbum() {
   const name = managedAlbum;
-  if (!confirm(`¿Eliminar el álbum «${name}»? Sus canciones pasan a «${DEFAULT_ALBUM}» y el álbum (estilos, chat y bitácora) se mueve a la carpeta deleted.`)) return;
+  if (!confirm(`Delete the album «${name}»? Its songs move to «${DEFAULT_ALBUM}» and the album (styles, chat and log) moves to the deleted folder.`)) return;
   const used = referencedStyles();
   await postJson("/hz3/studio/album/delete", { name });
   if (project.album === name) project.album = DEFAULT_ALBUM;
@@ -4035,7 +4043,7 @@ async function deleteAlbum() {
   await listProjects();
   writeForm();
   draw();
-  status(`Álbum «${name}» eliminado; sus canciones están en «${DEFAULT_ALBUM}».`, 1);
+  status(`Album «${name}» deleted; its songs are in «${DEFAULT_ALBUM}».`, 1);
 }
 
 async function saveAlbumNotes(notes) {
@@ -4045,7 +4053,7 @@ async function saveAlbumNotes(notes) {
 }
 
 async function newSong() {
-  if (songChanged()) await saveProject("antes de abrir otra canción");
+  if (songChanged()) await saveProject("before opening another song");
   pause();
   pausedAt = 0;
   if (album.name !== browseAlbum) await loadAlbum(browseAlbum);
@@ -4057,11 +4065,11 @@ async function newSong() {
   await refreshSections();
   await listProjects();
   draw();
-  status(`Canción nueva en el álbum «${album.name}»: ponle nombre, estilo y letra.`, 1);
+  status(`New song in the album «${album.name}»: give it a name, a style and lyrics.`, 1);
 }
 
 async function openProject(name) {
-  if (songChanged() && savedName !== name) await saveProject("antes de abrir otra canción");
+  if (songChanged() && savedName !== name) await saveProject("before opening another song");
   pause();
   pausedAt = 0;
   project = { ...newProject(), ...(await api(`/hz3/studio/project?name=${encodeURIComponent(name)}`)) };
@@ -4080,7 +4088,7 @@ async function openProject(name) {
   writeForm();
   await refreshSections();
   // A song from another machine brings its own voice LoRA: it joins the album's singers unless one already has it.
-  // (A voice only described in the style is added by hand with «Voz de la canción», or every test song would add one.)
+  // (A voice only described in the style is added by hand with «+ Voice of the current song», or every test song would add one.)
   const voice = songVoice();
   if (voice?.lora && !knownVoice(voice)) {
     album.styles.push(voice);
@@ -4089,7 +4097,7 @@ async function openProject(name) {
   }
   // Songs saved with repeated section names get unique ones, or every same-named section would be edited at once.
   const renamed = await uniqueSectionNames();
-  status("Cargando audio…");
+  status("Loading audio…");
   selectedVoice = null;
   for (const voice of project.voices) {
     voice.octave ??= 0;
@@ -4097,8 +4105,8 @@ async function openProject(name) {
   }
   await Promise.all([loadSource(), ...project.takes.map(loadTake), ...project.voices.filter((voice) => voice.file).map((voice) => loadUrl(fileUrl(voice.file)))]);
   status(renamed.length
-    ? `Proyecto «${project.name}» · secciones con nombre repetido renombradas (${renamed.map(([, to]) => to).join(", ")}): guarda para conservarlo.`
-    : `Proyecto «${project.name}» · ${project.takes.length} takes`, 1);
+    ? `Song «${project.name}» · sections with repeated names renamed (${renamed.map(([, to]) => to).join(", ")}): save to keep it.`
+    : `Song «${project.name}» · ${project.takes.length} takes`, 1);
   draw();
   guard(renderInstruments)();
 }
@@ -4128,10 +4136,10 @@ async function init() {
   $("project-list").onchange = guard((event) => event.target.value === NEW_SONG ? newSong() : event.target.value && openProject(event.target.value));
   $("save-project").onclick = guard(async () => {
     ensureName();
-    await saveProject("guardado");
+    await saveProject("saved");
   });
   $("duplicate-project").onclick = guard(async () => {
-    if (!project.name) throw new Error("Guarda primero la canción.");
+    if (!project.name) throw new Error("Save the song first.");
     await duplicateSong(project.name);
   });
   $("open-catalog").onclick = guard(async () => {
@@ -4149,19 +4157,19 @@ async function init() {
   $("show-archived").onchange = guard(drawCatalog);
   $("import-sources").onclick = guard(async () => {
     const files = [...$("source-files").files];
-    if (!files.length) throw new Error("Elige uno o más audios.");
+    if (!files.length) throw new Error("Choose one or more audio files.");
     const names = await addAudios(files, { kind: "source" });
     $("source-files").value = "";
     if ($("source-analyze").checked) for (const name of names) await analyze(name);
     await drawSources();
-    status(`${names.length} audios en la biblioteca${$("source-analyze").checked ? ", análisis en cola" : ""}.`, $("source-analyze").checked ? 0 : 1);
+    status(`${names.length} audio files in the library${$("source-analyze").checked ? ", analysis queued" : ""}.`, $("source-analyze").checked ? 0 : 1);
   });
   $("source-pick").onchange = guard(async (event) => {
     if (event.target.value) await useSource(event.target.value, { audio: true });
   });
   $("source-bring").onclick = guard(async () => {
     readForm();
-    if (!project.sourceName) throw new Error("Elige primero un audio de la biblioteca.");
+    if (!project.sourceName) throw new Error("Choose a library audio first.");
     await useSource(project.sourceName, { abc: true, lyrics: true, style: true });
   });
   $("album-rename").onclick = guard(() => renameAlbum($("album-name").value));
@@ -4173,7 +4181,7 @@ async function init() {
   $("history-archived").onchange = guard(drawHistory);
   $("history-new-branch").onclick = guard(async () => {
     if (historyBranch !== project.history.current) await switchBranch(historyBranch);
-    const name = await askText("Rama nueva", `Nombre de la rama (empieza donde está «${historyBranch}»):`, "");
+    const name = await askText("New branch", `Branch name (it starts where «${historyBranch}» is):`, "");
     if (name === null) return;
     await newBranch(name);
     historyBranch = project.history.current;
@@ -4181,7 +4189,7 @@ async function init() {
     await drawHistory();
   });
   $("history-rename-branch").onclick = guard(async () => {
-    const name = await askText("Renombrar rama", `Nombre nuevo para «${historyBranch}»:`, historyBranch);
+    const name = await askText("Rename branch", `New name for «${historyBranch}»:`, historyBranch);
     if (name === null) return;
     renameBranch(historyBranch, name);
     historyBranch = name;
@@ -4209,7 +4217,7 @@ async function init() {
   $("close-styles").onclick = () => $("styles").close();
   $("add-song-voice").onclick = guard(addSongVoice);
   $("add-style").onclick = guard(async () => {
-    album.styles.push({ id: crypto.randomUUID().slice(0, 8), name: `Cantante ${album.styles.length + 1}`, kind: "singer", text: "" });
+    album.styles.push({ id: crypto.randomUUID().slice(0, 8), name: `Singer ${album.styles.length + 1}`, kind: "singer", text: "" });
     await saveAlbum();
     drawStyles();
   });
@@ -4226,14 +4234,14 @@ async function init() {
   });
   $("apply-style-instructions").onclick = guard(async () => {
     readForm();
-    if (!project.styleInstructions.trim()) throw new Error("Escribe primero las indicaciones de estilo.");
+    if (!project.styleInstructions.trim()) throw new Error("Write the style directions first.");
     $("assistant").classList.remove("hidden");
     await sendChat(`Aplica estas indicaciones de estilo a la canción: ${project.styleInstructions.trim()}`);
   });
   $("import-references").onclick = guard(async () => {
     const files = [...$("reference-files").files];
-    if (!files.length) throw new Error("Elige uno o más audios de referencia.");
-    if (!$("reference-license").value) throw new Error("Indica la licencia de las grabaciones.");
+    if (!files.length) throw new Error("Choose one or more reference audio files.");
+    if (!$("reference-license").value) throw new Error("Choose the license of the recordings.");
     await importReferences(files, { name: $("reference-license").value, work: $("reference-work").value.trim(), url: $("reference-url").value.trim() });
     $("reference-files").value = "";
   });
@@ -4255,7 +4263,7 @@ async function init() {
     const name = event.target.value;
     if (name === NEW_BRANCH) {
       $("branch-list").value = project.history.current;
-      const typed = await askText("Rama nueva", "Nombre de la rama (empieza en el estado actual):", "");
+      const typed = await askText("New branch", "Branch name (it starts at the current state):", "");
       if (typed !== null) await newBranch(typed);
     } else if (name && name !== project.history.current) await switchBranch(name);
     writeForm();
@@ -4300,7 +4308,7 @@ async function init() {
   $("section-context").addEventListener("change", guard(async (event) => {
     const parts = event.target.value.split("·").map((part) => part.trim());
     if (!event.target.value.trim()) await setSectionContext(selected, "");
-    else if (parts.length !== 3 || !/^(toma\s*)?\d+$/i.test(parts[1])) throw new Error("Escribe «Proyecto · toma N · Sección».");
+    else if (parts.length !== 3 || !/^((toma|take)\s*)?\d+$/i.test(parts[1])) throw new Error("Write «Project · take N · Section».");
     else await setSectionContext(selected, parts[0], parts[1].replace(/\D/g, ""), parts[2]);
     draw();
   }));
@@ -4319,13 +4327,13 @@ async function init() {
   $("section-style-original").onclick = () => { delete project.sectionStyles[selected]; styleDraft = null; draw(); };
   $("section-score-play").onclick = guard(async () => {
     if (scorePlayback) return stopScore();
-    if (!score) throw new Error("No hay partitura que escuchar.");
+    if (!score) throw new Error("There is no score to play.");
     await context().resume();
     playScore(...sectionTicks(sections.findIndex((section) => section.name === selected)), $("section-score-play"));
   });
   $("score-play").onclick = guard(async () => {
     if (scorePlayback) return stopScore();
-    if (!score) throw new Error("No hay partitura que escuchar.");
+    if (!score) throw new Error("There is no score to play.");
     await context().resume();
     playScore(Math.min(score.total_ticks, Math.round(position() * score.bpm / 60 * TICKS_PER_QUARTER)), score.total_ticks, $("score-play"));
   });
@@ -4338,7 +4346,7 @@ async function init() {
     const voice = selectedVoiceEntry();
     voice.singer = event.target.value || null;
     // A voice still under its default name takes its singer's name.
-    if (voice.singer && /^Voz \d+$/.test(voice.name)) voice.name = catalogStyle(voice.singer).name.slice(0, 40);
+    if (voice.singer && /^(Voz|Voice) \d+$/.test(voice.name)) voice.name = catalogStyle(voice.singer).name.slice(0, 40);
     draw();
   });
   $("add-voice").onclick = addVoice;

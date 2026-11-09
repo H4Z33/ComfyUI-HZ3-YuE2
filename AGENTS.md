@@ -70,5 +70,9 @@ de voz.
 - Componer ABC no respeta la estructura de la letra ni la tonalidad o BPM del estilo: revisa `K:` y `Q:` y notas
   contra sílabas por sección antes de renderizar.
 - Un render lleva un solo LoRA.
+- `Contexto de la sección (otra canción)`, formato `Proyecto · toma N · Sección`, o `setSectionContext(sección,
+  proyecto, toma, sección de origen)` desde un driver: YuE2 ve los tokens de esa sección de otra canción justo antes
+  de muestrear esta, como si acabaran de sonar; no quedan en la canción ni en su audio (nodo: `section_contexts`).
+  Sirve para llevar la voz y la banda de una canción concepto a otra. Aparece en `Lo que recibe YuE2`.
 - `Pasar a instrumental` (`sectionToInstrumental`) mueve la melodía de la voz a la línea `Ins`: la voz se vuelve
   instrumento. Para una instrumental de verdad, deja la línea `Vocal` en silencio y la `Ins` como estaba.

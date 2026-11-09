@@ -108,6 +108,10 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
     la toma 24, sin ser concluyente.
   - Probable causa, sin medir: los tokens del contexto cantan otra letra («Next day to the sun», «Dejaste la puerta
     abierta») y YuE2 pierde en qué parte de la letra va.
+- **Inicio fijo** (`section_tokens` más corto que la sección; Exp 19, 2026-11-08, oído del dueño): toma 24 intacta y en
+  el Bridge 2 su propio inicio hasta la entrada de la voz (1:41.24) más 1 s de El del render "desde cero solo El", con el
+  resto muestreado. Sale una voz masculina distinta a la de El y la sección cambia completamente de ritmo. El dueño lo
+  deja aquí por ahora.
 - La receta de capas con donantes generados con negativo da voces más claras, pero las divergencias de generación se
   notan demasiado: no sirve.
 - Cambiar el encabezado de la letra (`[Verse 2]` frente a `[Verse 2 – Her]`) cambia los tokens tanto como volver a

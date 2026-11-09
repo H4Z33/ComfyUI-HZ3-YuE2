@@ -178,6 +178,7 @@ function readForm() {
 }
 
 function writeForm() {
+  queueMicrotask(refreshAdvanced);
   for (const key of ["style", "lyrics", "abc"]) $(key).value = project[key];
   $("style-instructions").value = project.styleInstructions;
   $("negative-style").value = project.negativeStyle;
@@ -2467,7 +2468,40 @@ function lane(className, head) {
   return { row, headCell, body };
 }
 
+// ---------- simple and advanced mode
+
+// What the simple mode hides: engine settings, alternative routes and the lab. A hidden field that holds a value is
+// shown anyway (marked), so nothing that reaches YuE2 is ever out of sight.
+const ADVANCED = ["song-versions", "song-version-save", "open-styles", "arrange", "source-bring", "import-json",
+  "style-instructions", "apply-style-instructions", "negative-style", "section-styles-from-cues", "abc", "compose-seed",
+  "compose-dice", "compose-temperature", "compose-keep", "apply-classical", "abc-reimagine", "abc-versions", "seed",
+  "section-classical", "section-negative", "section-context", "section-seed", "section-dice", "section-free",
+  "section-record", "section-recompose", "voice-seed", "voice-offset"];
+const SHOWN_WHEN_SET = ["negative-style", "section-negative", "section-context", "section-classical"];
+
+function markAdvanced() {
+  for (const id of ADVANCED) {
+    const element = $(id);
+    (element.closest("label") ?? element).classList.add("adv");
+  }
+  for (const element of document.querySelectorAll("[data-advanced]")) element.classList.add("adv");
+  let advanced = false;
+  try { advanced = localStorage.getItem("hz3.advanced") === "1"; } catch { /* simple mode */ }
+  $("advanced-mode").checked = advanced;
+  document.body.classList.toggle("advanced", advanced);
+  $("advanced-mode").addEventListener("change", (event) => {
+    document.body.classList.toggle("advanced", event.target.checked);
+    try { localStorage.setItem("hz3.advanced", event.target.checked ? "1" : "0"); } catch { /* not remembered */ }
+  });
+  for (const id of SHOWN_WHEN_SET) $(id).addEventListener("input", refreshAdvanced);
+}
+
+function refreshAdvanced() {
+  for (const id of SHOWN_WHEN_SET) $(id).closest("label").classList.toggle("in-use", Boolean($(id).value.trim()));
+}
+
 function draw() {
+  queueMicrotask(refreshAdvanced);
   $("lanes").innerHTML = "";
   if (!duration()) { updatePlayhead(); drawInspector(); drawVoiceInspector(); drawTrackInspector(); return; }
   const ruler = lane("ruler", "m:ss");
@@ -3786,6 +3820,7 @@ function guard(action) {
 }
 
 async function init() {
+  markAdvanced();
   const info = await api("/object_info/CheckpointLoaderSimple");
   const names = info.CheckpointLoaderSimple.input.required.ckpt_name[0];
   $("ckpt").innerHTML = names.map((name) => `<option>${name}</option>`).join("");

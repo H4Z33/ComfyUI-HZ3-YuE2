@@ -19,6 +19,8 @@
   <button id="open-catalog" title="Álbumes y canciones, audios de la biblioteca, referencias; abrir y descargar .mixmash">Catálogo</button>
   <button id="open-styles" title="Cantantes, grupos y géneros del álbum">Estilos</button>
   <span class="spacer"></span>
+  <label class="switch" title="Muestra los ajustes del motor, las rutas alternativas y las pruebas de laboratorio. Lo que tenga un valor se ve siempre, marcado.">
+    <input id="advanced-mode" type="checkbox"> Avanzado</label>
   <label class="switch"><input id="harmonize" type="checkbox" checked> Armonías</label>
   <button id="arrange" title="El agente decide en qué secciones y con qué voces van las armonías">Armonías con agente</button>
   <button id="render-song" class="primary">Generar canción</button>
@@ -65,12 +67,12 @@
     <button id="apply-classical" title="Escribe en la línea instrumental frases de obras de dominio público (carpeta references/), en las secciones marcadas en el inspector">Aplicar líneas clásicas</button>
     <button id="abc-reimagine" title="Acordes nuevos con la misma melodía, un instrumental nuevo con la misma voz, variaciones ligeras de la melodía o una sección compuesta de nuevo (con una sección elegida). El ABC anterior queda en las versiones.">Reimaginar ABC…</button>
     <label>Versiones anteriores del ABC (elige una para restaurarla)<select id="abc-versions"></select></label>
-    <h4>Render</h4>
+    <h4 data-advanced>Render</h4>
     <div class="row">
       <label>Semilla de la canción<input id="seed" type="number" min="0" value="60"></label>
     </div>
-    <details>
-      <summary>Avanzado</summary>
+    <details data-advanced>
+      <summary>Motor</summary>
       <label>Checkpoint<select id="ckpt"></select></label>
       <div class="row">
         <label>Temperatura<input id="temperature" type="number" step="0.05" value="0.9"></label>

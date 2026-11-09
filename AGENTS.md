@@ -18,7 +18,7 @@ está en este repositorio. Manual del usuario y de los nodos: `README.md`. LoRAs
    una receta nueva a varias canciones.
 5. **El juez es el oído del dueño.** Ningún detector automático distingue hombre solo, mujer sola o dueto (ver
    `EXPERIENCIAS_YUE2.md`). Da posiciones de audio como m:ss.
-6. **Nunca escribas en los proyectos del dueño** para experimentar: trabaja en una copia (`Duplicar` en el Studio).
+6. **Nunca escribas en los proyectos del dueño** para experimentar: trabaja en una copia (`Copiar como canción nueva` en el Studio).
    En las copias de prueba apaga `Armonías` antes de renderizar. Los encabezados de la letra llevan solo el nombre de
    la sección (`[Bridge 2]`), nunca voz ni estilo.
 7. Responde en el idioma del dueño (español).
@@ -47,6 +47,12 @@ de voz.
   El canónico es `razones_driver.js`: `runAlbum(songs)` (proyecto nuevo, compone ABC, renderiza toma 1),
   `runFromAbc(songs)`, `addClassical(name, plan)` y `featureYueRi(name, sections)` (sube una octava la melodía de esas
   secciones y regenera solo esas). Progreso en `window.albumLog`.
+- **Historial con ramas** (como git): cada guardado, cada render y cada cambio grande (componer, reimaginar, analizar,
+  terminar aquí) es un commit con el estado completo de la canción en la rama actual (`project.history`; los estados
+  van en `history/<hash>.json` dentro del `.mixmash`). Abrir un punto viejo crea una rama nueva desde él; cambiar de
+  rama o de canción guarda antes. Nada se borra. Desde un driver: `saveProject(nombre)`, `openCommit(id)`,
+  `switchBranch(rama)`, `newBranch(rama)`. Las versiones y ABC anteriores de canciones viejas se migran a las ramas
+  «versiones guardadas», «versiones borradas» y «ABC anteriores» al abrirlas.
 - Las llamadas de JavaScript desde un agente expiran a los ~45 s: arranca el driver sin esperar y espera el archivo de
   salida desde la terminal.
 - Nombres de proyecto: letras, dígitos, espacios y `- _ ( )`, máximo 64, sin puntos ni `#`.

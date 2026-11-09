@@ -122,11 +122,11 @@ let pausedAt = 0;
 function newProject() {
   return {
     name: "", kind: "song", album: DEFAULT_ALBUM, notes: "", archived: false, license: null, source: null, sourceName: null, styleInstructions: "", analysis: null,
-    style: "", negativeStyle: "", baseStyle: null, lora: null, lyrics: "", abc: "", abcVersions: [], seed: 60,
+    style: "", negativeStyle: "", baseStyle: null, lora: null, lyrics: "", abc: "", seed: 60,
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
-    harmonize: true, harmonyVoices: [...VOICES], songVersions: [], deletedSongVersions: [], sectionSeeds: {}, sectionStyles: {}, sectionNegatives: {}, sectionContexts: {}, sectionOnsets: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, trackSpans: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
+    harmonize: true, harmonyVoices: [...VOICES], history: null, sectionSeeds: {}, sectionStyles: {}, sectionNegatives: {}, sectionContexts: {}, sectionOnsets: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, trackSpans: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
     arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {}, classicalPlan: {}, classicalReport: [],
   };
 }
@@ -177,6 +177,25 @@ function readForm() {
   project.arranger = { model: $("arranger-model").value.trim(), instructions: $("arranger-instructions").value };
 }
 
+const NEW_BRANCH = "+new-branch";
+
+// The main branch first, then the others by their latest point, newest first.
+function branchOrder(history) {
+  const latest = (name) => history.commits[history.branches[name].head]?.at ?? 0;
+  return Object.keys(history.branches).sort((a, b) => (b === MAIN_BRANCH) - (a === MAIN_BRANCH) || latest(b) - latest(a));
+}
+
+function drawBranchList() {
+  const history = project.history;
+  if (!history) {
+    $("branch-list").innerHTML = `<option value="">— rama: ${MAIN_BRANCH} —</option>`;
+    return;
+  }
+  const names = branchOrder(history).filter((name) => !history.branches[name].archived || name === history.current);
+  $("branch-list").innerHTML = names.map((name) => `<option value="${escapeHtml(name)}"${name === history.current ? " selected" : ""}>Rama: ${escapeHtml(name)}</option>`).join("")
+    + `<option value="${NEW_BRANCH}">+ Rama nueva desde aquí…</option>`;
+}
+
 function writeForm() {
   queueMicrotask(refreshAdvanced);
   // A LoRA installed after the page loaded (an imported song brings its own) is still the song's LoRA.
@@ -191,13 +210,7 @@ function writeForm() {
   $("compose-seed").value = project.compose.seed;
   $("compose-temperature").value = project.compose.temperature;
   $("compose-keep").checked = project.compose.keep;
-  $("song-versions").innerHTML = `<option value="">${project.songVersions.length ? `— ${project.songVersions.length} versiones de la canción —` : "— sin versiones de la canción —"}</option>`
-    + project.songVersions.map((version, index) => `<option value="${index}">${new Date(version.at).toLocaleString()} · ${escapeHtml(version.label)}</option>`).reverse().join("")
-    + ((project.deletedSongVersions ?? []).length ? `<optgroup label="Borradas (elige una para recuperarla)">`
-      + project.deletedSongVersions.map((version, index) => `<option value="deleted-${index}">${new Date(version.at).toLocaleString()} · ${escapeHtml(version.label)}</option>`).reverse().join("")
-      + "</optgroup>" : "");
-  $("abc-versions").innerHTML = `<option value="">${project.abcVersions.length ? `— ${project.abcVersions.length} versiones anteriores —` : "— sin versiones anteriores —"}</option>`
-    + project.abcVersions.map((version, index) => `<option value="${index}">${new Date(version.at).toLocaleString()} · ${escapeHtml(version.label)}</option>`).reverse().join("");
+  drawBranchList();
   if ([...$("ckpt").options].some((option) => option.value === project.ckpt)) $("ckpt").value = project.ckpt;
   $("seed").value = project.seed;
   $("harmonize").checked = project.harmonize;
@@ -734,7 +747,7 @@ function keepSectionOriginal(name, kind) {
 function sectionOriginal(name) {
   if (name in project.sectionOriginals) return project.sectionOriginals[name] || null;  // null: already restored
   const labels = { [`antes de liberar la melodía de «${name}»`]: "free", [`antes de volver instrumental «${name}»`]: "instrumental" };
-  const version = project.abcVersions.findLast((item) => item.label in labels);
+  const version = (project.abcVersions ?? []).findLast((item) => item.label in labels);
   if (!version) return null;
   const lines = version.abc.split("\n");
   return { kind: labels[version.label], lines: sectionMusicLines(version.abc, name).map((at) => lines[at]), lyrics: null };
@@ -1148,7 +1161,7 @@ function assistantState() {
     },
     song: {
       name: project.name, notes: project.notes, base_style: styleName(project.baseStyle), style: project.style, style_instructions: project.styleInstructions,
-      seed: project.seed, sampling: project.sampling, compose: project.compose, abc_versions: project.abcVersions.length,
+      seed: project.seed, sampling: project.sampling, compose: project.compose, history_commits: Object.keys(project.history?.commits ?? {}).length,
       lyrics: sections.length ? undefined : project.lyrics, has_abc: Boolean(project.abc.trim()), source_audio: Boolean(project.source),
       harmonize: project.harmonize, jobs_running: pending.size, takes: project.takes.map((take) => take.id),
       sections: sections.map((section, index) => ({
@@ -1464,6 +1477,7 @@ async function updateProject(owner, change) {
   const stored = await api(`/hz3/studio/project?name=${encodeURIComponent(owner)}`);
   change(stored);
   await postJson("/hz3/studio/project", stored);
+  for (const [id, state] of Object.entries(stored._snapshots ?? {})) snapshotCache.set(id, state);
   await listProjects();
   status(`«${owner}» actualizado en segundo plano.`, 1);
   return false;
@@ -1574,12 +1588,11 @@ async function analyze(owner = project.name) {
   status("Análisis en cola…", 0);
 }
 
-// Replaced scores stay in the project, so a new composition or analysis can be undone.
-// A version that also changed the lyrics keeps them too, so restoring it brings both back.
-function keepAbcVersion(target, label, withLyrics = false) {
+// Before a change that rewrites the score (a composition, an analysis, a reimagining...), the song as it is is
+// committed with what is about to happen as its name, so the history can always go back to it.
+function keepAbcVersion(target, label) {
   if (!target.abc.trim()) return;
-  const version = { at: Date.now(), label, abc: target.abc, ...(withLyrics ? { lyrics: target.lyrics } : {}) };
-  target.abcVersions = [...(target.abcVersions ?? []), version].slice(-20);
+  commitSong(target, label);
 }
 
 // A section as an instrumental: where the voice sang, its melody moves to the instrument line; the voice keeps only
@@ -1656,56 +1669,217 @@ async function sectionToInstrumental(name) {
   status(`«${name}» es instrumental: su melodía pasó a la línea instrumental. La versión anterior (ABC y letra) quedó en las versiones.`, 1);
 }
 
-// What a song version holds: everything a render is made from, frozen only when the producer asks ("Guardar versión").
-const SONG_STATE = ["style", "baseStyle", "lora", "lyrics", "abc", "seed", "sampling", "harmonize", "harmonyVoices",
-  "sectionSeeds", "sectionStyles", "sectionSingers", "classicalPlan", "arrangement", "comp", "trackOn", "trackSpans", "mixer", "voices", "instruments", "fx"];
+// ---------- history: commits and branches, like git
 
-function songSnapshot(source, label) {
-  return { at: Date.now(), label, ...JSON.parse(JSON.stringify(Object.fromEntries(SONG_STATE.map((key) => [key, source[key]])))) };
+// A commit freezes everything a song is made from (its state); the song's catalog data, its takes (shared by every
+// branch) and the history itself stay out. A state is stored once, under the hash of its content, in the package's
+// history/ folder; commits and branches only point at it. Nothing in the history is ever deleted.
+const NOT_STATE = new Set(["name", "kind", "album", "notes", "archived", "license", "takes", "history", "styles", "analysis",
+  "_snapshots", "songVersions", "deletedSongVersions", "abcVersions"]);
+const MAIN_BRANCH = "principal";
+const snapshotCache = new Map();
+
+function stateOf(source) {
+  const keys = new Set([...Object.keys(newProject()), ...Object.keys(source)].filter((key) => !NOT_STATE.has(key)));
+  return JSON.parse(JSON.stringify(Object.fromEntries([...keys].sort().map((key) => [key, source[key] ?? null]))));
 }
 
-async function recoverSongVersion(index) {
-  const version = project.deletedSongVersions[index];
-  const recover = await choose(`Versión borrada «${version.label}»`, `Guardada el ${new Date(version.at).toLocaleString()}.`, [
-    { value: true, label: "Recuperarla (vuelve a la lista de versiones)" },
-  ]);
-  if (!recover) { writeForm(); return; }
-  project.deletedSongVersions.splice(index, 1);
-  project.songVersions = [...project.songVersions, version].sort((a, b) => a.at - b.at);
-  writeForm();
-  await saveProject();
-  status(`Versión «${version.label}» recuperada.`, 1);
+// 104-bit content hash (two 53-bit cyrb53 rounds): stable, synchronous, and plenty to tell song states apart.
+function stateHash(state) {
+  const text = JSON.stringify(state);
+  const round = (seed) => {
+    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      h1 = Math.imul(h1 ^ code, 2654435761);
+      h2 = Math.imul(h2 ^ code, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, "0").slice(-13);
+  };
+  return round(1) + round(2);
 }
 
-async function pickSongVersion(index) {
-  readForm();
-  const version = project.songVersions[index];
-  const automatic = project.songVersions.filter((item) => /^take \d+/.test(item.label) || item.label === "antes de restaurar una versión");
-  let action = await choose(`Versión «${version.label}»`, `Guardada el ${new Date(version.at).toLocaleString()}. ¿Qué quieres hacer con ella?`, [
-    { value: "keep", label: "Abrirla, guardando antes lo que tienes ahora como versión" },
-    { value: "restore", label: "Abrirla sin guardar lo que tienes ahora" },
-    { value: "delete", label: "Borrarla (pasa a «Borradas» en este mismo menú y se puede recuperar)" },
-    // Earlier builds froze a version on every render and every restore.
-    ...(automatic.length ? [{ value: "automatic", label: `Borrar las ${automatic.length} versiones automáticas (también pasan a «Borradas»)` }] : []),
-  ]);
-  if (action === "delete" || action === "automatic") {
-    const gone = action === "delete" ? [version] : automatic;
-    project.songVersions = project.songVersions.filter((item) => !gone.includes(item));
-    // A deleted version is kept apart, so a slip can be undone from the same menu.
-    project.deletedSongVersions = [...(project.deletedSongVersions ?? []), ...gone].slice(-30);
-    writeForm();
-    await saveProject();
-    status(`${gone.length === 1 ? `Versión «${version.label}» movida` : `${gone.length} versiones movidas`} a «Borradas»: elígela en el menú de versiones para recuperarla.`, 1);
-    return;
+function storeState(target, state) {
+  const id = stateHash(state);
+  snapshotCache.set(id, state);
+  target._snapshots = { ...(target._snapshots ?? {}), [id]: state };
+  return id;
+}
+
+function addCommit(target, branch, state, label, auto, at = Date.now()) {
+  const history = target.history;
+  const parent = history.branches[branch]?.head ?? null;
+  const stateId = storeState(target, state);
+  const id = stateHash({ parent, stateId, at, label });
+  history.commits[id] = { parent, at, label, auto, state: stateId, branch };
+  history.branches[branch] = { ...(history.branches[branch] ?? { created: at, archived: false }), head: id };
+  return id;
+}
+
+// Songs saved before branches existed: their saved versions, deleted versions and earlier ABCs become commits on
+// their own branches (a version held only part of the song: the rest comes from the song as it is now), and the
+// song as it is now starts the main branch.
+function ensureHistory(target) {
+  if (target.history) return;
+  target.history = { current: MAIN_BRANCH, branches: {}, commits: {} };
+  const now = stateOf(target);
+  const imported = [
+    ["versiones guardadas", target.songVersions ?? [], (version) => ({ ...now, ...stateOf({ ...target, ...version }) })],
+    ["versiones borradas", target.deletedSongVersions ?? [], (version) => ({ ...now, ...stateOf({ ...target, ...version }) })],
+    ["ABC anteriores", target.abcVersions ?? [], (version) => ({ ...now, abc: version.abc, lyrics: version.lyrics ?? now.lyrics })],
+  ];
+  for (const [branch, versions, toState] of imported) {
+    for (const version of [...versions].sort((a, b) => a.at - b.at)) {
+      const { at, label, ...fields } = version;
+      addCommit(target, branch, toState(fields), label || "sin nombre", false, at);
+    }
   }
-  if (action === "keep" && !saveSongVersion()) action = null;
-  if (!action) { writeForm(); return; }
-  for (const key of SONG_STATE) if (key in version) project[key] = JSON.parse(JSON.stringify(version[key]));
+  // "Restaurar melodía escrita" read old melodies from the ABC versions: they move into the sections' originals.
+  const prefixes = { free: "antes de liberar la melodía de «", instrumental: "antes de volver instrumental «" };
+  for (const version of target.abcVersions ?? []) {
+    for (const [kind, prefix] of Object.entries(prefixes)) {
+      if (!version.label?.startsWith(prefix)) continue;
+      const name = version.label.slice(prefix.length, -1);
+      if (target.sectionOriginals?.[name] !== undefined) continue;
+      const lines = version.abc.split("\n");
+      target.sectionOriginals = { ...(target.sectionOriginals ?? {}), [name]: { kind, lines: sectionMusicLines(version.abc, name).map((at) => lines[at]), lyrics: null } };
+    }
+  }
+  addCommit(target, MAIN_BRANCH, stateOf(target), "la canción al pasar a ramas", true);
+  delete target.songVersions;
+  delete target.deletedSongVersions;
+  delete target.abcVersions;
+}
+
+function headCommit(target) {
+  const history = target.history;
+  return history.commits[history.branches[history.current]?.head] ?? null;
+}
+
+// Commits the song as it is now on its current branch, unless nothing changed since the branch's last commit.
+// A name given to an unchanged state names that commit instead.
+function commitSong(target, label, auto = true) {
+  ensureHistory(target);
+  const state = stateOf(target);
+  const head = headCommit(target);
+  if (head && head.state === stateHash(state)) {
+    if (!auto && label) Object.assign(head, { label, auto: false });
+    return null;
+  }
+  return addCommit(target, target.history.current, state, label || "cambios", auto);
+}
+
+function songChanged() {
+  if (!savedName) return false;
+  readForm();
+  ensureHistory(project);
+  return headCommit(project)?.state !== stateHash(stateOf(project));
+}
+
+async function snapshot(stateId, owner = project) {
+  if (snapshotCache.has(stateId)) return snapshotCache.get(stateId);
+  const state = owner._snapshots?.[stateId]
+    ?? await api(`/hz3/studio/snapshot?name=${encodeURIComponent(owner.name)}&id=${stateId}`);
+  snapshotCache.set(stateId, state);
+  return state;
+}
+
+async function loadState(stateId) {
+  const state = await snapshot(stateId);
+  const fresh = newProject();
+  for (const key of new Set([...Object.keys(stateOf(project)), ...Object.keys(state)])) {
+    project[key] = JSON.parse(JSON.stringify(state[key] ?? fresh[key] ?? null));
+  }
   writeForm();
   await refreshSections();
   draw();
   restartIfPlaying();
-  status(`Versión «${version.label}» restaurada. Guarda el proyecto para conservarla.`, 1);
+}
+
+function branchName(base) {
+  const taken = new Set(Object.keys(project.history.branches));
+  let name = base.slice(0, 60);
+  for (let index = 2; taken.has(name); index++) name = `${base.slice(0, 54)} (${index})`;
+  return name;
+}
+
+// Opening an old commit never moves a branch back: what you have now is committed first, and the old commit becomes
+// the start of a new branch (the head of a branch just opens it).
+async function openCommit(id) {
+  readForm();
+  commitSong(project, "antes de abrir otra versión");
+  const history = project.history;
+  const commit = history.commits[id];
+  const owning = Object.entries(history.branches).find(([, branch]) => branch.head === id)?.[0];
+  if (owning) {
+    history.current = owning;
+  } else {
+    const name = branchName(`desde «${commit.label}» ${new Date(commit.at).toLocaleDateString()}`);
+    history.branches[name] = { head: id, created: Date.now(), archived: false };
+    history.current = name;
+  }
+  await loadState(commit.state);
+  await saveProject();
+  status(`Abierta «${commit.label}» en la rama «${history.current}». Lo que tenías quedó en su rama.`, 1);
+}
+
+async function switchBranch(name) {
+  readForm();
+  commitSong(project, "antes de cambiar de rama");
+  project.history.current = name;
+  const head = headCommit(project);
+  if (head) await loadState(head.state);
+  await saveProject();
+  status(`Rama «${name}».`, 1);
+}
+
+async function newBranch(name) {
+  readForm();
+  commitSong(project, "antes de crear una rama");
+  name = branchName(name.trim() || "rama nueva");
+  project.history.branches[name] = { head: project.history.branches[project.history.current].head, created: Date.now(), archived: false };
+  project.history.current = name;
+  await saveProject();
+  status(`Rama «${name}» creada desde aquí: lo que cambies ahora va en ella.`, 1);
+}
+
+function renameBranch(from, to) {
+  const branches = project.history.branches;
+  to = to.trim();
+  if (!to || to === from) return;
+  if (branches[to]) throw new Error(`Ya hay una rama «${to}».`);
+  branches[to] = branches[from];
+  delete branches[from];
+  for (const commit of Object.values(project.history.commits)) if (commit.branch === from) commit.branch = to;
+  if (project.history.current === from) project.history.current = to;
+}
+
+// The commits of a branch, newest first: its head and every ancestor (also those made on the branch it came from).
+function branchCommits(name) {
+  const history = project.history;
+  const list = [];
+  for (let id = history.branches[name]?.head; id && list.length < 5000; id = history.commits[id]?.parent) list.push([id, history.commits[id]]);
+  return list;
+}
+
+const STATE_NAMES = {
+  style: "estilo", negativeStyle: "estilo negativo", baseStyle: "estilo base", lora: "LoRA", lyrics: "letra", abc: "ABC",
+  seed: "semilla", sampling: "muestreo", ckpt: "checkpoint", compose: "ajustes de composición", harmonize: "armonías",
+  harmonyVoices: "voces de armonía", sectionSeeds: "semillas de sección", sectionStyles: "estilos de sección",
+  sectionNegatives: "negativos de sección", sectionContexts: "contextos", sectionOnsets: "inicios fijos",
+  sectionSingers: "cantantes", comp: "tomas elegidas", trackOn: "pistas activas", trackSpans: "tramos de armonía",
+  mixer: "mezcla", voices: "voces extra", instruments: "instrumentos", fx: "efectos", sectionOriginals: "melodías originales",
+  classicalPlan: "líneas clásicas", arrangement: "arreglo del agente", styleInstructions: "indicaciones de estilo",
+  source: "audio original", sourceName: "audio original",
+};
+
+function stateChanges(before, after) {
+  if (!before) return ["inicio"];
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  const changed = [...keys].filter((key) => JSON.stringify(before[key] ?? null) !== JSON.stringify(after[key] ?? null));
+  return [...new Set(changed.map((key) => STATE_NAMES[key] ?? key))];
 }
 
 function setAbc(abc, label) {
@@ -2027,16 +2201,6 @@ function takeStream(take) {
   return Object.keys(take.sectionTokens).sort((a, b) => at(a) - at(b)).map((name) => take.sectionTokens[name]);
 }
 
-function saveSongVersion() {
-  readForm();
-  const label = prompt("Nombre de la versión:", `versión ${project.songVersions.length + 1}`);
-  if (label === null) return false;
-  project.songVersions = [...project.songVersions, songSnapshot(project, label.trim() || "sin nombre")].slice(-30);
-  writeForm();
-  status(`Versión «${label.trim() || "sin nombre"}» guardada. Guarda el proyecto para conservarla.`, 1);
-  return true;
-}
-
 // reimagine: render the whole song in melody mode (YuE2 keeps the melody and invents harmony and arrangement; with
 // "instrumental" the instrument line is emptied as well), have SheetSage2 hear the chords it played, and freeze them
 // into the song's ABC, which then sings in full mode.
@@ -2047,6 +2211,7 @@ async function render(targets, reimagine = null) {
   if (!sections.length) throw new Error("Hacen falta letra y ABC con secciones.");
   const id = Math.max(0, ...project.takes.map((take) => take.id)) + 1;
   const take = { id, created: Date.now(), harmonized: project.harmonize, files: {}, sectionLyrics: {}, sectionSeeds: {} };
+  if (project.history) take.branch = project.history.current;
   take.sectionStyles = {};
   take.style = globalStyle();
   if (Object.keys(project.sectionContexts ?? {}).length) take.sectionContexts = structuredClone(project.sectionContexts);
@@ -2475,9 +2640,9 @@ function lane(className, head) {
 
 // What the simple mode hides: engine settings, alternative routes and the lab. A hidden field that holds a value is
 // shown anyway (marked), so nothing that reaches YuE2 is ever out of sight.
-const ADVANCED = ["song-versions", "song-version-save", "open-styles", "arrange", "source-bring", "import-json",
+const ADVANCED = ["open-styles", "arrange", "source-bring", "import-json",
   "style-instructions", "apply-style-instructions", "negative-style", "section-styles-from-cues", "abc", "compose-seed",
-  "compose-dice", "compose-temperature", "compose-keep", "apply-classical", "abc-reimagine", "abc-versions", "seed",
+  "compose-dice", "compose-temperature", "compose-keep", "apply-classical", "abc-reimagine", "seed",
   "section-classical", "section-negative", "section-context", "section-seed", "section-dice", "section-free",
   "section-record", "section-recompose", "voice-seed", "voice-offset"];
 const SHOWN_WHEN_SET = ["negative-style", "section-negative", "section-context", "section-classical"];
@@ -3209,6 +3374,96 @@ function choose(title, text, options) {
   });
 }
 
+// A name typed in our own dialog (the browser's prompt() is awkward on a phone); null when cancelled.
+function askText(title, text, value) {
+  return new Promise((resolve) => {
+    const dialog = $("ask");
+    $("ask-title").textContent = title;
+    $("ask-text").textContent = text;
+    $("ask-input").value = value ?? "";
+    const answer = (result) => { dialog.onclose = null; dialog.close(); resolve(result); };
+    $("ask-ok").onclick = () => answer($("ask-input").value.trim());
+    $("ask-cancel").onclick = () => answer(null);
+    $("ask-input").onkeydown = (event) => { if (event.key === "Enter") answer($("ask-input").value.trim()); };
+    dialog.onclose = () => resolve(null);
+    dialog.showModal();
+    $("ask-input").select();
+  });
+}
+
+// ---------- history window
+
+let historyBranch = null;
+
+async function openHistory() {
+  if (!savedName) throw new Error("Guarda primero la canción: su historial empieza con el primer guardado.");
+  readForm();
+  ensureHistory(project);
+  historyBranch = project.history.current;
+  $("history-song").textContent = `«${project.name}»`;
+  $("history").showModal();
+  await drawHistory();
+}
+
+async function drawHistory() {
+  const history = project.history;
+  const showArchived = $("history-archived").checked;
+  const names = branchOrder(history).filter((name) => showArchived || !history.branches[name].archived || name === historyBranch);
+  $("history-branch").innerHTML = names.map((name) => {
+    const branch = history.branches[name];
+    const tags = [name === history.current ? "en uso" : "", branch.archived ? "archivada" : ""].filter(Boolean).join(", ");
+    return `<option value="${escapeHtml(name)}"${name === historyBranch ? " selected" : ""}>${escapeHtml(name)}${tags ? ` (${tags})` : ""}</option>`;
+  }).join("");
+  $("history-archive-branch").textContent = history.branches[historyBranch]?.archived ? "Desarchivar rama" : "Archivar rama";
+  $("history-archive-branch").disabled = historyBranch === history.current;
+  const heads = {};
+  for (const [name, branch] of Object.entries(history.branches)) (heads[branch.head] ??= []).push(name);
+  const current = stateHash(stateOf(project));
+  const unsaved = historyBranch === history.current && headCommit(project)?.state !== current;
+  const rows = branchCommits(historyBranch);
+  $("history-rows").replaceChildren(...(unsaved ? [Object.assign(document.createElement("div"), {
+    className: "history-row current", textContent: "Ahora: cambios todavía sin guardar (se guardan solos al cambiar de rama o de canción).",
+  })] : []), ...rows.map(([id, commit]) => {
+    const row = document.createElement("div");
+    row.className = "history-row" + (commit.state === current ? " current" : "");
+    const branches = (heads[id] ?? []).map((name) => `<span class="chip">${escapeHtml(name)}</span>`).join(" ");
+    row.innerHTML = `<div class="history-head"><span class="history-date">${new Date(commit.at).toLocaleString()}</span>
+      <input class="history-label" maxlength="80" value="${escapeHtml(commit.label)}" title="Nombre de este punto; cámbialo para encontrarlo después">
+      ${commit.auto ? '<span class="note">automático</span>' : ""} ${branches}
+      ${commit.branch !== historyBranch ? `<span class="note">de la rama «${escapeHtml(commit.branch)}»</span>` : ""}</div>
+      <div class="history-changes note">…</div>
+      <div class="row"><button data-action="open">${commit.state === current ? "Es lo que tienes abierto" : "Abrir"}</button>
+      <button data-action="compare">Comparar con lo actual</button></div>`;
+    const open = row.querySelector('[data-action="open"]');
+    open.disabled = commit.state === current;
+    open.onclick = guard(async () => { await openCommit(id); historyBranch = project.history.current; await drawHistory(); });
+    row.querySelector('[data-action="compare"]').onclick = guard(async () => {
+      const changes = stateChanges(await snapshot(commit.state), stateOf(project));
+      row.querySelector(".history-changes").textContent = changes.length
+        ? `Lo actual cambia respecto a este punto en: ${changes.join(", ")}.` : "Lo actual es igual a este punto.";
+    });
+    row.querySelector(".history-label").onchange = guard(async (event) => {
+      commit.label = event.target.value.trim() || commit.label;
+      commit.auto = false;
+      await saveProject();
+    });
+    return row;
+  }));
+  // What each point changed, filled in as the snapshots arrive (newest first, a few at a time).
+  const boxes = [...$("history-rows").querySelectorAll(".history-row:not(.current), .history-row.current")].filter((row) => row.querySelector(".history-changes"));
+  for (const [index, [, commit]] of rows.entries()) {
+    const box = boxes[index]?.querySelector(".history-changes");
+    if (!box) continue;
+    try {
+      const parent = history.commits[commit.parent];
+      const changes = stateChanges(parent ? await snapshot(parent.state) : null, await snapshot(commit.state));
+      box.textContent = changes[0] === "inicio" ? "Primer punto." : changes.length ? `Cambió: ${changes.join(", ")}.` : "Sin cambios en la canción (solo el nombre).";
+    } catch {
+      box.textContent = "";
+    }
+  }
+}
+
 // ---------- extra voices
 
 function selectedVoiceEntry() {
@@ -3495,7 +3750,8 @@ function ensureName() {
   project.name = name;
 }
 
-async function saveProject() {
+// Every save is a commit on the song's current branch (when something changed); `label` names it.
+async function saveProject(label = null) {
   readForm();
   if (!project.name) throw new Error("Ponle nombre al proyecto.");
   if (!savedName) {
@@ -3522,7 +3778,9 @@ async function saveProject() {
   }
   project.styles = referencedStyles();
   dropStaleSections();
+  commitSong(project, label ?? "cambios guardados", !label);
   await postJson("/hz3/studio/project", project);
+  delete project._snapshots;
   savedName = project.name;
   await listProjects();
   status(`Proyecto «${project.name}» guardado.`, 1);
@@ -3787,6 +4045,7 @@ async function saveAlbumNotes(notes) {
 }
 
 async function newSong() {
+  if (songChanged()) await saveProject("antes de abrir otra canción");
   pause();
   pausedAt = 0;
   if (album.name !== browseAlbum) await loadAlbum(browseAlbum);
@@ -3802,10 +4061,12 @@ async function newSong() {
 }
 
 async function openProject(name) {
+  if (songChanged() && savedName !== name) await saveProject("antes de abrir otra canción");
   pause();
   pausedAt = 0;
   project = { ...newProject(), ...(await api(`/hz3/studio/project?name=${encodeURIComponent(name)}`)) };
   savedName = project.name;
+  ensureHistory(project);
   selected = null;
   selectedTrack = null;
   instrumentAudio.clear();
@@ -3867,7 +4128,7 @@ async function init() {
   $("project-list").onchange = guard((event) => event.target.value === NEW_SONG ? newSong() : event.target.value && openProject(event.target.value));
   $("save-project").onclick = guard(async () => {
     ensureName();
-    await saveProject();
+    await saveProject("guardado");
   });
   $("duplicate-project").onclick = guard(async () => {
     if (!project.name) throw new Error("Guarda primero la canción.");
@@ -3907,6 +4168,36 @@ async function init() {
   $("album-delete").onclick = guard(deleteAlbum);
   $("album-notes").onchange = guard((event) => saveAlbumNotes(event.target.value));
   $("close-catalog").onclick = () => $("catalog").close();
+  $("close-history").onclick = () => $("history").close();
+  $("history-branch").onchange = guard(async (event) => { historyBranch = event.target.value; await drawHistory(); });
+  $("history-archived").onchange = guard(drawHistory);
+  $("history-new-branch").onclick = guard(async () => {
+    if (historyBranch !== project.history.current) await switchBranch(historyBranch);
+    const name = await askText("Rama nueva", `Nombre de la rama (empieza donde está «${historyBranch}»):`, "");
+    if (name === null) return;
+    await newBranch(name);
+    historyBranch = project.history.current;
+    writeForm();
+    await drawHistory();
+  });
+  $("history-rename-branch").onclick = guard(async () => {
+    const name = await askText("Renombrar rama", `Nombre nuevo para «${historyBranch}»:`, historyBranch);
+    if (name === null) return;
+    renameBranch(historyBranch, name);
+    historyBranch = name;
+    await saveProject();
+    writeForm();
+    await drawHistory();
+  });
+  $("history-archive-branch").onclick = guard(async () => {
+    const branch = project.history.branches[historyBranch];
+    branch.archived = !branch.archived;
+    await saveProject();
+    writeForm();
+    await drawHistory();
+  });
+  // Closing or reloading the page with changes not yet in the history asks first.
+  window.addEventListener("beforeunload", (event) => { if (songChanged()) event.preventDefault(); });
   $("album-list").onchange = guard((event) => browseTo(event.target.value));
   $("open-styles").onclick = guard(async () => {
     loras = (await api("/hz3/studio/loras")).loras;
@@ -3960,26 +4251,18 @@ async function init() {
   $("section-restore").onclick = guard(() => restoreSectionOriginal(selected));
   $("section-instrumental").onclick = guard(() => sectionToInstrumental(selected));
   $("compose-dice").onclick = () => { $("compose-seed").value = Math.floor(Math.random() * 2 ** 31); readForm(); };
-  $("song-version-save").onclick = saveSongVersion;
-  $("song-versions").onchange = guard(async (event) => {
-    const value = event.target.value;
-    if (value.startsWith("deleted-")) await recoverSongVersion(Number(value.slice(8)));
-    else if (value !== "") await pickSongVersion(Number(value));
+  $("branch-list").onchange = guard(async (event) => {
+    const name = event.target.value;
+    if (name === NEW_BRANCH) {
+      $("branch-list").value = project.history.current;
+      const typed = await askText("Rama nueva", "Nombre de la rama (empieza en el estado actual):", "");
+      if (typed !== null) await newBranch(typed);
+    } else if (name && name !== project.history.current) await switchBranch(name);
+    writeForm();
   });
+  $("open-history").onclick = guard(openHistory);
   $("close-inspector").onclick = () => { selected = null; draw(); };
   $("close-voice-inspector").onclick = () => { selectedVoice = null; draw(); };
-  $("abc-versions").onchange = guard(async (event) => {
-    if (event.target.value === "") return;
-    readForm();
-    const version = project.abcVersions[Number(event.target.value)];
-    const withLyrics = version.lyrics !== undefined;
-    keepAbcVersion(project, "antes de restaurar una versión", withLyrics);
-    project.abc = version.abc;
-    if (withLyrics) project.lyrics = version.lyrics;
-    writeForm();
-    await refreshSections();
-    status("Versión del ABC restaurada; la que había quedó en las versiones.", 1);
-  });
   $("render-song").onclick = guard(() => render(null));
   $("abc-reimagine").onclick = guard(reimagineAbc);
   $("render-section").onclick = guard(() => render([selected]));

@@ -110,14 +110,17 @@ for a song editor on top of these nodes.
   files at once with their recording license (CC0, public domain, CC-BY, CC-BY-SA), work
   and source URL, and analyzes each with SheetSage2. Their melodies become `Tema` phrases
   for the classical line, with the reference and license in the report.
-- `Exportar WAV` renders the current timeline.
+- `Exportar FLAC` renders the current timeline.
 
 The top bar's album menu only chooses which songs the song menu lists (a new song goes into that album);
 moving a song to another album is done in `Catálogo`. `☰` folds the side panel.
-`Duplicar` (top bar for the open song, or on any song in `Catálogo`) writes `<name> (copia)` in the same album
-and opens it; the original package is only read.
-`Guardar versión` freezes the song's state under a name; the versions menu opens one (saving the current state
-first, or not) or deletes it into «Borradas» in the same menu, where it can be recovered.
+`Copiar como canción nueva` (top bar for the open song, or `Duplicar` on any song in `Catálogo`) writes
+`<name> (copia)` in the same album and opens it; the original package is only read.
+Each song has a git-like history with branches (`Rama` menu and `Historial`): every save, render and big change
+(compose, reimagine, analyse, end here) is a commit of the whole song state on the current branch. Opening an old
+commit starts a new branch from it, so the branch you were on keeps its latest state; switching branch or song saves
+first; nothing is ever deleted (branches are archived, not removed). Songs saved before branches existed get their
+old versions and earlier ABCs as the branches «versiones guardadas», «versiones borradas» and «ABC anteriores».
 `Catálogo` lists every project (date, source audio or composed, sections, takes, voices,
 style) and opens it. Projects are `.mixmash` packages under `output/HZ3-YuE2/studio`: a zip with the
 source audio, `lyrics.txt`, `score.abc`, `style.txt` and the whole studio project

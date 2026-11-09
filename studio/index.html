@@ -12,10 +12,10 @@
   <strong class="brand">HZ3 Studio</strong>
   <select id="album-list" title="Álbum: muestra sus canciones en la lista de al lado (mover una canción de álbum se hace en el Catálogo)"></select>
   <select id="project-list" title="Canciones del álbum elegido"></select>
-  <select id="song-versions" title="Las versiones que guardaste con «Guardar versión»: estilo, letra, ABC, semillas, cantantes, comping, mezcla e instrumentos. Elige una para restaurarla o borrarla."></select>
-  <button id="song-version-save" title="Guarda el estado actual de la canción como una versión con nombre">Guardar versión</button>
-  <button id="save-project">Guardar</button>
-  <button id="duplicate-project" title="Guarda la canción y crea una copia en el mismo álbum («… (copia)»), que se abre; el original no cambia">Duplicar</button>
+  <select id="branch-list" title="La rama de la canción en la que trabajas. Cambiar de rama guarda antes lo que tienes; nada se pierde."></select>
+  <button id="open-history" title="Todos los guardados de la canción, por rama: abre cualquiera sin perder lo actual">Historial</button>
+  <button id="save-project" title="Guarda la canción: queda como un punto en el historial de su rama">Guardar</button>
+  <button id="duplicate-project" title="Guarda la canción y crea otra canción igual en el mismo álbum («… (copia)»), que se abre; el original no cambia">Copiar como canción nueva</button>
   <button id="open-catalog" title="Álbumes y canciones, audios de la biblioteca, referencias; abrir y descargar .mixmash">Catálogo</button>
   <button id="open-styles" title="Cantantes, grupos y géneros del álbum">Estilos</button>
   <span class="spacer"></span>
@@ -66,7 +66,6 @@
     <button id="compose" title="YuE2 compone el ABC (melodía y acordes) a partir del estilo y la letra">Generar ABC (YuE2)</button>
     <button id="apply-classical" title="Escribe en la línea instrumental frases de obras de dominio público (carpeta references/), en las secciones marcadas en el inspector">Aplicar líneas clásicas</button>
     <button id="abc-reimagine" title="Acordes nuevos con la misma melodía, un instrumental nuevo con la misma voz, variaciones ligeras de la melodía o una sección compuesta de nuevo (con una sección elegida). El ABC anterior queda en las versiones.">Reimaginar ABC…</button>
-    <label>Versiones anteriores del ABC (elige una para restaurarla)<select id="abc-versions"></select></label>
     <h4 data-advanced>Render</h4>
     <div class="row">
       <label>Semilla de la canción<input id="seed" type="number" min="0" value="60"></label>
@@ -284,6 +283,28 @@
     <thead><tr><th>Nombre</th><th>Tipo</th><th>Registro</th><th>Texto de estilo (YuE2, en inglés)</th><th>LoRA de voz · fuerza</th><th></th></tr></thead>
     <tbody id="style-rows"></tbody>
   </table>
+</dialog>
+<dialog id="history" class="catalog">
+  <header><strong>Historial de <span id="history-song"></span></strong>
+    <span><button id="history-new-branch" title="Crea una rama desde el estado actual de esta rama">+ Rama</button>
+    <button id="history-rename-branch">Renombrar rama</button>
+    <button id="history-archive-branch" title="La oculta de la lista de ramas; no se borra nada">Archivar rama</button>
+    <button id="close-history">Cerrar</button></span></header>
+  <section class="album-detail">
+    <div class="row">
+      <label>Rama<select id="history-branch"></select></label>
+      <label class="switch"><input id="history-archived" type="checkbox"> Mostrar ramas archivadas</label>
+    </div>
+    <p class="note">Cada «Guardar», cada render y cada cambio grande (componer, reimaginar, analizar, terminar aquí) deja un punto. «Abrir» un punto antiguo crea una rama nueva desde él: la rama en la que estabas no cambia. Nada se borra.</p>
+    <div id="history-rows" class="history-rows"></div>
+  </section>
+</dialog>
+<dialog id="ask" class="catalog choice">
+  <header><strong id="ask-title"></strong></header>
+  <section class="album-detail">
+    <label><span id="ask-text"></span><input id="ask-input" maxlength="64"></label>
+    <div class="row"><button id="ask-ok" class="primary">Aceptar</button><button id="ask-cancel">Cancelar</button></div>
+  </section>
 </dialog>
 <dialog id="choice" class="catalog choice">
   <header><strong id="choice-title"></strong></header>

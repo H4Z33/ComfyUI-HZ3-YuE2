@@ -172,3 +172,11 @@ details.source .fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap:
 body:not(.advanced) .adv:not(.in-use) { display: none !important; }
 body:not(.advanced) .adv.in-use { border-left: 2px solid var(--accent); padding-left: 6px; }
 body:not(.advanced) .adv.in-use::after { content: "avanzado, en uso"; color: var(--accent); font-size: 11px; }
+
+/* History window: one row per saved point of the branch, newest first. */
+.history-rows { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }
+.history-row { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+.history-row.current { border-color: var(--accent); }
+.history-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.history-date { color: var(--muted); font-variant-numeric: tabular-nums; }
+.history-label { flex: 1; min-width: 160px; }

@@ -82,6 +82,11 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
 - Instrumental desde el ABC (todas las secciones con `sectionToInstrumental`, letra `(instrumental)`, mismo LoRA
   filtrado y mismas condiciones que la anterior): sale otra canción, con un estilo completamente diferente. Sin letra ni
   melodía en la voz, los tokens se generan de nuevo y el LoRA ya no arrastra al sonido de la toma 24.
+- Toma 24 instrumental desde el ABC, sin LoRA y con todo lo demás igual a la toma 24 (proyecto «NTP Exp 17 - Toma24
+  instrumental sin voces», toma 26): la pista de voz separada queda en silencio desde 0:20 (-75 dB). Copiar a la toma 24
+  la capa 10, V, head 1 de esa instrumental en las filas de tokens (`kvswap.py render ... 10 v 1-1 "" 1`, prefijos de
+  distinto largo alineados por cuadro) quita la voz desde 0:20, pero la banda queda igual a la de la instrumental (mel
+  0.93-0.98) y lejos de la toma 24 (0.38-0.78): ese canal lleva la banda y la voz juntas (2026-11-08, medido).
 - La receta de capas con donantes generados con negativo da voces más claras, pero las divergencias de generación se
   notan demasiado: no sirve.
 - Cambiar el encabezado de la letra (`[Verse 2]` frente a `[Verse 2 – Her]`) cambia los tokens tanto como volver a

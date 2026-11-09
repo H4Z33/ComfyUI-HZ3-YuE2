@@ -90,6 +90,15 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
   la capa 10, V, head 1 de esa instrumental en las filas de tokens (`kvswap.py render ... 10 v 1-1 "" 1`, prefijos de
   distinto largo alineados por cuadro) quita la voz desde 0:20, pero la banda queda igual a la de la instrumental (mel
   0.93-0.98) y lejos de la toma 24 (0.38-0.78): ese canal lleva la banda y la voz juntas (2026-11-08, medido).
+- **Contexto de otra canción** (`section_contexts`, 2026-11-08, oído del dueño). Canción de prueba Chamarra con el Verse 1
+  de la toma 24 (Ella) antes de Verse 1 y Chorus, y el Verse 2 (El) antes de Verse 2 y Chorus 2:
+  - Con el LoRA y los estilos por sección de la canción de prueba (Exp 18): el estilo sí pasó, la voz no; la voz da
+    brincos raros. La toma 1 sin contexto sale bien.
+  - Con la configuración de la toma 24 (sin LoRA, positivo sin género, negativo con la voz contraria por sección;
+    Exp 18b): suena muy rara, como si no tuviera letra, aunque la letra sí se envió. La voz se parece un poco más a la de
+    la toma 24, sin ser concluyente.
+  - Probable causa, sin medir: los tokens del contexto cantan otra letra («Next day to the sun», «Dejaste la puerta
+    abierta») y YuE2 pierde en qué parte de la letra va.
 - La receta de capas con donantes generados con negativo da voces más claras, pero las divergencias de generación se
   notan demasiado: no sirve.
 - Cambiar el encabezado de la letra (`[Verse 2]` frente a `[Verse 2 – Her]`) cambia los tokens tanto como volver a

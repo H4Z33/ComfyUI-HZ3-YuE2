@@ -7,6 +7,13 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
 - Dos etapas. La etapa 1 (modelo autorregresivo) recibe `[Tags] estilo`, `[Lyrics] letra` y el ABC, y produce tokens
   de códec a 25 por segundo en **un solo flujo: voz y banda juntas**. La etapa 2 convierte esos tokens en audio; cada
   cuadro atiende a todo el prefijo y a todos los tokens.
+- Orden del prefijo (`comfy/text_encoders/yue2.py`): `[EOD]` instrucciones, `[Tags]` estilo, `[Lyrics]` letra completa,
+  `[ABC_START]` ABC completo `[ABC_END]`, `[MUSIC_START]` y los tokens. Las secciones congeladas llevan el mismo prefijo
+  completo; el ABC fija cuántos cuadros dura cada sección, y un token congelado solo se reusa si su duración coincide.
+  Como el modelo es causal, instrucciones y estilo dan el mismo K/V siempre que su texto no cambie; letra y ABC vienen
+  después y cambian todo lo que sigue.
+- La etapa 1 es autorregresiva (decide notas, voz y banda de izquierda a derecha). La etapa 2 (KSampler) es difusión
+  sobre toda la canción a la vez: no avanza en el tiempo, los primeros pasos fijan lo grueso y los últimos el detalle.
 - Misma semilla y mismas entradas reproducen los tokens exactos. Con la misma semilla y otro estilo, solo 1 de cada
   125 tokens coincide: **el estilo no cambia solo la voz**, cambia toda la canción (2026-11-07).
 - Las palabras cantadas viven en los tokens: cambiar la letra del prompt con los mismos tokens no cambia lo que se
@@ -72,6 +79,9 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
   demasiado y siguió solo Ella; la historia hecha con LoRA amarra la voz.
 - El LoRA solo en el conditioning de la etapa 2 (tokens sin LoRA) casi no cambia el audio (0.997): lo que aporta el
   LoRA entra por los tokens. «Con la cortina entreabierta» (1:40) sigue femenina en el 0-shot sin género con negativos.
+- Instrumental desde el ABC (todas las secciones con `sectionToInstrumental`, letra `(instrumental)`, mismo LoRA
+  filtrado y mismas condiciones que la anterior): sale otra canción, con un estilo completamente diferente. Sin letra ni
+  melodía en la voz, los tokens se generan de nuevo y el LoRA ya no arrastra al sonido de la toma 24.
 - La receta de capas con donantes generados con negativo da voces más claras, pero las divergencias de generación se
   notan demasiado: no sirve.
 - Cambiar el encabezado de la letra (`[Verse 2]` frente a `[Verse 2 – Her]`) cambia los tokens tanto como volver a

@@ -315,6 +315,29 @@ class SectionGenerationTests(unittest.TestCase):
         self.assertEqual(model.model.prefills, [[[EOD, 43, ABC_START, 71, 72, ABC_END, MUSIC_START] + intro_tokens]])
         self.assertEqual(model.acoustic_call[0], POSITIVE)
 
+    def test_section_context_is_seen_only_while_that_section_is_sampled(self):
+        donor = run_sections(FakeSectionModel(), style="donor style")["ui"]["section_tokens"][0]["verse 1"]
+        donor_tokens = generation._load_section_tokens(generation._stored_tokens_path(donor), 50)
+        run_sections(FakeSectionModel())
+        model = FakeSectionModel()
+        result = run_sections(model, section_contexts=f"Verse 1 = {donor}")["result"]
+        self.assertIn("1 sampled, 1 reused", result[2])
+        self.assertIn("after 50 context tokens", result[2])
+        # The verse is sampled after the intro plus the donor's tokens, but the song and its audio leave them out.
+        intro_tokens = model.acoustic_call[1][:50]
+        self.assertEqual(model.model.prefills, [[POSITIVE + intro_tokens + donor_tokens]])
+        self.assertEqual(len(model.acoustic_call[1]), 100)
+        self.assertEqual(model.acoustic_call[1][50], CODEC_OFFSET + donor_tokens[-1] % 97)
+        # Same context again: replayed from the stored tokens.
+        again = FakeSectionModel()
+        self.assertIn("0 sampled, 2 reused", run_sections(again, section_contexts=f"Verse 1 = {donor}")["result"][2])
+        with self.assertRaisesRegex(ValueError, "Section context lines"):
+            run_sections(FakeSectionModel(), section_contexts="Verse 1 = ../../secret")
+        with self.assertRaisesRegex(ValueError, "missing or invalid"):
+            run_sections(FakeSectionModel(), section_contexts=f"Verse 1 = {'0' * 64}")
+        with self.assertRaisesRegex(ValueError, "unknown section"):
+            run_sections(FakeSectionModel(), section_contexts=f"Bridge = {donor}")
+
     def test_rejects_seed_overrides_for_unknown_sections(self):
         with self.assertRaisesRegex(ValueError, "unknown section"):
             run_sections(FakeSectionModel(), section_seeds="bridge = 3")

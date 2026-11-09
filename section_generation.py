@@ -206,6 +206,32 @@ def _parse_section_tokens(text: str) -> dict[str, str]:
     return tokens
 
 
+def _parse_section_contexts(text: str) -> dict[str, list[str]]:
+    contexts = {}
+    for line in (text or "").splitlines():
+        if not line.strip():
+            continue
+        name, separator, value = line.rpartition("=")
+        digests = [digest.strip() for digest in value.split(",")]
+        if not separator or not name.strip() or not all(re.fullmatch(r"[0-9a-f]{64}", digest) for digest in digests):
+            raise ValueError(f"Section context lines must look like 'Verse 2 = <64 hex digits>[, <64 hex digits>]', got {line.strip()!r}.")
+        contexts[name.strip().casefold()] = digests
+    return contexts
+
+
+def _load_context_tokens(digests: list[str]) -> list[int]:
+    """Stored tokens of any length, e.g. another song's section, joined in order."""
+    tokens = []
+    for digest in digests:
+        path = _stored_tokens_path(digest)
+        stored = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+        if not isinstance(stored, list) or not stored or any(
+                type(token) is not int or not CODEC_OFFSET <= token < CODEC_OFFSET + CODEC_SIZE for token in stored):
+            raise ValueError(f"Section context tokens {digest} are missing or invalid.")
+        tokens += stored
+    return tokens
+
+
 def _parse_section_styles(text: str) -> dict[str, str]:
     styles = {}
     for line in (text or "").splitlines():
@@ -401,6 +427,14 @@ class HZ3_YuE2_GenerateMusicSections:
                     "tooltip": "Optional per-section negative styles, one 'Verse 2: ...' per line, used for that section "
                                "instead of negative_style.",
                 }),
+                "section_contexts": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": "Optional stored tokens from another song placed right before a section while it is "
+                               "sampled, one 'Verse 2 = <id>[, <id>]' per line. The section continues from them as if "
+                               "they had just played, so their voice and band carry over; they are not part of the "
+                               "song, its audio, or later sections' history.",
+                }),
                 "window_start": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 900.0, "step": 0.04,
                     "tooltip": "With window_seconds, the acoustic conditioning covers only this stretch of the song "
@@ -431,6 +465,7 @@ class HZ3_YuE2_GenerateMusicSections:
         section_tokens="",
         negative_style="",
         section_negative_styles="",
+        section_contexts="",
         window_start=0.0,
         window_seconds=0.0,
     ):
@@ -449,14 +484,17 @@ class HZ3_YuE2_GenerateMusicSections:
         style_overrides = _parse_section_styles(section_styles)
         token_overrides = _parse_section_tokens(section_tokens)
         negative_overrides = _parse_section_styles(section_negative_styles)
+        context_overrides = _parse_section_contexts(section_contexts)
         names = {section["name"].casefold() for section in specs}
         for label, overrides in (("section_seeds", seed_overrides), ("section_styles", style_overrides),
-                                 ("section_tokens", token_overrides), ("section_negative_styles", negative_overrides)):
+                                 ("section_tokens", token_overrides), ("section_negative_styles", negative_overrides),
+                                 ("section_contexts", context_overrides)):
             unknown = set(overrides) - names
             if unknown:
                 raise ValueError(f"{label} names unknown section(s): {', '.join(sorted(unknown))}.")
 
         total_frames = sum(section["frames"] for section in specs)
+        context_tokens = {name: _load_context_tokens(digests) for name, digests in context_overrides.items()}
         tokens = clip.tokenize(
             style,
             lyrics=lyrics,
@@ -484,9 +522,10 @@ class HZ3_YuE2_GenerateMusicSections:
         model, device, dtype = _prepare_model(clip, tokens)
         context = model.config.max_position_embeddings
         longest = max(*map(len, negatives.values()), *map(len, positives.values()))
-        if longest + total_frames > context:
+        longest_context = max(map(len, context_tokens.values()), default=0)
+        if longest + total_frames + longest_context > context:
             raise ValueError(
-                f"The song needs {longest + total_frames} YuE2 context tokens, "
+                f"The song needs {longest + total_frames + longest_context} YuE2 context tokens, "
                 f"above the model limit {context}. Shorten the lyrics, ABC, or score duration."
             )
 
@@ -512,20 +551,24 @@ class HZ3_YuE2_GenerateMusicSections:
             # Only set when used, so the keys of every token stored without a negative style stay the same.
             if section_negative:
                 fields["negative"] = section_negative
+            section_context = context_overrides.get(section["name"].casefold())
+            if section_context:
+                fields["context"] = section_context
             path = _section_token_path(fields)
             # Tokens from a chosen take win; a removed or now mismatched file falls back to the keyed ones.
             kept = token_overrides.get(section["name"].casefold())
             if kept and _load_section_tokens(_stored_tokens_path(kept), section["frames"]) is not None:
                 path = _stored_tokens_path(kept)
             previous = path.stem
-            plan.append((section, section_seed, section_style, path, _load_section_tokens(path, section["frames"]), section_negative))
+            plan.append((section, section_seed, section_style, path, _load_section_tokens(path, section["frames"]), section_negative,
+                         context_tokens.get(section["name"].casefold(), [])))
 
         progress = comfy.utils.ProgressBar(total_frames)
         history = []
         section_layout = []
         try:
             with comfy.model_management.cuda_device_context(device), comfy.ops.use_quantized_matmul(model, device):
-                for index, (section, section_seed, section_style, path, stored, section_negative) in enumerate(plan):
+                for index, (section, section_seed, section_style, path, stored, section_negative, lead_in) in enumerate(plan):
                     start = len(history)
                     following = plan[index + 1][4] if index + 1 < len(plan) else None
                     if stored is None:
@@ -534,8 +577,9 @@ class HZ3_YuE2_GenerateMusicSections:
                         # sampled several times and the ending that best leads into it is kept.
                         tail = section["frames"] // section["bars"] if following and section["bars"] > 1 else 0
                         matched = bool(tail)
+                        # Another song's tokens sit between the history and the section, only while it is sampled.
                         stored = _sample_section(
-                            model, [base + history for base in bases], cfg_scale, section["frames"] - tail, section_seed, history,
+                            model, [base + history + lead_in for base in bases], cfg_scale, section["frames"] - tail, section_seed, history,
                             sampling, device, dtype, progress, start, section["name"],
                         )
                         if tail:
@@ -544,7 +588,7 @@ class HZ3_YuE2_GenerateMusicSections:
                             for candidate in range(SEAM_CANDIDATES):
                                 candidate_history = history.copy()
                                 ending = _sample_section(
-                                    model, [base + history for base in bases], cfg_scale, tail,
+                                    model, [base + history + lead_in for base in bases], cfg_scale, tail,
                                     (section_seed + 1 + candidate) & 0xFFFFFFFFFFFFFFFF, candidate_history,
                                     sampling, device, dtype, progress, start + len(stored), section["name"],
                                 )
@@ -570,6 +614,7 @@ class HZ3_YuE2_GenerateMusicSections:
                             "bars": section["bars"],
                             "seed": section_seed,
                             "own_style": section_style != style,
+                            "context_frames": len(lead_in),
                             "reused": reused,
                             "matched_ending": matched,
                             "tokens": path.stem,
@@ -603,7 +648,9 @@ class HZ3_YuE2_GenerateMusicSections:
             report_lines.append(
                 f"{section['name']}: {section['bars']} bars · "
                 f"{start_seconds:.2f}-{end_seconds:.2f}s · seed {section['seed']}"
-                f"{' · own style' if section['own_style'] else ''}{' · reused' if section['reused'] else ''}"
+                f"{' · own style' if section['own_style'] else ''}"
+                f"{' · after %d context tokens' % section['context_frames'] if section['context_frames'] else ''}"
+                f"{' · reused' if section['reused'] else ''}"
                 f"{' · ending matched to the next section' if section['matched_ending'] else ''}"
             )
         report = "\n".join(report_lines)

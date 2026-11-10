@@ -126,7 +126,7 @@ function newProject() {
     compose: { seed: 60, temperature: 0.7, keep: true },
     ckpt: "yue2_3b_int8_convrot.safetensors",
     sampling: { temperature: 0.9, top_p: 0.95, top_k: 100, repetition_penalty: 1.2, cfg_scale: 2.0 },
-    harmonize: true, harmonyVoices: [...VOICES], history: null, sectionSeeds: {}, sectionStyles: {}, sectionNegatives: {}, sectionContexts: {}, sectionOnsets: {}, sectionSingers: {}, takes: [], comp: {}, trackOn: {}, trackSpans: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
+    harmonize: true, harmonyVoices: [...VOICES], history: null, sectionSeeds: {}, sectionStyles: {}, sectionNegatives: {}, sectionContexts: {}, sectionOnsets: {}, sectionSingers: {}, sectionLocks: {}, takes: [], comp: {}, trackOn: {}, trackSpans: {}, mixer: {}, voices: [], instruments: [], fx: {}, sectionOriginals: {},
     arranger: { model: "deepseek-v4.1-flash:cloud", instructions: "" }, arrangement: {}, classicalPlan: {}, classicalReport: [],
   };
 }
@@ -270,7 +270,7 @@ function editableSections() {
 function dropStaleSections() {
   if (!sections.length) return;
   const names = new Set(sections.map((section) => section.name));
-  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionNegatives, project.sectionContexts ?? {}, project.sectionOnsets ?? {}, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
+  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionNegatives, project.sectionContexts ?? {}, project.sectionOnsets ?? {}, project.sectionSingers, project.sectionLocks ?? {}, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
   for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
   for (const entry of Object.values(project.mixer)) if (entry.offsets) maps.push(entry.offsets);
   for (const map of maps) for (const name of Object.keys(map ?? {})) if (!names.has(name)) delete map[name];
@@ -279,7 +279,7 @@ function dropStaleSections() {
 // Renames are [from, to] pairs; several sections may share an old name (YuE2 repeats "% chorus"), so each new name
 // gets a copy of what the old name held.
 function renameKeys(renames) {
-  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionNegatives, project.sectionContexts ?? {}, project.sectionOnsets ?? {}, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
+  const maps = [project.sectionOriginals, project.comp, project.sectionSeeds, project.sectionStyles, project.sectionNegatives, project.sectionContexts ?? {}, project.sectionOnsets ?? {}, project.sectionSingers, project.sectionLocks ?? {}, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
   for (const take of project.takes) maps.push(take.sectionLyrics, take.sectionSeeds, take.sectionStyles ?? {}, take.sectionAbc ?? {}, take.sectionTokens ?? {});
   for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
   for (const entry of Object.values(project.mixer)) if (entry.offsets) maps.push(entry.offsets);
@@ -402,6 +402,19 @@ function sectionSeed(section, index) {
 
 function takeById(id) {
   return project.takes.find((take) => take.id === id);
+}
+
+// A kept section (🔒) plays its chosen take's tokens in «Generate song» instead of being sung again.
+function isKept(section) {
+  return Boolean(project.sectionLocks?.[section.name] && takeById(project.comp[section.name]));
+}
+
+function keepSections(names, keep) {
+  project.sectionLocks ??= {};
+  for (const name of names) {
+    if (keep) project.sectionLocks[name] = true;
+    else delete project.sectionLocks[name];
+  }
 }
 
 function isEdited(section, index) {
@@ -570,6 +583,50 @@ function sectionStyle(section) {
 // second; `withLora` puts the LoRA trigger in front of both the same way.
 function sectionNegative(section) {
   return (project.sectionNegatives[section.name] || project.negativeStyle).trim();
+}
+
+// Voice contrast, the recipe that gave the clearest voices: each section's CFG negative is its own style with the
+// other singers of the song instead of its own. Written into the sections' negatives, where it can be read and edited.
+function voiceContrast() {
+  readForm();
+  const used = [...new Set(sections.map((section) => project.sectionSingers[section.name]).filter((id) => catalogStyle(id)))];
+  if (used.length < 2) throw new Error("Voice contrast needs two singers in the song: choose each section's singer first.");
+  let count = 0;
+  for (const section of sections) {
+    const own = project.sectionSingers[section.name];
+    if (!catalogStyle(own)) continue;
+    const others = used.filter((id) => id !== own).map((id) => catalogStyle(id).text);
+    project.sectionNegatives[section.name] = [catalogStyle(project.baseStyle)?.text, project.sectionStyles[section.name] || project.style, ...others]
+      .filter((text) => text?.trim()).map(oneLine).join(", ");
+    count++;
+  }
+  const warnings = [
+    project.sampling.cfg_scale <= 1 && "CFG is 1, so the negative does nothing: raise it",
+    loraUses().some((use) => use.lora?.name) && "a LoRA trained on a take outweighs the negatives (measured): the voices may not change",
+  ].filter(Boolean);
+  draw();
+  status(`Voice contrast: ${count} sections have the other singer as negative (see «What YuE2 receives»).${warnings.length ? ` Note: ${warnings.join("; ")}.` : ""}`, 1, warnings.length > 0);
+}
+
+function clearVoiceContrast() {
+  project.sectionNegatives = {};
+  draw();
+  status("Section negatives removed.", 1);
+}
+
+// The album's concept song: the song whose takes are the album's reference for voice and band. Its section with the
+// same name, in its chosen take, becomes this section's context.
+async function contextFromConcept(name) {
+  if (!album.concept) throw new Error(`The album «${album.name}» has no concept song: choose it in Catalog, in the album.`);
+  if (album.concept === project.name) throw new Error("This song is the album's concept song.");
+  const source = await api(`/hz3/studio/project?name=${encodeURIComponent(album.concept)}`);
+  const names = Object.keys(source.comp ?? {}).filter((item) => source.comp[item]);
+  if (!names.length) throw new Error(`«${album.concept}» has no chosen takes yet.`);
+  const key = names.find((item) => item.toLowerCase() === name.toLowerCase())
+    ?? await choose(`Section of «${album.concept}»`, `The concept song has no «${name}». Which of its sections should YuE2 hear before this one?`,
+      names.map((item) => ({ value: item, label: item })));
+  if (!key) return;
+  await setSectionContext(name, album.concept, source.comp[key], key);
 }
 
 function sentPrompt(section) {
@@ -857,8 +914,9 @@ async function recordSectionMelody(name) {
   status(`«${name}»: ${result.notes} notes from your voice in the score. Listen with «▶ Score» and regenerate the section so YuE2 sings them.`, 1);
 }
 
-// Lead singer of a section: its melody moves to the singer's register and its lyric tag says who sings.
-async function setSectionSinger(name, id) {
+// Lead singer of a section: its lyric tag says who sings and its style carries the singer's description. The melody
+// stays where it was written unless `moveMelody`: another octave changes who sings, not only the register.
+async function setSectionSinger(name, id, moveMelody = false) {
   const index = sections.findIndex((section) => section.name === name);
   if (index < 0) throw new Error(`there is no section «${name}»`);
   readForm();
@@ -870,7 +928,7 @@ async function setSectionSinger(name, id) {
     const tag = singer ? `[${base} – ${singerCue(singer)}]` : `[${base}]`;
     lyrics = lyrics.slice(0, block.start) + tag + lyrics.slice(block.bodyStart);
   }
-  const notes = singer && score ? (() => {
+  const notes = moveMelody && singer && score ? (() => {
     const from = score.bars[score.sections[index].start_bar].start;
     const to = index + 1 < score.sections.length ? score.bars[score.sections[index + 1].start_bar].start : score.total_ticks;
     return (score.tracks.Vocal ?? []).filter((note) => note.start >= from && note.start < to).map((note) => note.pitch).sort((a, b) => a - b);
@@ -1876,7 +1934,7 @@ const STATE_NAMES = {
   style: "style", negativeStyle: "negative style", baseStyle: "base style", lora: "LoRA", lyrics: "lyrics", abc: "ABC",
   seed: "seed", sampling: "sampling", ckpt: "checkpoint", compose: "compose settings", harmonize: "harmonies",
   harmonyVoices: "harmony voices", sectionSeeds: "section seeds", sectionStyles: "section styles",
-  sectionNegatives: "section negatives", sectionContexts: "contexts", sectionOnsets: "fixed openings",
+  sectionLocks: "kept sections", sectionNegatives: "section negatives", sectionContexts: "contexts", sectionOnsets: "fixed openings",
   sectionSingers: "singers", comp: "chosen takes", trackOn: "active tracks", trackSpans: "harmony spans",
   mixer: "mix", voices: "extra voices", instruments: "instruments", fx: "effects", sectionOriginals: "original melodies",
   classicalPlan: "classical lines", arrangement: "agent arrangement", styleInstructions: "style directions",
@@ -2230,10 +2288,12 @@ async function render(targets, reimagine = null) {
     take.sectionSeeds[section.name] = sectionSeed(section, index);
     if (sectionStyle(section)) take.sectionStyles[section.name] = sectionStyle(section);
   });
-  // "Generar canción" renders every section; "Regenerar sección" only the chosen ones (and any never rendered).
+  // "Generate song" renders every section not kept (🔒); "Regenerate section" only the chosen ones, kept or not.
+  // A section never rendered is always sung.
   const comped = new Set(sections.filter((section) =>
-    reimagine || !targets || targets.includes(section.name) || !takeById(project.comp[section.name])
+    reimagine || (targets ? targets.includes(section.name) : !isKept(section)) || !takeById(project.comp[section.name])
   ).map((section) => section.name));
+  if (!comped.size) throw new Error("Every section keeps its take (🔒): unlock one in its Takes tab, or use «Regenerate section».");
   const kept = reimagine ? {} : await keptTokens(comped);
   const missing = sections.filter((section) => !comped.has(section.name) && !kept[section.name]).map((section) => section.name);
   if (missing.length) {
@@ -2580,6 +2640,7 @@ function position() {
 }
 
 async function play() {
+  stopAudition();
   if (playback) { pause(); return; }
   await context().resume();
   const from = pausedAt >= duration() ? 0 : pausedAt;
@@ -2906,7 +2967,8 @@ function drawSections() {
     block.title = `${section.name} · ${fmt(section.start)}–${fmt(section.end)}`;
     block.textContent = section.name;
     const takeId = project.comp[section.name];
-    if (takeId) block.insertAdjacentHTML("beforeend", `<span class="take">T${takeId}</span>`);
+    if (takeId) block.insertAdjacentHTML("beforeend", isKept(section)
+      ? `<span class="take" title="Kept: «Generate song» does not sing it again">🔒T${takeId}</span>` : `<span class="take">T${takeId}</span>`);
     const parts = editedParts(section, index);
     if (parts.length) block.insertAdjacentHTML("beforeend", `<span class="edited" title="${escapeHtml(`The ${parts.join(", ")} of this section is not what take ${project.comp[section.name]} sang: «Regenerate section» sings it this way. If you only corrected the text, you can leave it.`)}">edited: ${parts.join(", ")}</span>`);
     const fit = melodyFit(section);
@@ -3348,16 +3410,74 @@ function drawInspector() {
   const takes = $("section-takes");
   takes.innerHTML = project.takes.length ? "<span>Take of this section</span>" : "<span>No takes yet.</span>";
   for (const take of project.takes) {
-    const label = document.createElement("label");
+    const row = document.createElement("div");
+    row.className = "take-row";
     const changed = (take.sectionLyrics[section.name] ?? "").trim() !== section.lyrics.trim() ? " · other lyrics" : "";
-    label.innerHTML = `<input type="radio" name="take" ${project.comp[section.name] === take.id ? "checked" : ""}>
-      T${take.id} · seed ${take.sectionSeeds[section.name]}${changed}`;
-    label.querySelector("input").onchange = () => {
+    const sung = takeCovers(take, section);
+    const playing = audition?.take === take.id && audition.section === section.name;
+    row.innerHTML = `<label><input type="radio" name="take" ${project.comp[section.name] === take.id ? "checked" : ""}>
+      T${take.id} · seed ${take.sectionSeeds[section.name]}${changed}</label>
+      <button type="button" class="take-play" ${sung ? "" : "disabled"} title="${sung ? "Listen to this section in this take, without choosing it" : "This take did not render this section"}">${playing ? "■" : "▶"}</button>
+      <button type="button" class="take-in-song" ${sung ? "" : "disabled"} title="Listen to it inside the song, from 4 s before the section, with the other sections as chosen. The chosen take does not change.">▶ in song</button>`;
+    row.querySelector("input").onchange = () => {
       project.comp[section.name] = take.id;
       draw();
       restartIfPlaying();
     };
-    takes.append(label);
+    row.querySelector(".take-play").onclick = guard(async () => { await auditionTake(take, section); drawInspector(); });
+    row.querySelector(".take-in-song").onclick = guard(() => auditionInSong(take, section));
+    takes.append(row);
+  }
+  $("section-keep").checked = Boolean(project.sectionLocks?.[section.name]);
+  $("section-keep").disabled = !takeById(project.comp[section.name]);
+}
+
+// Whether a take's files hold this section (a take that regenerated some sections only rendered their stretch).
+function takeCovers(take, section) {
+  if (!take.files?.vocals) return false;
+  return !take.window || (take.window[0] < section.end && take.window[1] > section.start);
+}
+
+// One take's voice and instrumental over a section, without the mixer and without choosing the take.
+let audition = null;
+
+function stopAudition() {
+  if (!audition) return;
+  audition.sources.forEach((source) => { source.onended = null; source.stop(); });
+  audition = null;
+}
+
+async function auditionTake(take, section) {
+  const same = audition?.take === take.id && audition.section === section.name;
+  stopAudition();
+  if (same) return;
+  pause();
+  await context().resume();
+  await loadTake(take);
+  const sources = ["vocals", "instrumental"].map((track) => take.files[track] && buffers.get(fileUrl(take.files[track]))?.buffer).filter(Boolean).map((buffer) => {
+    const source = audioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioContext.destination);
+    source.start(0, section.start, section.end - section.start);
+    return source;
+  });
+  if (!sources.length) throw new Error(`The audio of take ${take.id} could not be read.`);
+  audition = { take: take.id, section: section.name, sources };
+  sources[0].onended = () => { audition = null; if (selected === section.name) drawInspector(); };
+}
+
+// The same take heard inside the song: the section plays this take until the playback stops or restarts; the chosen
+// take is not changed.
+async function auditionInSong(take, section) {
+  pause();
+  await loadTake(take);
+  const chosen = project.comp[section.name];
+  project.comp[section.name] = take.id;
+  pausedAt = Math.max(0, section.start - 4);
+  try {
+    await play();
+  } finally {
+    project.comp[section.name] = chosen;
   }
 }
 
@@ -3386,7 +3506,7 @@ async function splitSection() {
   edited[index].end_bar = bar - 1;
   // The new part keeps what the section had: its take (the audio under its bars), style, singer, and which
   // tracks and voices play there.
-  const maps = [project.comp, project.sectionStyles, project.sectionSingers, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
+  const maps = [project.comp, project.sectionStyles, project.sectionSingers, project.sectionLocks ?? {}, project.arrangement, project.classicalPlan, ...Object.values(project.trackOn)];
   for (const voice of project.voices) maps.push(voice.on, voice.sectionOffsets, voice.sectionGains ?? {});
   for (const map of maps) if (selected in map) map[name] = map[selected];
   selected = name;
@@ -3993,6 +4113,8 @@ async function drawCatalog() {
   });
   $("album-name").value = managedAlbum;
   $("album-notes").value = info.notes ?? "";
+  $("album-concept").innerHTML = `<option value="">— none</option>` + songs.filter((entry) => !entry.archived || entry.name === info.concept)
+    .map((entry) => `<option value="${escapeHtml(entry.name)}"${entry.name === info.concept ? " selected" : ""}>${escapeHtml(entry.name)}</option>`).join("");
   $("album-delete").disabled = managedAlbum === DEFAULT_ALBUM;
   $("album-styles").innerHTML = info.styles.map((style) => {
     const users = songs.filter((entry) => entry.styles.some((used) => used.id === style.id)).map((entry) => escapeHtml(entry.name));
@@ -4489,6 +4611,26 @@ async function init() {
   $("apply-classical").onclick = guard(applyClassical);
   $("section-classical").addEventListener("change", (event) => { project.classicalPlan[selected] = event.target.value; });
   $("section-singer").addEventListener("change", guard(async (event) => { await setSectionSinger(selected, event.target.value || null); draw(); }));
+  $("section-singer-range").onclick = guard(async () => {
+    const id = project.sectionSingers[selected];
+    if (!id) throw new Error("Choose the section's singer first.");
+    const octaves = await setSectionSinger(selected, id, true);
+    draw();
+    status(octaves ? `«${selected}»: melody moved ${octaves > 0 ? "+" : ""}${octaves} octave(s); the earlier score is in the ABC versions.` : `«${selected}» is already in the singer's range.`, 1);
+  });
+  $("voice-contrast").onclick = guard(voiceContrast);
+  $("voice-contrast-clear").onclick = guard(clearVoiceContrast);
+  $("section-context-concept").onclick = guard(async () => { await contextFromConcept(selected); draw(); });
+  $("section-keep").addEventListener("change", (event) => { keepSections([selected], event.target.checked); draw(); });
+  $("keep-all").onclick = () => { keepSections(sections.filter((section) => takeById(project.comp[section.name])).map((section) => section.name), true); draw(); };
+  $("keep-none").onclick = () => { keepSections(sections.map((section) => section.name), false); draw(); };
+  $("album-concept").onchange = guard(async (event) => {
+    const info = await albumData(managedAlbum);
+    info.concept = event.target.value || null;
+    await postJson("/hz3/studio/album", info);
+    if (album.name === managedAlbum) album.concept = info.concept;
+    status(info.concept ? `«${info.concept}» is the concept song of «${managedAlbum}».` : `«${managedAlbum}» has no concept song.`, 1);
+  });
   $("voice-singer").addEventListener("change", (event) => {
     const voice = selectedVoiceEntry();
     voice.singer = event.target.value || null;

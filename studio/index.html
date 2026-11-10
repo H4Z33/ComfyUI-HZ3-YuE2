@@ -143,12 +143,27 @@
             <button id="section-style-original" title="Go back to the song's global style with this section's [Section] line; it updates itself only when you change the global style">Original</button>
           </div>
         </div>
-        <label title="Moves the section's melody to the singer's range, writes who sings in its lyrics tag and puts their description in this section's style">Section singer (lead vocal)<select id="section-singer"></select></label>
+        <label title="Writes who sings in the section's lyrics tag and puts their description in this section's style. The melody stays where it is written.">Section singer (lead vocal)<select id="section-singer"></select></label>
+        <div class="row">
+          <button id="section-singer-range" title="Moves this section's melody by octaves to the singer's range (Range in the catalog). Measured: another octave changes who sings and the timbre, not only the register. The earlier score stays in the ABC versions.">Move melody to the singer's range</button>
+        </div>
         <label title="With CFG above 1, this section moves away from this style; empty uses the song's negative style">Section negative style<textarea id="section-negative" rows="3"></textarea></label>
+        <div class="row">
+          <button id="voice-contrast" title="Fills every section's negative style with its own style plus the other singers of the song: the recipe that gave the clearest voices. Needs CFG above 1. A LoRA trained on a take outweighs it.">Voice contrast (all sections)</button>
+          <button id="voice-contrast-clear" title="Empties the negative style of every section">Clear section negatives</button>
+        </div>
         <label title="Tokens of a section from another song that YuE2 hears right before sampling this one, as if they had just played; they do not stay in the song. Format: Project · take N · Section. Empty removes it.">Section context (another song)<input id="section-context" type="text" placeholder="El amor no es lo tuyo · take 24 · Verse 2"></label>
+        <div class="row">
+          <button id="section-context-concept" title="Uses the same section of the album's concept song (Catalog, album, Concept song), in its chosen take, as this section's context">Context from the concept song</button>
+        </div>
       </div>
       <div class="inspector-pane" data-insp-pane="takes">
         <div id="section-takes" class="takes"></div>
+        <div class="keep-row">
+          <label class="switch" title="«Generate song» plays this section's chosen take instead of singing it again. «Regenerate section» still sings it."><input id="section-keep" type="checkbox"> 🔒 Keep this take</label>
+          <button id="keep-all" title="Keeps the chosen take of every section: «Generate song» then only sings sections without a take">Keep all sections</button>
+          <button id="keep-none" title="«Generate song» sings every section again">Unlock all</button>
+        </div>
         <div class="row">
           <label>Section seed<input id="section-seed" type="number" min="0"></label>
           <button id="section-dice" title="New seed">🎲</button>
@@ -269,6 +284,7 @@
         <button id="album-delete" title="Its songs move to «General»; the album moves to the deleted folder">Delete album</button>
       </div>
       <label>Album notes<textarea id="album-notes" rows="2"></textarea></label>
+      <label title="The song whose takes are this album's reference for voice and band. Today: its sections can be given as context to the sections of the album's other songs (section, Style tab, «Context from the concept song»).">Concept song (voice and band source)<select id="album-concept"></select></label>
       <div><span class="note">Album styles and singers</span><div id="album-styles" class="chips"></div></div>
       <div class="row catalog-tools">
         <label>Search<input id="catalog-search" type="search" placeholder="name or a line of the lyrics"></label>

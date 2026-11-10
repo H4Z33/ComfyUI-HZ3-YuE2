@@ -170,6 +170,9 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
     Bridge 2) aprendidos bajo un estilo que dice `male lead vocal`.
   - Ya medido antes: un LoRA de la toma 24 anula los negativos, y un LoRA con estilos por sección no decide quién
     canta en una melodía nueva.
+- Toma 4 de «Visto a las 3 07» (`input/ntp3_cast.js`): sin LoRA, estilo general sin género ni `duet`; Verse 1, Verse 2
+  y Bridge con el estilo de El y el de Ella de negativo; Chorus y Outro con el de Ella y el de El de negativo; mismas
+  semillas. Intro (toma 2) y Chorus 2 (toma 3) congelados. Veredicto del dueño pendiente.
 - Componer respeta `K:` y `Q:` cuando el proyecto ya tiene la cabecera del ABC y `Keep` activo. En 15 intentos siempre
   metió un `pre-chorus` entre Verse 2 y Chorus 2.
 

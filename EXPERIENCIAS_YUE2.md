@@ -33,6 +33,15 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
   estilo: quitarla cambia la voz (2026-11-07).
 - Mover la melodía de octava para conseguir un cantante cambia su timbre: el dueño no lo acepta como solución para
   conservar una voz (2026-10-24). Se usó a propósito para la invitada Yue Ri en los duetos de Amoriv.
+- "Mover la melodía cambia no solo el género sino el cantante" (dueño, 2026-11-09). Desde ese día elegir el cantante
+  de una sección ya no mueve su melodía; es un botón aparte.
+- A qué aplica el negativo (`section_generation.py`, 2026-11-09): es el negativo del CFG al muestrear los tokens
+  (etapa 1). Con `negative_style` o `section_negative_styles` es el prompt completo (mismas instrucciones, letra y ABC)
+  con solo `[Tags]` cambiado, así que el CFG empuja nada más por la diferencia de estilo. Sin texto negativo es
+  instrucciones más ABC, sin estilo ni letra. Con CFG 1 no hace nada. No toca la etapa 2.
+- Pendiente (dueño, 2026-11-09): el donante de K/V debe salir de los tokens congelados de la canción concepto, y
+  falta probarlo con 3 canciones distintas del mismo estilo y cantantes. `kvswap.py` solo ha cambiado canales entre
+  renders de la misma canción, alineados cuadro a cuadro.
 - Mismos tokens con otros tokens antes de ellos en la etapa 2: la voz cambia, pero casi siempre a dueto (oído del dueño,
   2026-11-07). Cambiar solo el texto del estilo en la etapa 2 no cambia la voz.
 - Ningún detector sirve para decidir la voz (2026-11-07): un clasificador MFCC propio marca duetos como hombre;

@@ -24,6 +24,11 @@ se muestra como captura de la app real modificada, con su mismo lenguaje visual.
 
 ## Tercer veredicto (2026-11-09): en ventanas angostas no se veían las ondas ni la partitura
 
+Corrección del dueño el mismo día: el problema era de Firefox; en Chrome se veían bien. Causa encontrada: al abrir una
+canción se decodifican más de cien archivos a la vez y Firefox a veces rechaza alguno ("unknown content type"), lo que
+cortaba la apertura antes de dibujar. Ahora se decodifican de 4 en 4, con un reintento, la partitura se dibuja antes
+del audio y un archivo ilegible deja su carril vacío con aviso. Los cambios para ventanas angostas se quedan.
+
 Con una sección elegida, el inspector tapaba la mitad de la pantalla por debajo de 1100 px, y en el teléfono el panel
 lateral dejaba 260 px al timeline. Regla: **el timeline siempre conserva la mayor parte de la altura** (58 % mínimo);
 en el teléfono el panel lateral es un cajón (☰) cerrado al abrir, la cabecera es una fila que se desliza y el catálogo

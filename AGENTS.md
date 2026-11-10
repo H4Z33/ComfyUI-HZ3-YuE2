@@ -71,8 +71,18 @@ de voz.
 ## Comportamientos que hay que conocer
 
 - Al elegir cantante de sección, el Studio etiqueta la letra de esa sección con el cantante y suma su descripción al
-  estilo de esa sección. **También mueve la melodía de esa sección por octavas al registro del cantante** (columna
-  `Range` del catálogo). Mover el registro cambia el timbre de la voz; el dueño aún no decide si se queda.
+  estilo de esa sección. **Ya no mueve la melodía** (2026-11-09): mover la octava cambia al cantante, no solo el
+  género (dueño). Quien lo quiera lo pide con `Move melody to the singer's range` o
+  `setSectionSinger(sección, id, true)`.
+- `🔒 Keep this take` (pestaña Takes; `keepSections(nombres, true)`): `Generate song` reproduce los tokens de la toma
+  elegida de las secciones guardadas y solo canta las demás. `Regenerate section` sí las vuelve a cantar.
+- `▶` y `▶ in song` junto a cada toma: oír una sección en esa toma sin elegirla.
+- `Voice contrast (all sections)` (`voiceContrast()`): escribe en el negativo de cada sección su estilo más la
+  descripción de los otros cantantes de la canción. Es el negativo del CFG de la etapa 1: el mismo prompt (instrucciones,
+  letra, ABC) con otro `[Tags]`; no actúa con CFG 1 y un LoRA entrenado sobre una toma pesa más.
+- `Concept song` del álbum (Catalog → álbum; `album.concept`): la canción de referencia de voz y banda. Hoy solo sirve
+  para `Context from the concept song` (`contextFromConcept(sección)`). El trasplante de K/V desde sus tokens
+  congelados no está construido: falta el experimento con 3 canciones del mismo estilo y cantantes.
 - Componer ABC no respeta la estructura de la letra ni la tonalidad o BPM del estilo: revisa `K:` y `Q:` y notas
   contra sílabas por sección antes de renderizar.
 - Un render lleva un solo LoRA.

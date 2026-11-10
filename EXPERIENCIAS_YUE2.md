@@ -172,7 +172,9 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
     canta en una melodía nueva.
 - Toma 4 de «Visto a las 3 07» (`input/ntp3_cast.js`): sin LoRA, estilo general sin género ni `duet`; Verse 1, Verse 2
   y Bridge con el estilo de El y el de Ella de negativo; Chorus y Outro con el de Ella y el de El de negativo; mismas
-  semillas. Intro (toma 2) y Chorus 2 (toma 3) congelados. Veredicto del dueño pendiente.
+  semillas. Intro (toma 2) y Chorus 2 (toma 3) congelados. Veredicto del dueño: **todo lo canta El** y el Chorus 2 suena raro.
+  El estilo de Ella con El de negativo no cambió al cantante en Chorus ni en Outro después de un Verse 1 de El: la
+  historia amarra también aquí. Un Chorus 2 congelado, hecho con LoRA y tras otra historia, no encaja en la toma nueva.
 - Componer respeta `K:` y `Q:` cuando el proyecto ya tiene la cabecera del ABC y `Keep` activo. En 15 intentos siempre
   metió un `pre-chorus` entre Verse 2 y Chorus 2.
 

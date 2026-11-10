@@ -2971,7 +2971,7 @@ function drawScore() {
   for (const [name, color] of [["Ins", null], ["Vocal", true]]) {
     for (const note of score.tracks[name] ?? []) {
       graphics.fillStyle = color ? SECTION_COLORS[sectionAt(note.start) % SECTION_COLORS.length] : "#4a4d57";
-      graphics.fillRect(x(note.start), top + (high - note.pitch) * row, Math.max(1, x(note.duration) - 1), Math.max(2, row - 1));
+      graphics.fillRect(x(note.start), top + (high - note.pitch) * row, Math.max(1, x(note.duration) - 1), Math.max(3, row - 1));
     }
   }
   graphics.font = "10px system-ui, sans-serif";
@@ -4067,7 +4067,7 @@ async function catalogBulk(change, done) {
   status(done(names.length), 1);
 }
 
-// A copy of a song beside it ("<name> (copia)"): the original is only read, the copy opens.
+// A copy of a song beside it ("<name> (copy)"): the original is only read, the copy opens.
 async function duplicateSong(name) {
   if (name === project.name) await saveProject();
   const { name: copy } = await postJson("/hz3/studio/duplicate", { name });
@@ -4351,6 +4351,8 @@ async function init() {
     $("reference-files").value = "";
   });
   $("toggle-song").onclick = () => document.querySelector(".song").classList.toggle("hidden");
+  // On a phone the side panel is a drawer: it starts closed so the timeline is what you see.
+  if (matchMedia("(max-width: 760px)").matches) document.querySelector(".song").classList.add("hidden");
   $("source-audio").onchange = guard(async (event) => {
     const [file] = event.target.files;
     event.target.value = "";

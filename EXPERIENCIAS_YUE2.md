@@ -126,6 +126,24 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
 - Cambiar el encabezado de la letra (`[Verse 2]` frente a `[Verse 2 – Her]`) cambia los tokens tanto como volver a
   generar sin cambiar nada.
 
+### Canción nueva con la receta de la toma 24 (2026-11-09, oído del dueño)
+- Meta: tres canciones nuevas de Nadie te pregunto con el mismo estilo y **las mismas voces** que la toma 24, para
+  probar después el donante de K/V desde tokens congelados. Proyectos «NTP - Visto a las 3 07», «NTP - La ultima combi»
+  y «NTP - Todavia huele a ti» (F#m, 192, misma estructura).
+- «Visto a las 3 07», toma 1, con la receta del Exp 10 (sin LoRA, positivo sin género, negativo con la voz contraria por
+  sección): **todo lo canta Ella, el estilo no coincide con la toma 24 y las voces son otras.** Lo que en la propia
+  canción daba casi la toma 24 no se traslada a una letra y melodía nuevas.
+- Error a no repetir: esa toma se anunció como "el estilo de la toma 24" y llevaba el estilo sin género del Exp 10. El
+  estilo de una toma es el que ella guarda (`takes[n].style`, `sectionStyles`, `sectionSeeds`), no el del proyecto: el
+  proyecto «El amor no es lo tuyo» hoy tiene otro estilo (una línea, sin la segunda) y el LoRA `hz3_luna_pop` a 0.3
+  en su formulario, y la toma 24 se hizo sin LoRA.
+- El master de «El amor no es lo tuyo» no se perdió (verificado 2026-11-09): la toma 24, sus 10 secciones de tokens y
+  su audio están intactos e idénticos en el proyecto y en su copia; `input/el_amor_no_es_lo_tuyo_take24.flac`
+  (2026-10-23) es el export que suena en `El_amor_no_es_lo_tuyo_VHS_v3.mp4` (correlación 0.997). En la carpeta de
+  h3vn solo están los videos; el `.mixmash` vive en `output/HZ3-YuE2/studio/`.
+- Componer respeta `K:` y `Q:` cuando el proyecto ya tiene la cabecera del ABC y `Keep` activo. En 15 intentos siempre
+  metió un `pre-chorus` entre Verse 2 y Chorus 2.
+
 ## LoRA de estilo
 
 - Receta en uso: `HZ3_YuE2_AudioToLoRA` en modo style sobre los tokens de una toma aprobada, 150 pasos, rank 32,

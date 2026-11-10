@@ -22,6 +22,14 @@ donde estorban, **no** quitar densidad ni capacidades. Las vistas de §2 que vie
 bandeja, tarjetas grandes, lista de secciones en el teléfono) quedan en duda hasta que el dueño las pida. Todo cambio
 se muestra como captura de la app real modificada, con su mismo lenguaje visual.
 
+## Tercer veredicto (2026-11-09): en ventanas angostas no se veían las ondas ni la partitura
+
+Con una sección elegida, el inspector tapaba la mitad de la pantalla por debajo de 1100 px, y en el teléfono el panel
+lateral dejaba 260 px al timeline. Regla: **el timeline siempre conserva la mayor parte de la altura** (58 % mínimo);
+en el teléfono el panel lateral es un cajón (☰) cerrado al abrir, la cabecera es una fila que se desliza y el catálogo
+apila álbumes y canciones. Toda captura que se envíe al dueño se toma también a 390 px y a 1024 px, y con una canción
+real (solo abrirla), no solo con la copia de prueba.
+
 ## Veredicto del dueño sobre el primer prototipo (2026-11-08)
 
 - **La interfaz va en inglés.** Este documento usa los nombres en español; en pantalla se traducen (tabla de §1).

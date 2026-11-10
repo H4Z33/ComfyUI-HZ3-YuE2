@@ -151,7 +151,25 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
   sí lleva ABC. Con `section_tokens` cada sección se aprende bajo su estilo y las anteriores son solo contexto.
 - LoRA de un solo cantante (`scratch/take_style_lora.py --only "Verse 2,Bridge,Bridge 2"`, `hz3_ntp_el`, 150 pasos):
   aprende solo las secciones de la toma 24 que canta El. Toma 3 de «Visto a las 3 07»: toma 2 intacta y Verse 2,
-  Bridge y Chorus 2 vueltos a cantar con ese LoRA a 0.6, mismas semillas y estilos. Veredicto del dueño pendiente.
+  Bridge y Chorus 2 vueltos a cantar con ese LoRA a 0.6, mismas semillas y estilos. Veredicto del dueño: "se acerca más pero seguimos al revés en la voz". Reparto oído:
+  instrumental, Ella, El, Ella, El, dueto con foco en El, Ella (voz en off). El LoRA cambió Bridge y Chorus 2 a El;
+  el Verse 2 siguió con Ella.
+- **Reparto que el dueño quiere en «Visto a las 3 07»:** Intro instrumental, Verse 1 El, Chorus Ella, Verse 2 El,
+  Bridge El, Chorus 2 dueto con foco en El (como quedó en la toma 3), Outro Ella.
+- Auditoría de lo que las tomas 2 y 3 y el LoRA `hz3_ntp_el` no aplican de lo ya medido (2026-11-09):
+  - Las tomas 2 y 3 llevan `duet` y los dos géneros en el estilo global y en todas las secciones (es lo que guarda la
+    toma 24), y el estilo de Verse 1 pide `young female duet vocal`. El reparto de la toma 2 (Ella, El, Ella) es la
+    alternancia de `duet` empezando por mujer, no lo que dicen los estilos por sección.
+  - Ninguna lleva negativos. El negativo con la voz contraria es lo que dio la voz más clara.
+  - El registro no separa a los cantantes: en la toma 24 y en «Visto» todas las secciones cantadas están entre `A` y
+    `e`, las de El y las de Ella por igual.
+  - El LoRA se entrena con otro prompt que el de cantar (sin ABC, con «in the style of»; al cantar el Studio manda
+    `disparador, estilo` y el ABC), sobre las 28 capas completas. Nunca se probó un LoRA solo en las capas 10, 13, 16
+    y 19 (quién canta y feeling); solo se probó quitarlas.
+  - De los 51 s con que se entrenó `hz3_ntp_el`, unos 20 s son instrumentales (la primera mitad de Bridge y de
+    Bridge 2) aprendidos bajo un estilo que dice `male lead vocal`.
+  - Ya medido antes: un LoRA de la toma 24 anula los negativos, y un LoRA con estilos por sección no decide quién
+    canta en una melodía nueva.
 - Componer respeta `K:` y `Q:` cuando el proyecto ya tiene la cabecera del ABC y `Keep` activo. En 15 intentos siempre
   metió un `pre-chorus` entre Verse 2 y Chorus 2.
 

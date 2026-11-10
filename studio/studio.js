@@ -3624,20 +3624,21 @@ async function drawHistory() {
     const row = document.createElement("div");
     row.className = "history-row" + (commit.state === current ? " current" : "");
     const branches = (heads[id] ?? []).map((name) => `<span class="chip">${escapeHtml(name)}</span>`).join(" ");
-    row.innerHTML = `<div class="history-head"><span class="history-date">${new Date(commit.at).toLocaleString()}</span>
+    row.innerHTML = `<span class="history-date">${new Date(commit.at).toLocaleString()}</span>
       <input class="history-label" maxlength="80" value="${escapeHtml(commit.label)}" title="Name of this point; change it to find it later">
-      ${commit.auto ? '<span class="note">automatic</span>' : ""} ${branches}
-      ${commit.branch !== historyBranch ? `<span class="note">from the branch «${escapeHtml(commit.branch)}»</span>` : ""}</div>
-      <div class="history-changes note">…</div>
-      <div class="row"><button data-action="open">${commit.state === current ? "This is what you have open" : "Open"}</button>
-      <button data-action="compare">Compare with current</button></div>`;
+      <span class="history-changes note">…</span>
+      ${commit.auto ? '<span class="note">auto</span>' : ""} ${branches}
+      ${commit.branch !== historyBranch ? `<span class="note">from «${escapeHtml(commit.branch)}»</span>` : ""}
+      <button data-action="open">${commit.state === current ? "Open now" : "Open"}</button>
+      <button data-action="compare" title="What differs between this point and the song as it is now">Compare</button>`;
     const open = row.querySelector('[data-action="open"]');
     open.disabled = commit.state === current;
     open.onclick = guard(async () => { await openCommit(id); historyBranch = project.history.current; await drawHistory(); });
     row.querySelector('[data-action="compare"]').onclick = guard(async () => {
       const changes = stateChanges(await snapshot(commit.state), stateOf(project));
-      row.querySelector(".history-changes").textContent = changes.length
-        ? `The current state differs from this point in: ${changes.join(", ")}.` : "The current state is the same as this point.";
+      const box = row.querySelector(".history-changes");
+      box.textContent = changes.length ? `Differs from now in: ${changes.join(", ")}.` : "Same as now.";
+      box.title = box.textContent;
     });
     row.querySelector(".history-label").onchange = guard(async (event) => {
       commit.label = event.target.value.trim() || commit.label;
@@ -3654,7 +3655,8 @@ async function drawHistory() {
     try {
       const parent = history.commits[commit.parent];
       const changes = stateChanges(parent ? await snapshot(parent.state) : null, await snapshot(commit.state));
-      box.textContent = changes[0] === "start" ? "First point." : changes.length ? `Changed: ${changes.join(", ")}.` : "No changes to the song (only the name).";
+      box.textContent = changes[0] === "start" ? "First point." : changes.length ? changes.join(", ") : "No changes to the song (only the name).";
+      box.title = box.textContent;
     } catch {
       box.textContent = "";
     }

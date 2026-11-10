@@ -178,12 +178,14 @@ body:not(.advanced) .adv.in-use { border-left: 2px solid var(--accent); padding-
 body:not(.advanced) .adv.in-use::after { content: "advanced, in use"; color: var(--accent); font-size: 11px; }
 
 /* History window: one row per saved point of the branch, newest first. */
-.history-rows { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }
-.history-row { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+.history-rows { display: flex; flex-direction: column; gap: 2px; max-height: 68vh; overflow: auto; }
+/* One line per point: date, name, what changed, actions. */
+.history-row { border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .history-row.current { border-color: var(--accent); }
-.history-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.history-date { color: var(--muted); font-variant-numeric: tabular-nums; }
-.history-label { flex: 1; min-width: 160px; }
+.history-row button { padding: 2px 8px; }
+.history-date { color: var(--muted); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+.history-label { flex: 0 1 200px; min-width: 120px; padding: 2px 6px; }
+.history-changes { flex: 1 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Catalog: songs as cards. */
 #catalog { width: min(1400px, 96vw); }

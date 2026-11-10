@@ -141,6 +141,17 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
   su audio están intactos e idénticos en el proyecto y en su copia; `input/el_amor_no_es_lo_tuyo_take24.flac`
   (2026-10-23) es el export que suena en `El_amor_no_es_lo_tuyo_VHS_v3.mp4` (correlación 0.997). En la carpeta de
   h3vn solo están los videos; el `.mixmash` vive en `output/HZ3-YuE2/studio/`.
+- «Visto a las 3 07», toma 2, con lo que la toma 24 guarda (su estilo de dos líneas, sus estilos y semillas por
+  sección por nombre, sin LoRA ni negativos): "se escucha mucho mejor", pero el reparto salió instrumental, Ella, El,
+  Ella, Ella, Ella, Ella, y la voz de El "aún tiene mucha diferencia con la de la toma 24" (dueño).
+- Concepto de la banda (dueño, 2026-11-09): **el vocalista es El**; Ella es la que habla en spanglish, más como voz en
+  off.
+- Cómo entrena hoy el LoRA de estilo (`_train_style_lora`, leído 2026-11-09): el prompt de entrenamiento es
+  `disparador, in the style of disparador. estilo` más la letra, **sin ABC**, y luego los tokens. Al cantar, el prompt
+  sí lleva ABC. Con `section_tokens` cada sección se aprende bajo su estilo y las anteriores son solo contexto.
+- LoRA de un solo cantante (`scratch/take_style_lora.py --only "Verse 2,Bridge,Bridge 2"`, `hz3_ntp_el`, 150 pasos):
+  aprende solo las secciones de la toma 24 que canta El. Toma 3 de «Visto a las 3 07»: toma 2 intacta y Verse 2,
+  Bridge y Chorus 2 vueltos a cantar con ese LoRA a 0.6, mismas semillas y estilos. Veredicto del dueño pendiente.
 - Componer respeta `K:` y `Q:` cuando el proyecto ya tiene la cabecera del ABC y `Keep` activo. En 15 intentos siempre
   metió un `pre-chorus` entre Verse 2 y Chorus 2.
 

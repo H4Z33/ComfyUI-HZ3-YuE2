@@ -2313,12 +2313,49 @@ function context() {
   return audioContext;
 }
 
+// A song opens with over a hundred files. Firefox refuses some of them ("unknown content type") when they are all
+// decoded at once, so only a few are decoded at a time, and a file that still fails leaves its lane empty instead
+// of stopping the song from opening.
+const DECODES_AT_ONCE = 4;
+const unreadableAudio = new Set();
+let decoding = 0;
+const decodeQueue = [];
+
+async function decodeSlot() {
+  if (decoding >= DECODES_AT_ONCE) await new Promise((resolve) => decodeQueue.push(resolve));
+  else decoding++;
+}
+
+function releaseDecodeSlot() {
+  const next = decodeQueue.shift();
+  if (next) next();
+  else decoding--;
+}
+
 async function loadUrl(url) {
   if (buffers.has(url)) return;
-  const response = await fetch(url);
-  if (!response.ok) return;
-  const buffer = await context().decodeAudioData(await response.arrayBuffer());
-  buffers.set(url, { buffer, peaks: peaks(buffer) });
+  await decodeSlot();
+  try {
+    if (buffers.has(url)) return;
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(url);
+      if (!response.ok) return;
+      try {
+        const buffer = await context().decodeAudioData(await response.arrayBuffer());
+        buffers.set(url, { buffer, peaks: peaks(buffer) });
+        unreadableAudio.delete(url);
+        return;
+      } catch (error) {
+        if (attempt) {
+          unreadableAudio.add(url);
+          console.warn(`Audio not decoded: ${url}`, error);
+          return;
+        }
+      }
+    }
+  } finally {
+    releaseDecodeSlot();
+  }
 }
 
 async function loadTake(take) {
@@ -4199,10 +4236,13 @@ async function openProject(name) {
     voice.octave ??= 0;
     voice.role ??= "-4";
   }
+  // Sections, lyrics and score do not wait for the audio.
+  draw();
+  unreadableAudio.clear();
   await Promise.all([loadSource(), ...project.takes.map(loadTake), ...project.voices.filter((voice) => voice.file).map((voice) => loadUrl(fileUrl(voice.file)))]);
   status(renamed.length
     ? `Song «${project.name}» · sections with repeated names renamed (${renamed.map(([, to]) => to).join(", ")}): save to keep it.`
-    : `Song «${project.name}» · ${project.takes.length} takes`, 1);
+    : `Song «${project.name}» · ${project.takes.length} takes${unreadableAudio.size ? ` · ${unreadableAudio.size} audio files could not be read by this browser (open the song again to retry)` : ""}`, 1, unreadableAudio.size > 0);
   draw();
   guard(renderInstruments)();
 }

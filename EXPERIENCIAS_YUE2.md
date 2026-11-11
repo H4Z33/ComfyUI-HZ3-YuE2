@@ -175,6 +175,10 @@ Lo medido y lo que el dueño corrigió, para no repetir errores. Fecha y fuente 
   semillas. Intro (toma 2) y Chorus 2 (toma 3) congelados. Veredicto del dueño: **todo lo canta El** y el Chorus 2 suena raro.
   El estilo de Ella con El de negativo no cambió al cantante en Chorus ni en Outro después de un Verse 1 de El: la
   historia amarra también aquí. Un Chorus 2 congelado, hecho con LoRA y tras otra historia, no encaja en la toma nueva.
+- Toma 5 de «Visto a las 3 07» (`input/ntp3_duet.js`, 2026-11-10): toma 4 intacta en Intro, Verse 1, Verse 2 y Bridge.
+  Chorus y Outro vueltos a cantar con el estilo de Ella más la línea `duet` de la toma 24 a la vista (negativo: El);
+  Chorus 2 vuelto a cantar con el estilo de El (negativo: Ella). Sin LoRA, mismas semillas. Veredicto del dueño
+  pendiente.
 - Componer respeta `K:` y `Q:` cuando el proyecto ya tiene la cabecera del ABC y `Keep` activo. En 15 intentos siempre
   metió un `pre-chorus` entre Verse 2 y Chorus 2.
 
